@@ -1,0 +1,109 @@
+# -------------------------------------
+# Copyright (c) 2023, Dror Kabely
+# -------------------------------------
+#
+
+# change the name of module at your leisure
+module(
+    name = "password-manager",
+    version = "0.0.1",
+    compatibility_level = 1,
+)
+
+# load python bazel rules
+PY_RULES_VERSION = "0.27.1"
+
+OCI_RULES_VERSION = "1.8.0"
+
+CONTAINER_STRUCTURE_TEST_VERSION = "1.16.0"
+
+ASPECT_BAZEL_LIB_VERSION = "2.9.3"
+
+PY_VERSION = "3.11"
+
+bazel_dep(name = "rules_python", version = "0.40.0")
+bazel_dep(name = "rules_oci", version = OCI_RULES_VERSION)
+bazel_dep(name = "container_structure_test", version = CONTAINER_STRUCTURE_TEST_VERSION)
+bazel_dep(name = "aspect_rules_py", version = "0.7.3")
+bazel_dep(name = "aspect_rules_lint", version = "1.0.2")
+bazel_dep(name = "rules_multirun", version = "0.9.0")
+
+bazel_dep(name = "aspect_bazel_lib", version = "2.8.1")
+bazel_dep(name = "aspect_rules_jest", version = "0.22.0")
+bazel_dep(name = "aspect_rules_js", version = "2.0.2")
+bazel_dep(name = "aspect_rules_swc", version = "2.0.1")
+bazel_dep(name = "aspect_rules_ts", version = "3.1.0")
+bazel_dep(name = "aspect_rules_rollup", version = "2.0.0")
+bazel_dep(name = "aspect_rules_webpack", version = "0.16.0")
+bazel_dep(name = "bazel_skylib", version = "1.7.1")
+bazel_dep(name = "rules_nodejs", version = "6.2.0")
+
+
+# ----------------------- PYTHON GAZELLE ------------------------------------
+# The following stanza defines the dependency rules_python_gazelle_plugin.
+# For typical setups you set the version.
+bazel_dep(name = "rules_python_gazelle_plugin", version = "0.22.0")
+
+# The following stanza defines the dependency gazelle.
+bazel_dep(name = "gazelle", version = "0.31.0", repo_name = "bazel_gazelle")
+# ----------------------- PYTHON GAZELLE ------------------------------------
+
+# We next initialize the python toolchain using the extension.
+# You can set different Python versions in this block.
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(
+    configure_coverage_tool = True,
+    # Only set when you have mulitple toolchain versions.
+    is_default = True,
+    python_version = PY_VERSION,
+)
+
+# You only need to load this repositories if you are using multiple Python versions.
+# I'm doing this for the sake of consistency with the original G repo
+use_repo(python, "python_3_11", "python_versions")
+
+# Register an already-defined toolchain so that Bazel can use it during toolchain resolution.
+register_toolchains(
+    "@python_3_11//:all",
+)
+
+# This extension allows a user to create modifications to how rules_python
+# creates different wheel repositories.  Different attributes allow the user
+# to modify the BUILD file, and copy files.
+# See @rules_python//python/extensions:whl_mods.bzl attributes for more information
+# on each of the attributes.
+# You are able to set a hub name, so that you can have different modifications of the same
+# wheel in different pip hubs.
+pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
+
+# fetch 3rd party libraries
+pip.parse(
+    hub_name = "pip",
+    python_version = PY_VERSION,
+    requirements_lock = "//:requirements_lock.txt",
+)
+use_repo(pip, "pip")
+
+oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
+oci.pull(
+    name = "ubuntu",
+    image = "ubuntu",
+    platforms = [
+        "linux/arm64/v8",
+        "linux/amd64",
+    ],
+    tag = "latest",
+    digest = "sha256:b359f1067efa76f37863778f7b6d0e8d911e3ee8efa807ad01fbf5dc1ef9006b",
+)
+oci.pull(
+    name = "postgres",
+    image = "postgres",
+    tag = "14-alpine",
+    digest="sha256:2d28cf41ec156f9a6dc9489fd3e5b59888f89229d68fc622efbfbe576e114b13",
+    platforms = [
+        "linux/arm64/v8",
+        "linux/amd64",
+    ],
+)
+use_repo(oci, "ubuntu", "postgres")
+
