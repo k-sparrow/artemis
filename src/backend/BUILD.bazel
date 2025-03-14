@@ -7,15 +7,17 @@
 load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
 load("@aspect_bazel_lib//lib:tar.bzl", "tar")
 load("@rules_oci//oci:defs.bzl", oci_load = "oci_tarball", "oci_push")
-load("//tools/oci:py_layer.bzl", "py_oci_image")
 load("@aspect_rules_py//py:defs.bzl", "py_binary", "py_library")
 load("@pip//:requirements.bzl", "requirement")
+load("@rules_python//python/entry_points:py_console_script_binary.bzl", "py_console_script_binary")
+
+load("//tools/oci:py_layer.bzl", "py_oci_image")
 load("//tools:uvicorn.bzl", "uvicorn_dev_server")
 
 default_visibility = ["//visibility:private"]
 
 # Equivalent to cmdline:
-#  `uvicorn main:app --host localhost --port 8002`
+#  `uvicorn main:app --host localhost --port 9002`
 uvicorn_dev_server(
     name = "dev",
     args = [
@@ -41,13 +43,41 @@ py_library(
         "__init__.py",
         "main.py",
     ],
-    # main = "main.py",
     imports = ["."],
     deps = [
+        ":service",
         requirement("fastapi"),
-        requirement("sqlalchemy"),
-        requirement("sqlalchemy-utils"),
+        requirement("langchain-core"),
         requirement("python-multipart"),
+    ]
+)
+
+py_library(
+    name = "service",
+    srcs = [
+        "service.py",
+    ],
+    deps = [
+        ":celery",
+        requirement("fastapi"),
+        requirement("langchain-core"),
+        requirement("langchain-community"),
+        requirement("pymupdf"),
+    ]
+)
+
+py_library(
+    name = "celery",
+    srcs = [
+        "celery.py",
+    ],
+    deps = [
+        requirement("celery"),
+        requirement("fastapi"),
+        requirement("langchain-core"),
+        requirement("langchain-community"),
+        requirement("pymupdf"),
+        requirement("redis"),
     ]
 )
 
@@ -70,7 +100,8 @@ py_oci_image(
     ],
     exposed_ports = ["9002"],
     tars = [
-        ":env"
+        ":env",
+        # "@noble//:noble",
     ],
 )
 
@@ -87,5 +118,57 @@ oci_push(
     name = "push",
     image = ":image",
     repository = "localhost:5000/celery-ingestion-backend",
+    remote_tags = ["latest"]
+)
+
+
+py_console_script_binary(
+    name = "celery-worker",
+    pkg = requirement("celery"),
+    script = "celery",
+    deps = [
+        ":celery",
+        requirement("redis"),
+    ],
+    binary_rule = py_binary, # fits better with rules_oci
+    args = [
+        "-A",
+        "src.backend.celery.celery",
+        "worker",
+        "--loglevel=info"
+    ],
+)
+
+
+py_oci_image(
+    name = "worker-image",
+    base = "@ubuntu",
+    binary = ":celery-worker",
+    entrypoint = [
+        "/src/backend/celery-worker",
+        "-A",
+        "src.backend.celery.celery",
+        "worker",
+        "--loglevel=info",
+        "--uid=nobody",
+        "--gid=nogroup",
+    ],
+    exposed_ports = ["9002"],
+    tars = [
+        ":env",
+        # "@noble//:noble",
+    ],
+)
+
+oci_load(
+    name = "worker-tarball",
+    image = ":worker-image",
+    repo_tags = ["celery-ingestion/worker:latest"],
+)
+
+oci_push(
+    name = "worker-push",
+    image = ":worker-image",
+    repository = "localhost:5000/celery-ingestion-worker",
     remote_tags = ["latest"]
 )

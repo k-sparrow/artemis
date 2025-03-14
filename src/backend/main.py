@@ -1,4 +1,9 @@
-from fastapi import FastAPI, File, UploadFile
+from typing import List
+
+from fastapi import FastAPI, UploadFile, File
+from langchain_core.documents import Document
+
+import src.backend.service as service
 
 app = FastAPI(
     title="Basic File Ingestion with Celery",
@@ -6,9 +11,8 @@ app = FastAPI(
 
 
 @app.post(
-    "/ingest"
+    "/ingest",
+    response_model=List[Document],
 )
-async def ingest_endpoint(
-  file: UploadFile = File(...)  
-):
-    return {"name": file.filename, "mime": file.content_type}
+async def ingest_endpoint(file: UploadFile = File(...)) -> List[Document]:
+    return await service.ingest(file)

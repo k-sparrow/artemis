@@ -33,3 +33,22 @@ cryptography==44.0.2
 
 # linting
 flake8==7.1.1
+
+# document processing
+langchain==0.3.20
+langchain-core==0.3.44
+langchain-community==0.3.19
+langchain-text-splitters==0.3.6
+langchain-qdrant==0.2.0
+langchain-huggingface==0.1.2
+langchain-docling==0.2.0
+docling==2.26.0
+pymupdf==1.25.3
+
+# backend
+celery==5.4.0
+flower==2.0.1
+redis==5.2.1
+
+# interactive development
+jupyter
