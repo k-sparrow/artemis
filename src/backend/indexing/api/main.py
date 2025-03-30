@@ -3,7 +3,7 @@ from typing import List
 from fastapi import FastAPI, UploadFile, File
 from langchain_core.documents import Document
 
-import src.backend.service as service
+import src.backend.indexing.api.service as service
 
 app = FastAPI(
     title="Basic File Ingestion with Celery",

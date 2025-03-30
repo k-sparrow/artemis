@@ -1522,6 +1522,29 @@ manifest:
     flake8.style_guide: flake8
     flake8.utils: flake8
     flake8.violation: flake8
+    flower: flower
+    flower.api: flower
+    flower.api.control: flower
+    flower.api.tasks: flower
+    flower.api.workers: flower
+    flower.app: flower
+    flower.command: flower
+    flower.events: flower
+    flower.inspector: flower
+    flower.options: flower
+    flower.urls: flower
+    flower.utils: flower
+    flower.utils.broker: flower
+    flower.utils.search: flower
+    flower.utils.tasks: flower
+    flower.utils.template: flower
+    flower.views: flower
+    flower.views.auth: flower
+    flower.views.broker: flower
+    flower.views.error: flower
+    flower.views.monitor: flower
+    flower.views.tasks: flower
+    flower.views.workers: flower
     fqdn: fqdn
     frozenlist: frozenlist
     fsspec: fsspec
@@ -1706,6 +1729,39 @@ manifest:
     grpc_tools.grpc_version: grpcio_tools
     grpc_tools.protoc: grpcio_tools
     grpc_tools.python_version: grpcio_tools
+    gunicorn: gunicorn
+    gunicorn.app: gunicorn
+    gunicorn.app.base: gunicorn
+    gunicorn.app.pasterapp: gunicorn
+    gunicorn.app.wsgiapp: gunicorn
+    gunicorn.arbiter: gunicorn
+    gunicorn.config: gunicorn
+    gunicorn.debug: gunicorn
+    gunicorn.errors: gunicorn
+    gunicorn.glogging: gunicorn
+    gunicorn.http: gunicorn
+    gunicorn.http.body: gunicorn
+    gunicorn.http.errors: gunicorn
+    gunicorn.http.message: gunicorn
+    gunicorn.http.parser: gunicorn
+    gunicorn.http.unreader: gunicorn
+    gunicorn.http.wsgi: gunicorn
+    gunicorn.instrument: gunicorn
+    gunicorn.instrument.statsd: gunicorn
+    gunicorn.pidfile: gunicorn
+    gunicorn.reloader: gunicorn
+    gunicorn.sock: gunicorn
+    gunicorn.systemd: gunicorn
+    gunicorn.util: gunicorn
+    gunicorn.workers: gunicorn
+    gunicorn.workers.base: gunicorn
+    gunicorn.workers.base_async: gunicorn
+    gunicorn.workers.geventlet: gunicorn
+    gunicorn.workers.ggevent: gunicorn
+    gunicorn.workers.gthread: gunicorn
+    gunicorn.workers.gtornado: gunicorn
+    gunicorn.workers.sync: gunicorn
+    gunicorn.workers.workertmp: gunicorn
     h11: h11
     h11.tests: h11
     h11.tests.helpers: h11
@@ -1776,6 +1832,12 @@ manifest:
     huggingface_hub.utils.logging: huggingface_hub
     huggingface_hub.utils.sha: huggingface_hub
     huggingface_hub.utils.tqdm: huggingface_hub
+    humanize: humanize
+    humanize.filesize: humanize
+    humanize.i18n: humanize
+    humanize.lists: humanize
+    humanize.number: humanize
+    humanize.time: humanize
     hyperframe: hyperframe
     hyperframe.exceptions: hyperframe
     hyperframe.flags: hyperframe
@@ -16071,4 +16133,4 @@ manifest:
     zstandard.backend_cffi: zstandard
   pip_repository:
     name: pip
-integrity: 46767bc614193a590f55c5c0baf9fb4a5f7a781ae1ec689764fd5aa100b083c1
+integrity: b14b04a0af056d40fa4e7f7175fa5d3d34322e03cfd1eaa72c210985ae1bd628

@@ -1,0 +1,170 @@
+# -------------------------------------
+# Copyright (c) 2025, Dror Kabely
+# -------------------------------------
+#
+# gazelle:python_root
+
+load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
+load("@aspect_bazel_lib//lib:tar.bzl", "tar")
+load("@rules_oci//oci:defs.bzl", oci_load = "oci_tarball", "oci_push")
+load("@aspect_rules_py//py:defs.bzl", "py_binary", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+load("//tools/oci:py_layer.bzl", "py_oci_image")
+load("//tools/server:uvicorn.bzl", "uvicorn_dev_server")
+load("//tools/server:celery.bzl", "celery_worker")
+
+default_visibility = ["//visibility:private"]
+
+# Equivalent to cmdline:
+#  `uvicorn main:app --host localhost --port 9002`
+uvicorn_dev_server(
+    name = "dev",
+    args = [
+        "main:app",
+        "--host",
+        "localhost",
+        "--port",
+        "9002",
+        "--reload",
+    ],
+    imports = ["."],
+    data = ["//:.env"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":backend-main",
+    ],
+)
+
+
+py_library(
+    name = "backend-main",
+    srcs = [
+        "__init__.py",
+        "main.py",
+    ],
+    imports = ["."],
+    deps = [
+        ":service",
+        requirement("fastapi"),
+        requirement("langchain-core"),
+        requirement("python-multipart"),
+    ]
+)
+
+py_library(
+    name = "service",
+    srcs = [
+        "service.py",
+    ],
+    deps = [
+        ":celery",
+        requirement("fastapi"),
+        requirement("langchain-core"),
+        requirement("langchain-community"),
+        requirement("pymupdf"),
+    ]
+)
+
+py_library(
+    name = "celery",
+    srcs = [
+        "celery.py",
+    ],
+    deps = [
+        requirement("celery"),
+        requirement("fastapi"),
+        requirement("langchain-core"),
+        requirement("langchain-community"),
+        requirement("pymupdf"),
+        requirement("redis"),
+    ]
+)
+
+tar(
+    name = "env",
+    srcs = ["//:.env"],
+)
+
+py_oci_image(
+    name = "image",
+    base = "@ubuntu",
+    binary = ":dev",
+    entrypoint = [
+        "/src/backend/indexing/api/dev",
+        "main:app",
+        "--host",
+        "0.0.0.0",  # this should allow connections from host
+        "--port",
+        "9002",
+    ],
+    exposed_ports = ["9002"],
+    tars = [
+        ":env",
+    ],
+    visibility = ["//src/backend:__pkg__"],
+)
+
+
+# $ bazel run //src/backend/indexing/api:tarball
+oci_load(
+    name = "tarball",
+    image = ":image",
+    repo_tags = ["celery-ingestion/backend:latest"],
+)
+
+oci_push(
+    name = "push",
+    image = ":image",
+    repository = "localhost:5000/celery-ingestion-backend",
+    remote_tags = ["latest"]
+)
+
+
+celery_worker(
+    name = "worker",
+    deps = [
+        ":celery",
+    ],
+    broker = "redis",
+    args = [
+        "-A",
+        "src.backend.indexing.api.celery",
+        "worker",
+        "--loglevel=info"
+    ],
+)
+
+
+py_oci_image(
+    name = "worker-image",
+    base = "@ubuntu",
+    binary = ":worker",
+    entrypoint = [
+        "/src/backend/indexing/api/worker",
+        "-A",
+        "src.backend.indexing.api.celery",
+        "worker",
+        "--loglevel=info",
+        "--uid=nobody",
+        "--gid=nogroup",
+    ],
+    exposed_ports = ["9002"],
+    tars = [
+        ":env",
+    ],
+    visibility = ["//src/backend:__pkg__"],
+)
+
+oci_load(
+    name = "worker-tarball",
+    image = ":worker-image",
+    repo_tags = ["celery-ingestion/worker:latest"],
+)
+
+oci_push(
+    name = "worker-push",
+    image = ":worker-image",
+    repository = "localhost:5000/celery-ingestion-worker",
+    remote_tags = ["latest"]
+)

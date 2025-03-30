@@ -5,7 +5,7 @@ from tempfile import NamedTemporaryFile
 from fastapi import UploadFile
 from langchain_core.documents import Document
 
-from src.backend.celery import ingest_task
+from src.backend.indexing.api.celery import ingest_task
 
 
 async def ingest(file: UploadFile) -> List[Document]:
