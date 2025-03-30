@@ -9,16 +9,12 @@ from fastapi import UploadFile
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_core.documents import Document
 
-CELERY_BROKER_URL = os.environ.get(
-    "CELERY_BROKER_URL", default="redis://localhost:6379/0"
-)
-CELERY_RESULT_BACKEND = os.environ.get(
-    "CELERY_RESULT_BACKEND", default="redis://localhost:6379/0"
-)
+from src.backend.indexing.api.config import settings
+
 
 celery = Celery(__name__)
-celery.conf.broker_url = CELERY_BROKER_URL
-celery.conf.result_backend = CELERY_RESULT_BACKEND
+celery.conf.broker_url = settings.CELERY_BROKER_URL
+celery.conf.result_backend = settings.CELERY_RESULT_BACKEND
 
 __all__ = ["ingest_task"]
 

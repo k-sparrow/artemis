@@ -72,6 +72,7 @@ py_library(
         "celery.py",
     ],
     deps = [
+        ":config",
         requirement("celery"),
         requirement("fastapi"),
         requirement("langchain-core"),
@@ -79,6 +80,17 @@ py_library(
         requirement("pymupdf"),
         requirement("redis"),
     ]
+)
+
+py_library(
+    name = "config",
+    srcs = [
+        "config.py",
+    ],
+    deps = [
+        requirement("pydantic"),
+        requirement("pydantic-settings"),
+    ],
 )
 
 tar(
