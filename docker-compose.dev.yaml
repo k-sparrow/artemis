@@ -60,6 +60,24 @@ services:
       - backend
       - redis
 
+  docling-inference:
+    image: ghcr.io/aidotse/docling-inference:latest
+    ports:
+      - 8087:8080
+    environment:
+      - NUM_WORKERS=2
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+      - ocr_cache:/root/.EasyOCR
+    restart: always
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
 volumes:
   db-data:
   hf_cache:
