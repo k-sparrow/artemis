@@ -7,6 +7,6 @@ filegroup(
     name = "build.all",
     srcs = [
         "//src/backend/indexing/api:image",
-        "//src/backend/indexing/api:worker-image",
+        # "//src/backend/indexing/api:worker-image",
     ]
 )

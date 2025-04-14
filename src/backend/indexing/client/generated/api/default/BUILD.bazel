@@ -1,0 +1,13 @@
+load("@rules_python//python:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "pkg",
+    srcs = [
+        "__init__.py",
+        "parse_document_stream_parse_file_post.py",
+        "parse_document_url_parse_url_post.py",
+    ],
+    visibility = ["//:__subpackages__"],
+    deps = [requirement("httpx")],
+)

@@ -45,9 +45,13 @@ py_library(
     ],
     imports = ["."],
     deps = [
+        ":config",
         ":service",
+        requirement("aiohttp"),
         requirement("fastapi"),
         requirement("langchain-core"),
+        requirement("langchain-huggingface"),
+        requirement("langchain-qdrant"),
         requirement("python-multipart"),
     ]
 )
@@ -58,27 +62,13 @@ py_library(
         "service.py",
     ],
     deps = [
-        ":celery",
-        requirement("fastapi"),
-        requirement("langchain-core"),
-        requirement("langchain-community"),
-        requirement("pymupdf"),
-    ]
-)
-
-py_library(
-    name = "celery",
-    srcs = [
-        "celery.py",
-    ],
-    deps = [
         ":config",
-        requirement("celery"),
+        "//src/backend/indexing/client/generated/api:pkg",
+        "//src/backend/indexing/client/generated/api/default:pkg",
+        "//src/backend/indexing/client/generated/models:pkg",
+        "//src/backend/indexing/client/generated:pkg",
         requirement("fastapi"),
         requirement("langchain-core"),
-        requirement("langchain-community"),
-        requirement("pymupdf"),
-        requirement("redis"),
     ]
 )
 
@@ -129,54 +119,5 @@ oci_push(
     name = "push",
     image = ":image",
     repository = "localhost:5000/celery-ingestion-backend",
-    remote_tags = ["latest"]
-)
-
-
-celery_worker(
-    name = "worker",
-    deps = [
-        ":celery",
-    ],
-    broker = "redis",
-    args = [
-        "-A",
-        "src.backend.indexing.api.celery",
-        "worker",
-        "--loglevel=info"
-    ],
-)
-
-
-py_oci_image(
-    name = "worker-image",
-    base = "@ubuntu",
-    binary = ":worker",
-    entrypoint = [
-        "/src/backend/indexing/api/worker",
-        "-A",
-        "src.backend.indexing.api.celery",
-        "worker",
-        "--loglevel=info",
-        "--uid=nobody",
-        "--gid=nogroup",
-    ],
-    exposed_ports = ["9002"],
-    tars = [
-        ":env",
-    ],
-    visibility = ["//src/backend:__pkg__"],
-)
-
-oci_load(
-    name = "worker-tarball",
-    image = ":worker-image",
-    repo_tags = ["celery-ingestion/worker:latest"],
-)
-
-oci_push(
-    name = "worker-push",
-    image = ":worker-image",
-    repository = "localhost:5000/celery-ingestion-worker",
     remote_tags = ["latest"]
 )

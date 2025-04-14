@@ -6,10 +6,9 @@ load("@pip//:requirements.bzl", "requirement")
 def uvicorn_dev_server(*, name, **kwargs):
     py_console_script_binary(
         name = name,
-        pkg = "@pip//uvicorn",
+        pkg = requirement("uvicorn"),
         script = "uvicorn",
         deps = [
-            requirement("uvicorn"),
             requirement("starlette"),
         ] + kwargs.pop("deps", []),
         binary_rule = aspect_py_binary, # fits better with rules_oci

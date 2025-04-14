@@ -7,8 +7,11 @@ __all__ = [
 
 
 class IndexingSettings(BaseSettings):
-    CELERY_BROKER_URL: str
-    CELERY_RESULT_BACKEND: str
+    DOCLING_BACKEND_URL: str
+    QDRANT_HOST_URL: str
+    QDRANT_HOST_PORT: str
+    QDRANT_COLLECTION_NAME: str
+    TEI_HOST_URL: str
 
 
 settings = IndexingSettings()

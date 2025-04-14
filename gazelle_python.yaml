@@ -6861,6 +6861,70 @@ manifest:
     nvidia.nvtx: nvidia_nvtx_cu12
     nvidia.nvtx.include: nvidia_nvtx_cu12
     nvidia.nvtx.lib: nvidia_nvtx_cu12
+    openapi_python_client: openapi_python_client
+    openapi_python_client.cli: openapi_python_client
+    openapi_python_client.config: openapi_python_client
+    openapi_python_client.parser: openapi_python_client
+    openapi_python_client.parser.bodies: openapi_python_client
+    openapi_python_client.parser.errors: openapi_python_client
+    openapi_python_client.parser.openapi: openapi_python_client
+    openapi_python_client.parser.properties: openapi_python_client
+    openapi_python_client.parser.properties.any: openapi_python_client
+    openapi_python_client.parser.properties.boolean: openapi_python_client
+    openapi_python_client.parser.properties.const: openapi_python_client
+    openapi_python_client.parser.properties.date: openapi_python_client
+    openapi_python_client.parser.properties.datetime: openapi_python_client
+    openapi_python_client.parser.properties.enum_property: openapi_python_client
+    openapi_python_client.parser.properties.file: openapi_python_client
+    openapi_python_client.parser.properties.float: openapi_python_client
+    openapi_python_client.parser.properties.int: openapi_python_client
+    openapi_python_client.parser.properties.list_property: openapi_python_client
+    openapi_python_client.parser.properties.literal_enum_property: openapi_python_client
+    openapi_python_client.parser.properties.merge_properties: openapi_python_client
+    openapi_python_client.parser.properties.model_property: openapi_python_client
+    openapi_python_client.parser.properties.none: openapi_python_client
+    openapi_python_client.parser.properties.property: openapi_python_client
+    openapi_python_client.parser.properties.protocol: openapi_python_client
+    openapi_python_client.parser.properties.schemas: openapi_python_client
+    openapi_python_client.parser.properties.string: openapi_python_client
+    openapi_python_client.parser.properties.union: openapi_python_client
+    openapi_python_client.parser.properties.uuid: openapi_python_client
+    openapi_python_client.parser.responses: openapi_python_client
+    openapi_python_client.schema: openapi_python_client
+    openapi_python_client.schema.data_type: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.callback: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.components: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.contact: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.discriminator: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.encoding: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.example: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.external_documentation: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.header: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.info: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.license: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.link: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.media_type: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.oauth_flow: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.oauth_flows: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.open_api: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.operation: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.parameter: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.path_item: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.paths: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.reference: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.request_body: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.response: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.responses: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.schema: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.security_requirement: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.security_scheme: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.server: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.server_variable: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.tag: openapi_python_client
+    openapi_python_client.schema.openapi_schema_pydantic.xml: openapi_python_client
+    openapi_python_client.schema.parameter_location: openapi_python_client
+    openapi_python_client.utils: openapi_python_client
     opencv_python_headless.libs.libopenblas-r0-f650aae0: opencv_python_headless
     openpyxl: openpyxl
     openpyxl.cell: openpyxl
@@ -8897,6 +8961,7 @@ manifest:
     pydantic.error_wrappers: pydantic
     pydantic.errors: pydantic
     pydantic.experimental: pydantic
+    pydantic.experimental.arguments_schema: pydantic
     pydantic.experimental.pipeline: pydantic
     pydantic.fields: pydantic
     pydantic.functional_serializers: pydantic
@@ -9592,6 +9657,37 @@ manifest:
     rtree.finder: rtree
     rtree.index: rtree
     rtree.libs.libspatialindex-3fbdd7e9: rtree
+    ruamel.yaml: ruamel.yaml
+    ruamel.yaml.anchor: ruamel.yaml
+    ruamel.yaml.comments: ruamel.yaml
+    ruamel.yaml.compat: ruamel.yaml
+    ruamel.yaml.composer: ruamel.yaml
+    ruamel.yaml.configobjwalker: ruamel.yaml
+    ruamel.yaml.constructor: ruamel.yaml
+    ruamel.yaml.cyaml: ruamel.yaml
+    ruamel.yaml.docinfo: ruamel.yaml
+    ruamel.yaml.dumper: ruamel.yaml
+    ruamel.yaml.emitter: ruamel.yaml
+    ruamel.yaml.error: ruamel.yaml
+    ruamel.yaml.events: ruamel.yaml
+    ruamel.yaml.loader: ruamel.yaml
+    ruamel.yaml.main: ruamel.yaml
+    ruamel.yaml.nodes: ruamel.yaml
+    ruamel.yaml.parser: ruamel.yaml
+    ruamel.yaml.reader: ruamel.yaml
+    ruamel.yaml.representer: ruamel.yaml
+    ruamel.yaml.resolver: ruamel.yaml
+    ruamel.yaml.scalarbool: ruamel.yaml
+    ruamel.yaml.scalarfloat: ruamel.yaml
+    ruamel.yaml.scalarint: ruamel.yaml
+    ruamel.yaml.scalarstring: ruamel.yaml
+    ruamel.yaml.scanner: ruamel.yaml
+    ruamel.yaml.serializer: ruamel.yaml
+    ruamel.yaml.tag: ruamel.yaml
+    ruamel.yaml.timestamp: ruamel.yaml
+    ruamel.yaml.tokens: ruamel.yaml
+    ruamel.yaml.util: ruamel.yaml
+    ruff: ruff
     safetensors: safetensors
     safetensors.flax: safetensors
     safetensors.mlx: safetensors
@@ -15888,6 +15984,9 @@ manifest:
     typer.utils: typer
     typing_extensions: typing_extensions
     typing_inspect: typing_inspect
+    typing_inspection: typing_inspection
+    typing_inspection.introspection: typing_inspection
+    typing_inspection.typing_objects: typing_inspection
     tzdata: tzdata
     tzdata.zoneinfo: tzdata
     tzdata.zoneinfo.Africa: tzdata
@@ -16133,4 +16232,4 @@ manifest:
     zstandard.backend_cffi: zstandard
   pip_repository:
     name: pip
-integrity: b14b04a0af056d40fa4e7f7175fa5d3d34322e03cfd1eaa72c210985ae1bd628
+integrity: b126cd39e93b012f8c3e1d5f170283dbb457c4d9218fee05d4e5b6ff47f7080d
