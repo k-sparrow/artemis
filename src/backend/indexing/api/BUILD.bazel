@@ -14,7 +14,7 @@ load("//tools/oci:py_layer.bzl", "py_oci_image")
 load("//tools/server:uvicorn.bzl", "uvicorn_dev_server")
 load("//tools/server:celery.bzl", "celery_worker")
 
-default_visibility = ["//visibility:private"]
+package(default_visibility = ["//visibility:private"])
 
 # Equivalent to cmdline:
 #  `uvicorn main:app --host localhost --port 9002`
@@ -45,13 +45,11 @@ py_library(
     ],
     imports = ["."],
     deps = [
-        ":config",
+        ":dependencies",
         ":service",
         requirement("aiohttp"),
         requirement("fastapi"),
         requirement("langchain-core"),
-        requirement("langchain-huggingface"),
-        requirement("langchain-qdrant"),
         requirement("python-multipart"),
     ]
 )
@@ -69,6 +67,20 @@ py_library(
         "//src/backend/indexing/client/generated:pkg",
         requirement("fastapi"),
         requirement("langchain-core"),
+    ]
+)
+
+py_library(
+    name = "dependencies",
+    srcs = [
+        "dependencies.py",
+    ],
+    deps = [
+        ":config",
+        "//src/backend/indexing/lib/handler:pkg",
+        requirement("fastapi"),
+        requirement("langchain-core"),
+        requirement("langchain-huggingface"),
     ]
 )
 

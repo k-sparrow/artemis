@@ -1,0 +1,35 @@
+# -------------------------------------
+# Copyright (c) 2025, Dror Kabely
+# -------------------------------------
+#
+# gazelle:python_root
+
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+package(
+    default_visibility = [
+        "//src/backend/indexing/api:__pkg__", 
+        "//src/backend/indexing/lib:__subpackages__", 
+    ]
+)
+
+py_library(
+    name = "pkg",
+    srcs = [
+        "__init__.py",
+    ],
+    deps = [
+        ":qdrant",
+    ],
+)
+
+py_library(
+    name = "qdrant",
+    srcs = [
+        "qdrant.py",
+    ],
+    deps = [
+        requirement("langchain-qdrant"),
+    ]
+)
