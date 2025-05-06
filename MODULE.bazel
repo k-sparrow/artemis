@@ -17,7 +17,7 @@ OCI_RULES_VERSION = "1.8.0"
 
 CONTAINER_STRUCTURE_TEST_VERSION = "1.16.0"
 
-ASPECT_BAZEL_LIB_VERSION = "2.9.4"
+ASPECT_BAZEL_LIB_VERSION = "2.15.3"
 
 PY_VERSION = "3.11"
 
@@ -97,24 +97,16 @@ oci.pull(
     digest = "sha256:b359f1067efa76f37863778f7b6d0e8d911e3ee8efa807ad01fbf5dc1ef9006b",
 )
 oci.pull(
-    name = "postgres",
-    image = "https://hub.docker.com/postgres",
-    tag = "14-alpine",
-    digest="sha256:2d28cf41ec156f9a6dc9489fd3e5b59888f89229d68fc622efbfbe576e114b13",
+    name = "cp-kafka-connect",
+    image = "docker.io/confluentinc/cp-kafka-connect-base",
     platforms = [
         "linux/arm64/v8",
         "linux/amd64",
     ],
+    tag = "7.9.0",
+    digest = "sha256:93c0175e000ca49be814afe10cc42da281b475e937d20180e56c390667947636",
 )
-oci.pull(
-    name = "libreoffice",
-    image = "https://hub.docker.com/linuxserver/libreoffice",
-    tag = "7.6.7",
-    platforms = [
-        "linux/amd64",
-    ]
-)
-use_repo(oci, "ubuntu", "postgres", "libreoffice")
+use_repo(oci, "ubuntu", "cp-kafka-connect")
 
 
 apt = use_extension("@rules_distroless//apt:extensions.bzl", "apt")
@@ -126,3 +118,19 @@ apt.install(
     # resolve_transitive=False,
 )
 use_repo(apt, "noble")
+
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+# HTTP kafka sink connector compiled sources
+http_archive(
+    name = "aiven-http-sink-kafka-connect-0.9.0",
+    url = "https://github.com/Aiven-Open/http-connector-for-apache-kafka/releases/download/v0.9.0/http-connector-for-apache-kafka-0.9.0.tar",
+    build_file = "@//tools/kafka/connectors:generic.BUILD"
+)
+
+# Qdrant kafka sink connector compiled sources
+http_archive(
+    name = "qdrant-sink-kafka-connect-1.2.0",
+    url = "https://github.com/qdrant/qdrant-kafka/releases/download/v1.12.0/qdrant-kafka-1.2.0.zip",
+    build_file = "@//tools/kafka/connectors:generic.BUILD",
+    integrity = "sha256-lfIWT7snY5p3emLI4vwTE311mxRKw2ysd9AeL0pRZIQ=",
+)

@@ -3,10 +3,55 @@
 # -------------------------------------
 #
 
+load("@rules_oci//oci:defs.bzl", "oci_image", oci_load = "oci_tarball", "oci_push")
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@aspect_bazel_lib//lib:tar.bzl", "tar", "mtree_spec", "mtree_mutate")
+load("@aspect_bazel_lib//lib:testing.bzl", "assert_archive_contains")
+
 filegroup(
     name = "build.all",
     srcs = [
         "//src/backend/indexing/api:image",
         # "//src/backend/indexing/api:worker-image",
     ]
+)
+
+# srcs of the custom connects
+_SRCS = ["@qdrant-sink-kafka-connect-1.2.0//:srcs"]
+
+# build a tar from them
+mtree_spec(
+    name = "qdrant-sink-kafka-connect-1.2.0-mtree",
+    srcs = _SRCS,
+)
+
+mtree_mutate(
+    name = "cp-qdrant-sink-kafka-connect-1.2.0-mtree",
+    mtree = ":qdrant-sink-kafka-connect-1.2.0-mtree",
+    package_dir = "usr/share/confluent-hub-components",
+)
+
+tar(
+    name = "cp-qdrant-sink-kafka-connect-1.2.0",
+    mtree = ":cp-qdrant-sink-kafka-connect-1.2.0-mtree",
+    srcs = _SRCS,
+    args = [
+        "--exclude=*.bazel", 
+        "--exclude=WORKSPACE",
+    ],
+)
+
+oci_image(
+    name = "cp-kafka-connect",
+    base = "@cp-kafka-connect",
+    exposed_ports = ["8083"],
+    # add the connectors to the image as tar layers
+    # they should eventually sit under /usr/share/conluent-hub-components
+    tars = [":cp-qdrant-sink-kafka-connect-1.2.0"],
+)
+
+oci_load(
+    name = "cp-kafka-connect.tarball",
+    image = ":cp-kafka-connect",
+    repo_tags = ["celery-ingestion/kafka-connect:latest"]
 )
