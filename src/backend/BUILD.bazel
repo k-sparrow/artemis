@@ -17,41 +17,71 @@ filegroup(
 )
 
 # srcs of the custom connects
-_SRCS = ["@qdrant-sink-kafka-connect-1.2.0//:srcs"]
+_SRCS = {
+    "qdrant-sink-kafka-connect": ["@qdrant-sink-kafka-connect-1.2.0//:srcs"],
+    "http-sink-kafka-connect": ["@aiven-http-sink-kafka-connect-0.9.0//:srcs"]
+}
 
-# build a tar from them
-mtree_spec(
-    name = "qdrant-sink-kafka-connect-1.2.0-mtree",
-    srcs = _SRCS,
-)
+[
+    # create a manifest file for each of the connector original sources
+    mtree_spec(
+        name = "{connector}.mtree".format(connector=connector_name),
+        srcs = connector_srcs,
+    )
+    for connector_name, connector_srcs in _SRCS.items()
+]
+[
+    # change the root path of the sources for each connector
+    # 
+    # The root path in each manifest file should now point to
+    # /usr/share/confluent-hub-components/...
+    # 
+    # where confluent's Kafka Connect worker will expect to
+    # find executable JAR files of the connector
+    mtree_mutate(
+        name = "cp-{connector}.mtree".format(connector=connector_name),
+        mtree = ":{connector}.mtree".format(connector=connector_name),
+        package_dir = "usr/share/confluent-hub-components",
+    )
+    for connector_name, connector_srcs in _SRCS.items()
+]
+[
+    # package the modified tar's srcs as layers for the cp Kafka Connect
+    # image
+    tar(
+        name = "cp-{connector}".format(connector=connector_name),
+        mtree = ":cp-{connector}.mtree".format(connector=connector_name),
+        srcs = connector_srcs,
+        args = [
+            "--exclude=*.bazel", 
+            "--exclude=WORKSPACE",
+        ],
+    )
+    for connector_name, connector_srcs in _SRCS.items()
+]
 
-mtree_mutate(
-    name = "cp-qdrant-sink-kafka-connect-1.2.0-mtree",
-    mtree = ":qdrant-sink-kafka-connect-1.2.0-mtree",
-    package_dir = "usr/share/confluent-hub-components",
-)
-
-tar(
-    name = "cp-qdrant-sink-kafka-connect-1.2.0",
-    mtree = ":cp-qdrant-sink-kafka-connect-1.2.0-mtree",
-    srcs = _SRCS,
-    args = [
-        "--exclude=*.bazel", 
-        "--exclude=WORKSPACE",
-    ],
-)
-
+# package the modified tar's srcs as layers for the cp Kafka Connect
+# image
+# All packaged connectors should now sit under /usr/share/confluent-hub-components/
+# which is where CP's Kafka Connect worker process expects them to be
+#
+# Information about them will be loaded at start time of the container
+# and they will be readily available for instantiation via Kafka Connect's 
+# REST API (at port 8083 by default) once the worker is ready and healthy
 oci_image(
-    name = "cp-kafka-connect",
+    name = "venus-cp-kafka-connect",
     base = "@cp-kafka-connect",
     exposed_ports = ["8083"],
     # add the connectors to the image as tar layers
     # they should eventually sit under /usr/share/conluent-hub-components
-    tars = [":cp-qdrant-sink-kafka-connect-1.2.0"],
+    tars = [
+        ":cp-{connector}".format(connector=connector_name)
+        for connector_name in _SRCS.keys()
+    ],
 )
 
 oci_load(
-    name = "cp-kafka-connect.tarball",
-    image = ":cp-kafka-connect",
+    name = "venus-cp-kafka-connect.tarball",
+    image = ":venus-cp-kafka-connect",
     repo_tags = ["celery-ingestion/kafka-connect:latest"]
 )

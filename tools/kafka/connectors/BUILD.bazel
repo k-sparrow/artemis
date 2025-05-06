@@ -1,5 +1,5 @@
 exports_files(
     [
-        ":generic_connector.BUILD",
+        ":generic.BUILD",
     ]
 )
