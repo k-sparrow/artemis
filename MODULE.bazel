@@ -3,7 +3,6 @@
 # -------------------------------------
 #
 
-# change the name of module at your leisure
 module(
     name = "celery-ingestion",
     version = "0.0.1",
@@ -106,7 +105,22 @@ oci.pull(
     tag = "7.9.0",
     digest = "sha256:93c0175e000ca49be814afe10cc42da281b475e937d20180e56c390667947636",
 )
-use_repo(oci, "ubuntu", "cp-kafka-connect")
+oci.pull(
+    name = "curl",
+    digest = "sha256:d43bdb28bae0be0998f3be83199bfb2b81e0a30b034b6d7586ce7e05de34c3fd",
+    image = "index.docker.io/curlimages/curl",
+    platforms = [
+        "linux/arm64/v8",
+        "linux/amd64",
+    ],
+    tag = "8.13.0",
+)
+use_repo(
+    oci, 
+    "ubuntu",
+    "curl",
+    "cp-kafka-connect"
+)
 
 
 apt = use_extension("@rules_distroless//apt:extensions.bzl", "apt")

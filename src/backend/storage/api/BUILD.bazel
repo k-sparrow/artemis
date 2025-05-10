@@ -8,7 +8,6 @@ load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
 load("@aspect_bazel_lib//lib:tar.bzl", "tar", "mtree_spec", "mtree_mutate")
 load("@aspect_bazel_lib//lib:testing.bzl", "assert_archive_contains")
 load("@rules_oci//oci:defs.bzl", oci_load = "oci_tarball", "oci_push")
-load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("@aspect_rules_py//py:defs.bzl", "py_binary", "py_library")
 load("@pip//:requirements.bzl", "requirement")
 
@@ -18,9 +17,8 @@ load("//tools/server:celery.bzl", "celery_worker")
 
 package(default_visibility = ["//visibility:private"])
 
-
 # Equivalent to cmdline:
-#  `uvicorn main:app --host localhost --port 9003`
+#  `uvicorn main:app --host localhost --port 9002`
 uvicorn_dev_server(
     name = "dev",
     args = [
@@ -28,49 +26,36 @@ uvicorn_dev_server(
         "--host",
         "localhost",
         "--port",
-        "9003",
+        "9002",
         "--reload",
     ],
     imports = ["."],
-    data = ["//:.env"],
     visibility = ["//visibility:public"],
     deps = [
-        ":backend-main",
+        ":pkg",
     ],
 )
 
-
 py_library(
-    name = "backend-main",
+    name = "pkg",
     srcs = [
         "__init__.py",
-        "main.py",
     ],
-    imports = ["."],
     deps = [
-        ":dependencies",
-        ":service",
-        requirement("aiohttp"),
-        requirement("fastapi"),
-        requirement("langchain-core"),
-        requirement("python-multipart"),
+        ":main",
     ]
 )
 
 py_library(
-    name = "service",
+    name = "main",
     srcs = [
-        "service.py",
+        "main.py",
     ],
     deps = [
-        ":config",
-        "//src/backend/indexing/client/generated/api:pkg",
-        "//src/backend/indexing/client/generated/api/default:pkg",
-        "//src/backend/indexing/client/generated/models:pkg",
-        "//src/backend/indexing/client/generated:pkg",
-        requirement("fastapi"),
-        requirement("langchain-core"),
-    ]
+        ":dependencies",
+        ":utils",
+        requirement("python-multipart"),
+    ],
 )
 
 py_library(
@@ -80,12 +65,21 @@ py_library(
     ],
     deps = [
         ":config",
-        "//src/backend/indexing/lib/handler:pkg",
         requirement("fastapi"),
-        requirement("langchain-core"),
-        requirement("langchain-huggingface"),
+        requirement("minio"),
+    ],
+)
+
+py_library(
+    name = "utils",
+    srcs = [
+        "utils.py",
+    ],
+    deps = [
+        requirement("minio"),
     ]
 )
+
 
 py_library(
     name = "config",
@@ -98,52 +92,27 @@ py_library(
     ],
 )
 
-_SRCS = [
-    "//:.env"
-]
-
-mtree_spec(
-    name = "mtree-env",
-    srcs = _SRCS
-)
-
-
-tar(
-    name = "env",
-    srcs = _SRCS,
-    mtree = ":mtree-env",
-)
+# OCI Image for Storage service
 
 py_oci_image(
     name = "image",
     base = "@ubuntu",
     binary = ":dev",
     entrypoint = [
-        "/src/backend/indexing/api/dev",
+        "/src/backend/storage/api/dev",
         "main:app",
         "--host",
         "0.0.0.0",  # this should allow connections from host
         "--port",
-        "9003",
+        "9002",
     ],
-    exposed_ports = ["9003"],
-    tars = [
-        ":env",
-    ],
+    exposed_ports = ["9002"],
     visibility = ["//src/backend:__pkg__"],
 )
-
 
 # $ bazel run //src/backend/indexing/api:tarball
 oci_load(
     name = "tarball",
     image = ":image",
-    repo_tags = ["celery-ingestion/backend:latest"],
-)
-
-oci_push(
-    name = "push",
-    image = ":image",
-    repository = "localhost:5000/celery-ingestion-backend",
-    remote_tags = ["latest"]
+    repo_tags = ["venus/backend:latest"],
 )

@@ -12,9 +12,6 @@ x-minio-common: &minio-common
     MINIO_ROOT_USER: minioadmin
     MINIO_ROOT_PASSWORD: minioadmin
     MINIO_VOLUMES: "/mnt/data"
-    MINIO_NOTIFY_KAFKA_ENABLE_VENUS: "on"
-    MINIO_NOTIFY_KAFKA_BROKERS_VENUS: broker:29092
-    MINIO_NOTIFY_KAFKA_TOPIC_VENUS: venus_ingest
   healthcheck:
     test: ["CMD", "mc", "ready", "local"]
     interval: 5s
@@ -53,27 +50,6 @@ services:
       - "6334"
     ports:
       - 6333:6333
-  backend:
-    image: celery-ingestion/backend:latest
-    depends_on:
-      - db
-      - docling-inference
-      - vectorstore
-      - tei
-    restart: on-failure:10  # to compensate TEI model download time
-    environment:
-      DATABASE_HOSTNAME: db
-      DATABASE_PORT: ${DATABASE_PORT:-5432}
-      DATABASE_USERNAME: *database_user
-      POSTGRES_PASSWORD: *database_password
-      DATABASE_NAME: *database_name
-      TEI_HOST_URL: "http://tei/"
-      DOCLING_BACKEND_URL: http://docling-inference:8080/
-      QDRANT_HOST_URL: http://vectorstore/
-      QDRANT_HOST_PORT: "6333"
-      QDRANT_COLLECTION_NAME: "venus"
-    ports:
-      - 9002:9002
   docling-inference:
     image: ghcr.io/aidotse/docling-inference:latest
     expose:
@@ -147,7 +123,7 @@ services:
     ports:
       - 8081:8081
   kafka-connect:
-    image: celery-ingestion/kafka-connect:latest
+    image: venus/cp-kafka-connect:latest
     container_name: kafka-connect
     depends_on:
       - broker
@@ -171,6 +147,24 @@ services:
       CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: "1"
     #  ---------------
       CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components,/data/connect-jars
+  kafka-connect-init:
+    image: venus/cp-kafka-connect-init:latest
+    environment:
+      KAFKA_CONNECT_CLUSTER_URI: http://kafka-connect:8083
+  httpmockserver:
+    image: mockserver/mockserver
+    ports:
+      - 11111:8080
+    expose:
+      - "8080"
+    volumes:
+      - ./initializerJson.json:/config/initializerJson.json
+      - ./mockserver.properties:/config/mockserver.properties
+    environment:
+      MOCKSERVER_SERVER_PORT: "8080"
+      MOCKSERVER_LOG_LEVEL: "TRACE"
+      MOCKSERVER_INITIALIZATION_JSON_PATH: /config/initializerJson.json
+      MOCKSERVER_PROPERTY_FILE: /config/mockserver.properties
   kafkacat:
     image: confluentinc/cp-kafkacat
     command: sleep infinity
@@ -195,8 +189,51 @@ services:
   minio:
     <<: *minio-common
     hostname: minio
+    environment:
+      MINIO_NOTIFY_KAFKA_ENABLE_VENUS: "on"
+      MINIO_NOTIFY_KAFKA_BROKERS_VENUS: broker:29092
+      MINIO_NOTIFY_KAFKA_TOPIC_VENUS: venus.ingestion.storage.s3
+      MINIO_NOTIFY_KAFKA_ENABLE_TEST_ANOTHER: "on"
+      MINIO_NOTIFY_KAFKA_BROKERS_TEST_ANOTHER: broker:29092
+      MINIO_NOTIFY_KAFKA_TOPIC_TEST_ANOTHER: venus.test.upload.s3
     volumes:
       - minio-data-1:/mnt/data
+  backend:
+    image: celery-ingestion/backend:latest
+    depends_on:
+      - db
+      - docling-inference
+      - vectorstore
+      - tei
+    restart: on-failure:10  # to compensate TEI model download time
+    environment:
+      DATABASE_HOSTNAME: db
+      DATABASE_PORT: ${DATABASE_PORT:-5432}
+      DATABASE_USERNAME: *database_user
+      POSTGRES_PASSWORD: *database_password
+      DATABASE_NAME: *database_name
+      TEI_HOST_URL: "http://tei/"
+      DOCLING_BACKEND_URL: http://docling-inference:8080/
+      QDRANT_HOST_URL: http://vectorstore/
+      QDRANT_HOST_PORT: "6333"
+      QDRANT_COLLECTION_NAME: "venus"
+    ports:
+      - 9002:9002
+  backend-storage:
+    image: venus/backend:latest
+    depends_on:
+      - minio
+    environment:
+      S3_ENDPOINT_URL: minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_VENUS_BUCKET: venus
+      S3_VENUS_BUCKET_KAFKA_EVENT: VENUS
+    expose:
+      - "9093"
+    ports:
+      - 19094:9093
+
 volumes:
   db-data:
   hf_cache:
