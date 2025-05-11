@@ -1,0 +1,95 @@
+
+# -------------------------------------
+# Copyright (c) 2023, Dror Kabely
+# -------------------------------------
+#
+
+load(
+    "@//tools/oci/images:kafka.bzl",
+    "kafka_connect_connector_instance",
+    "kafka_connect_image",
+    "kafka_connect_init_image",
+)
+load("@aspect_bazel_lib//lib:tar.bzl", "mtree_mutate", "mtree_spec", "tar")
+load("@aspect_bazel_lib//lib:testing.bzl", "assert_archive_contains")
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_oci//oci:defs.bzl", "oci_image", "oci_push", oci_load = "oci_tarball")
+
+# srcs of the custom connects
+_CP_KAFKA_CONNECT_CONNECTORS_SRCS = {
+    "qdrant-sink-kafka-connect": ["@qdrant-sink-kafka-connect-1.2.0//:srcs"],
+    "http-sink-kafka-connect": ["@aiven-http-sink-kafka-connect-0.9.0//:srcs"],
+}
+
+kafka_connect_image(
+    name = "venus-cp-kafka-connect",
+    base = "@cp-kafka-connect",
+    connectors_srcs = _CP_KAFKA_CONNECT_CONNECTORS_SRCS,
+    # this is where the components sources (mainly JARs) sit under
+    # after packaging
+    cp_components_dir = "usr/share/confluent-hub-components",
+    exposed_ports = ["8083"],
+)
+
+oci_load(
+    name = "venus-cp-kafka-connect.tarball",
+    image = ":venus-cp-kafka-connect",
+    # use this tag as image name for Kafka Connect worker in docker-compose.yaml
+    repo_tags = ["venus/cp-kafka-connect:latest"],
+)
+
+# Kafka Connect connector specification and packaging
+kafka_connect_connector_instance(
+    name = "qdrant-sink-connector-0",
+    connector_config = {
+        "connector.class": "io.qdrant.kafka.QdrantSinkConnector",
+        "value.converter.schemas.enable": "false",
+        "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "topics": "venus.ingestion.vectorstore",
+        "errors.deadletterqueue.topic.name": "dead_queue",
+        "errors.deadletterqueue.topic.replication.factor": "1",
+        "qdrant.grpc.url": "http://vectorstore:6334",
+    },
+    connector_name = "QdrantSinkConnectorConnector_0",
+)
+
+kafka_connect_connector_instance(
+    name = "http-sink-connector-0",
+    connector_config = {
+        "connector.class": "io.aiven.kafka.connect.http.HttpSinkConnector",
+        "topics": "venus.ingestion.storage.s3",
+        "http.authorization.type": "none",
+        "http.url": "http://httpmockserver:8080",
+        "batching.enabled": True,
+        "batch.max.size": 2,
+        "tasks.max": "1",
+        "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "key.converter.schemas.enable": False,
+        "value.converter.schemas.enable": False,
+    },
+    connector_name = "HttpSinkConnectorConnector_0",
+)
+
+kafka_connect_init_image(
+    name = "venus-kafka-connect-init",
+    # we use curl to manipulate the Kafka Connect via its REST API
+    base = "@curl",
+    # connector instance configuration JSON files will end up
+    # under /config/ directory in the resulting image
+    connector_config_dir = "config",
+    connectors = [
+        ":qdrant-sink-connector-0",
+        ":http-sink-connector-0",
+    ],
+    # this is where the initialization script will run from inside the container
+    # the entrypoint is currently fixed to "sh -c /<exec_dir>/init-script.sh"
+    exec_dir = "etc/bin",
+)
+
+oci_load(
+    name = "venus-kafka-connect-init.tarball",
+    image = ":venus-kafka-connect-init",
+    repo_tags = ["venus/cp-kafka-connect-init:latest"],
+)
