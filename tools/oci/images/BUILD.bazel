@@ -54,23 +54,52 @@ kafka_connect_connector_instance(
     connector_name = "QdrantSinkConnectorConnector_0",
 )
 
+# connection between library uploads watchdog service to the S3 bucket storage
+# front
 kafka_connect_connector_instance(
-    name = "http-sink-connector-0",
+    name = "http-sink-connector-library",
     connector_config = {
         "connector.class": "io.aiven.kafka.connect.http.HttpSinkConnector",
-        "topics": "venus.ingestion.storage.s3",
+        "topics": "venus.ingestion.watchdog.library",
         "http.authorization.type": "none",
-        "http.url": "http://httpmockserver:8080",
-        "batching.enabled": True,
-        "batch.max.size": 2,
+        "http.url": "http://backend-storage:8080/library",
+        "batching.enabled": False,
         "tasks.max": "1",
         "key.converter": "org.apache.kafka.connect.storage.StringConverter",
         "value.converter": "org.apache.kafka.connect.json.JsonConverter",
         "key.converter.schemas.enable": False,
         "value.converter.schemas.enable": False,
     },
-    connector_name = "HttpSinkConnectorConnector_0",
+    connector_name = "HttpSinkConnectorConnector_LibraryToStorage",
 )
+
+# connection between S3 storage to ingestion controller
+kafka_connect_connector_instance(
+    name = "http-sink-connector-ingestion-controller",
+    connector_config = {
+        "connector.class": "io.aiven.kafka.connect.http.HttpSinkConnector",
+        "topics": "venus.ingestion.storage.s3",
+        "http.authorization.type": "none",
+        "http.url": "http://backend-ingestion:8080/files",
+        "batching.enabled": True,
+        "batch.max.size": 2,
+        "batch.prefix": "[",
+        "batch.suffix": "]",
+        "batch.separator": ",",
+        "tasks.max": "1",
+        "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "key.converter.schemas.enable": False,
+        "value.converter.schemas.enable": False,
+        # backeoff strategy
+        "kafka.retry.backoff.ms": 3,
+        "max.retries": 50,
+        "retry.backoff.ms": 3000,
+    },
+    connector_name = "HttpSinkConnectorConnector_StorageToIngestionController",
+)
+
+
 
 kafka_connect_init_image(
     name = "venus-kafka-connect-init",
@@ -80,8 +109,9 @@ kafka_connect_init_image(
     # under /config/ directory in the resulting image
     connector_config_dir = "config",
     connectors = [
-        ":qdrant-sink-connector-0",
-        ":http-sink-connector-0",
+        # ":qdrant-sink-connector-0",
+        ":http-sink-connector-library",
+        ":http-sink-connector-ingestion-controller",
     ],
     # this is where the initialization script will run from inside the container
     # the entrypoint is currently fixed to "sh -c /<exec_dir>/init-script.sh"

@@ -40,7 +40,7 @@ app = FastAPI(
 
 # here arrive update notifications from Kafka
 # about fresh uploads to the
-@app.post("/ee")
+@app.post("/library")
 async def ee(request: Request):
     logger.info(f"{request.method} {request.url}")
     logger.info(f"Request contents: {await request.body()}")
@@ -55,7 +55,7 @@ async def upload(
     logger.info(f"Received upload file: {file.filename}...")
     minio_client.put_object(
         bucket_name=settings.S3_VENUS_BUCKET,
-        object_name=f"venus/{file.filename}",
+        object_name=f"venus/private/{file.filename}",
         data=file.file,
         content_type=file.content_type,
     )
