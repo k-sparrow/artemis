@@ -12,6 +12,7 @@ from src.backend.storage.api.dependencies import (
 )
 from src.backend.storage.api.utils import (
     lifespan,
+    s3_dump_object,
 )
 
 logging.config.dictConfig(LOGGING_CONFIG)
@@ -35,7 +36,7 @@ async def ee(request: Request):
 
 
 @app.post("/upload")
-async def upload(
+def upload(
     minio_client: minio_client_dependency,
     files: List[UploadFile] = File(...),
     user_id: UUID = Form(),
@@ -48,18 +49,16 @@ async def upload(
     task_ids = [uuid4() for _ in range(0, len(files))]
     for file_, file_id, task_id in zip(files, file_ids, task_ids):
         logger.info(f"Received upload file: {file_.filename}...")
-        await file_.seek(0)
-        minio_client.put_object(
-            bucket_name=settings.S3_VENUS_BUCKET,
-            object_name=f"venus/private/{str(file_id)}",
-            data=file_.file,
-            length=file_.size,
+        s3_dump_object(
+            minio_client,
+            file_io=file_.file,
             content_type=file_.content_type,
-            metadata={
+            size=file_.size,
+            task_id=task_id,
+            file_id=file_id,
+            s3_metadata={
                 "user_id": str(user_id),
                 "chat_id": str(chat_id),
-                "file_id": str(chat_id),
-                "task_id": str(task_id),
                 "filename": file_.filename,
             },
         )
