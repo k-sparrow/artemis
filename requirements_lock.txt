@@ -980,6 +980,7 @@ httpx[http2]==0.27.2 \
     # via
     #   -r requirements.in
     #   jupyterlab
+    #   langserve
     #   langsmith
     #   openapi-python-client
     #   qdrant-client
@@ -1195,6 +1196,7 @@ langchain-core==0.3.44 \
     #   langchain-huggingface
     #   langchain-qdrant
     #   langchain-text-splitters
+    #   langserve
 langchain-docling==0.2.0 \
     --hash=sha256:94d11e5ec611b8a17809de9efba303eef2f0fc817f7ebdc46d737e58ecd88820 \
     --hash=sha256:eff3e7cfcbd5bc56b9356108ec0475ee0487ec1227914b3cebb60fe288dae04c
@@ -1213,6 +1215,10 @@ langchain-text-splitters==0.3.6 \
     # via
     #   -r requirements.in
     #   langchain
+langserve==0.3.2 \
+    --hash=sha256:134b78b1d897c6bcd1fb8a6258e30cf0fb318294505e4ea59c2bea72fa152129 \
+    --hash=sha256:d9c4cd19d12f6362b82ceecb10357b339b3640a858b9bc30643d5f8a0a036bce
+    # via -r requirements.in
 langsmith==0.3.13 \
     --hash=sha256:14014058cff408772acb93344e03cb64174837292d5f1ae09b2c8c1d8df45e92 \
     --hash=sha256:73aaf52bbc293b9415fff4f6dad68df40658081eb26c9cb2c7bd1ff57cedd695
@@ -1883,7 +1889,9 @@ orjson==3.10.15 \
     --hash=sha256:fd56a26a04f6ba5fb2045b0acc487a63162a958ed837648c5781e1fe3316cfbf \
     --hash=sha256:ff4f6edb1578960ed628a3b998fa54d78d9bb3e2eb2cfc5c2a09732431c678d0 \
     --hash=sha256:ffe19f3e8d68111e8644d4f4e267a069ca427926855582ff01fc012496d19969
-    # via langsmith
+    # via
+    #   langserve
+    #   langsmith
 overrides==7.7.0 \
     --hash=sha256:55158fa3d93b98cc75299b1e67078ad9003ca27945c76162c1c0766d6f91820a \
     --hash=sha256:c7ed9d062f78b8e4c1a7b70bd8796b35ead4d9f510227ef9c5dc7626c60d7e49
@@ -2395,6 +2403,7 @@ pydantic==2.11.2 \
     #   langchain
     #   langchain-core
     #   langchain-qdrant
+    #   langserve
     #   langsmith
     #   openapi-python-client
     #   pydantic-settings

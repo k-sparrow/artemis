@@ -16,6 +16,7 @@ gunicorn==23.0.0
 pydantic-settings==2.6.0
 openapi-python-client==0.24.3
 attrs==25.3.0
+langserve==0.3.2
 
 # testing
 pytest==7.4.2

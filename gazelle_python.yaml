@@ -5,6 +5,181 @@
 
 manifest:
   modules_mapping:
+    Crypto: pycryptodome
+    Crypto.Cipher: pycryptodome
+    Crypto.Cipher.AES: pycryptodome
+    Crypto.Cipher.ARC2: pycryptodome
+    Crypto.Cipher.ARC4: pycryptodome
+    Crypto.Cipher.Blowfish: pycryptodome
+    Crypto.Cipher.CAST: pycryptodome
+    Crypto.Cipher.ChaCha20: pycryptodome
+    Crypto.Cipher.ChaCha20_Poly1305: pycryptodome
+    Crypto.Cipher.DES: pycryptodome
+    Crypto.Cipher.DES3: pycryptodome
+    Crypto.Cipher.PKCS1_OAEP: pycryptodome
+    Crypto.Cipher.PKCS1_v1_5: pycryptodome
+    Crypto.Cipher.Salsa20: pycryptodome
+    Crypto.Hash: pycryptodome
+    Crypto.Hash.BLAKE2b: pycryptodome
+    Crypto.Hash.BLAKE2s: pycryptodome
+    Crypto.Hash.CMAC: pycryptodome
+    Crypto.Hash.HMAC: pycryptodome
+    Crypto.Hash.KMAC128: pycryptodome
+    Crypto.Hash.KMAC256: pycryptodome
+    Crypto.Hash.KangarooTwelve: pycryptodome
+    Crypto.Hash.MD2: pycryptodome
+    Crypto.Hash.MD4: pycryptodome
+    Crypto.Hash.MD5: pycryptodome
+    Crypto.Hash.Poly1305: pycryptodome
+    Crypto.Hash.RIPEMD: pycryptodome
+    Crypto.Hash.RIPEMD160: pycryptodome
+    Crypto.Hash.SHA: pycryptodome
+    Crypto.Hash.SHA1: pycryptodome
+    Crypto.Hash.SHA224: pycryptodome
+    Crypto.Hash.SHA256: pycryptodome
+    Crypto.Hash.SHA384: pycryptodome
+    Crypto.Hash.SHA3_224: pycryptodome
+    Crypto.Hash.SHA3_256: pycryptodome
+    Crypto.Hash.SHA3_384: pycryptodome
+    Crypto.Hash.SHA3_512: pycryptodome
+    Crypto.Hash.SHA512: pycryptodome
+    Crypto.Hash.SHAKE128: pycryptodome
+    Crypto.Hash.SHAKE256: pycryptodome
+    Crypto.Hash.TupleHash128: pycryptodome
+    Crypto.Hash.TupleHash256: pycryptodome
+    Crypto.Hash.TurboSHAKE128: pycryptodome
+    Crypto.Hash.TurboSHAKE256: pycryptodome
+    Crypto.Hash.cSHAKE128: pycryptodome
+    Crypto.Hash.cSHAKE256: pycryptodome
+    Crypto.Hash.keccak: pycryptodome
+    Crypto.IO: pycryptodome
+    Crypto.IO.PEM: pycryptodome
+    Crypto.IO.PKCS8: pycryptodome
+    Crypto.Math: pycryptodome
+    Crypto.Math.Numbers: pycryptodome
+    Crypto.Math.Primality: pycryptodome
+    Crypto.Protocol: pycryptodome
+    Crypto.Protocol.DH: pycryptodome
+    Crypto.Protocol.HPKE: pycryptodome
+    Crypto.Protocol.KDF: pycryptodome
+    Crypto.Protocol.SecretSharing: pycryptodome
+    Crypto.PublicKey: pycryptodome
+    Crypto.PublicKey.DSA: pycryptodome
+    Crypto.PublicKey.ECC: pycryptodome
+    Crypto.PublicKey.ElGamal: pycryptodome
+    Crypto.PublicKey.RSA: pycryptodome
+    Crypto.Random: pycryptodome
+    Crypto.Random.random: pycryptodome
+    Crypto.SelfTest: pycryptodome
+    Crypto.SelfTest.Cipher: pycryptodome
+    Crypto.SelfTest.Cipher.common: pycryptodome
+    Crypto.SelfTest.Cipher.test_AES: pycryptodome
+    Crypto.SelfTest.Cipher.test_ARC2: pycryptodome
+    Crypto.SelfTest.Cipher.test_ARC4: pycryptodome
+    Crypto.SelfTest.Cipher.test_Blowfish: pycryptodome
+    Crypto.SelfTest.Cipher.test_CAST: pycryptodome
+    Crypto.SelfTest.Cipher.test_CBC: pycryptodome
+    Crypto.SelfTest.Cipher.test_CCM: pycryptodome
+    Crypto.SelfTest.Cipher.test_CFB: pycryptodome
+    Crypto.SelfTest.Cipher.test_CTR: pycryptodome
+    Crypto.SelfTest.Cipher.test_ChaCha20: pycryptodome
+    Crypto.SelfTest.Cipher.test_ChaCha20_Poly1305: pycryptodome
+    Crypto.SelfTest.Cipher.test_DES: pycryptodome
+    Crypto.SelfTest.Cipher.test_DES3: pycryptodome
+    Crypto.SelfTest.Cipher.test_EAX: pycryptodome
+    Crypto.SelfTest.Cipher.test_GCM: pycryptodome
+    Crypto.SelfTest.Cipher.test_OCB: pycryptodome
+    Crypto.SelfTest.Cipher.test_OFB: pycryptodome
+    Crypto.SelfTest.Cipher.test_OpenPGP: pycryptodome
+    Crypto.SelfTest.Cipher.test_SIV: pycryptodome
+    Crypto.SelfTest.Cipher.test_Salsa20: pycryptodome
+    Crypto.SelfTest.Cipher.test_pkcs1_15: pycryptodome
+    Crypto.SelfTest.Cipher.test_pkcs1_oaep: pycryptodome
+    Crypto.SelfTest.Hash: pycryptodome
+    Crypto.SelfTest.Hash.common: pycryptodome
+    Crypto.SelfTest.Hash.test_BLAKE2: pycryptodome
+    Crypto.SelfTest.Hash.test_CMAC: pycryptodome
+    Crypto.SelfTest.Hash.test_HMAC: pycryptodome
+    Crypto.SelfTest.Hash.test_KMAC: pycryptodome
+    Crypto.SelfTest.Hash.test_KangarooTwelve: pycryptodome
+    Crypto.SelfTest.Hash.test_MD2: pycryptodome
+    Crypto.SelfTest.Hash.test_MD4: pycryptodome
+    Crypto.SelfTest.Hash.test_MD5: pycryptodome
+    Crypto.SelfTest.Hash.test_Poly1305: pycryptodome
+    Crypto.SelfTest.Hash.test_RIPEMD160: pycryptodome
+    Crypto.SelfTest.Hash.test_SHA1: pycryptodome
+    Crypto.SelfTest.Hash.test_SHA224: pycryptodome
+    Crypto.SelfTest.Hash.test_SHA256: pycryptodome
+    Crypto.SelfTest.Hash.test_SHA384: pycryptodome
+    Crypto.SelfTest.Hash.test_SHA3_224: pycryptodome
+    Crypto.SelfTest.Hash.test_SHA3_256: pycryptodome
+    Crypto.SelfTest.Hash.test_SHA3_384: pycryptodome
+    Crypto.SelfTest.Hash.test_SHA3_512: pycryptodome
+    Crypto.SelfTest.Hash.test_SHA512: pycryptodome
+    Crypto.SelfTest.Hash.test_SHAKE: pycryptodome
+    Crypto.SelfTest.Hash.test_TupleHash: pycryptodome
+    Crypto.SelfTest.Hash.test_TurboSHAKE: pycryptodome
+    Crypto.SelfTest.Hash.test_cSHAKE: pycryptodome
+    Crypto.SelfTest.Hash.test_keccak: pycryptodome
+    Crypto.SelfTest.IO: pycryptodome
+    Crypto.SelfTest.IO.test_PBES: pycryptodome
+    Crypto.SelfTest.IO.test_PKCS8: pycryptodome
+    Crypto.SelfTest.Math: pycryptodome
+    Crypto.SelfTest.Math.test_Numbers: pycryptodome
+    Crypto.SelfTest.Math.test_Primality: pycryptodome
+    Crypto.SelfTest.Math.test_modexp: pycryptodome
+    Crypto.SelfTest.Math.test_modmult: pycryptodome
+    Crypto.SelfTest.Protocol: pycryptodome
+    Crypto.SelfTest.Protocol.test_HPKE: pycryptodome
+    Crypto.SelfTest.Protocol.test_KDF: pycryptodome
+    Crypto.SelfTest.Protocol.test_SecretSharing: pycryptodome
+    Crypto.SelfTest.Protocol.test_ecdh: pycryptodome
+    Crypto.SelfTest.Protocol.test_rfc1751: pycryptodome
+    Crypto.SelfTest.PublicKey: pycryptodome
+    Crypto.SelfTest.PublicKey.test_DSA: pycryptodome
+    Crypto.SelfTest.PublicKey.test_ECC_Curve25519: pycryptodome
+    Crypto.SelfTest.PublicKey.test_ECC_Curve448: pycryptodome
+    Crypto.SelfTest.PublicKey.test_ECC_Ed25519: pycryptodome
+    Crypto.SelfTest.PublicKey.test_ECC_Ed448: pycryptodome
+    Crypto.SelfTest.PublicKey.test_ECC_NIST: pycryptodome
+    Crypto.SelfTest.PublicKey.test_ElGamal: pycryptodome
+    Crypto.SelfTest.PublicKey.test_RSA: pycryptodome
+    Crypto.SelfTest.PublicKey.test_import_Curve25519: pycryptodome
+    Crypto.SelfTest.PublicKey.test_import_Curve448: pycryptodome
+    Crypto.SelfTest.PublicKey.test_import_DSA: pycryptodome
+    Crypto.SelfTest.PublicKey.test_import_ECC: pycryptodome
+    Crypto.SelfTest.PublicKey.test_import_RSA: pycryptodome
+    Crypto.SelfTest.Random: pycryptodome
+    Crypto.SelfTest.Random.test_random: pycryptodome
+    Crypto.SelfTest.Signature: pycryptodome
+    Crypto.SelfTest.Signature.test_dss: pycryptodome
+    Crypto.SelfTest.Signature.test_eddsa: pycryptodome
+    Crypto.SelfTest.Signature.test_pkcs1_15: pycryptodome
+    Crypto.SelfTest.Signature.test_pss: pycryptodome
+    Crypto.SelfTest.Util: pycryptodome
+    Crypto.SelfTest.Util.test_Counter: pycryptodome
+    Crypto.SelfTest.Util.test_Padding: pycryptodome
+    Crypto.SelfTest.Util.test_asn1: pycryptodome
+    Crypto.SelfTest.Util.test_number: pycryptodome
+    Crypto.SelfTest.Util.test_rfc1751: pycryptodome
+    Crypto.SelfTest.Util.test_strxor: pycryptodome
+    Crypto.SelfTest.loader: pycryptodome
+    Crypto.SelfTest.st_common: pycryptodome
+    Crypto.Signature: pycryptodome
+    Crypto.Signature.DSS: pycryptodome
+    Crypto.Signature.PKCS1_PSS: pycryptodome
+    Crypto.Signature.PKCS1_v1_5: pycryptodome
+    Crypto.Signature.eddsa: pycryptodome
+    Crypto.Signature.pkcs1_15: pycryptodome
+    Crypto.Signature.pss: pycryptodome
+    Crypto.Util: pycryptodome
+    Crypto.Util.Counter: pycryptodome
+    Crypto.Util.Padding: pycryptodome
+    Crypto.Util.RFC1751: pycryptodome
+    Crypto.Util.asn1: pycryptodome
+    Crypto.Util.number: pycryptodome
+    Crypto.Util.py3compat: pycryptodome
+    Crypto.Util.strxor: pycryptodome
     IPython: ipython
     IPython.core: ipython
     IPython.core.alias: ipython
@@ -5331,6 +5506,18 @@ manifest:
     langchain_text_splitters.python: langchain_text_splitters
     langchain_text_splitters.sentence_transformers: langchain_text_splitters
     langchain_text_splitters.spacy: langchain_text_splitters
+    langserve: langserve
+    langserve.api_handler: langserve
+    langserve.callbacks: langserve
+    langserve.client: langserve
+    langserve.lzstring: langserve
+    langserve.playground: langserve
+    langserve.schema: langserve
+    langserve.serialization: langserve
+    langserve.server: langserve
+    langserve.server_sent_events: langserve
+    langserve.validation: langserve
+    langserve.version: langserve
     langsmith: langsmith
     langsmith.anonymizer: langsmith
     langsmith.async_client: langsmith
@@ -5528,6 +5715,32 @@ manifest:
     matplotlib_inline.config: matplotlib_inline
     mccabe: mccabe
     mdurl: mdurl
+    minio: minio
+    minio.api: minio
+    minio.commonconfig: minio
+    minio.credentials: minio
+    minio.credentials.credentials: minio
+    minio.credentials.providers: minio
+    minio.crypto: minio
+    minio.datatypes: minio
+    minio.deleteobjects: minio
+    minio.error: minio
+    minio.helpers: minio
+    minio.legalhold: minio
+    minio.lifecycleconfig: minio
+    minio.minioadmin: minio
+    minio.notificationconfig: minio
+    minio.objectlockconfig: minio
+    minio.replicationconfig: minio
+    minio.retention: minio
+    minio.select: minio
+    minio.signer: minio
+    minio.sse: minio
+    minio.sseconfig: minio
+    minio.tagging: minio
+    minio.time: minio
+    minio.versioningconfig: minio
+    minio.xml: minio
     mistune: mistune
     mistune.block_parser: mistune
     mistune.core: mistune
@@ -16232,4 +16445,4 @@ manifest:
     zstandard.backend_cffi: zstandard
   pip_repository:
     name: pip
-integrity: b126cd39e93b012f8c3e1d5f170283dbb457c4d9218fee05d4e5b6ff47f7080d
+integrity: 6b4464734ceae60add85755519a7c848372dc36b580e539609566c1ce79f5440

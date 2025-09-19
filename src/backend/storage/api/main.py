@@ -1,34 +1,21 @@
-from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from uuid import UUID, uuid4
+from typing import List
+
 import logging
 import logging.config
 
-from fastapi import FastAPI, File, UploadFile, Request
+from fastapi import FastAPI, File, UploadFile, Request, Form
 
 from src.backend.storage.api.config import storage_settings as settings, LOGGING_CONFIG
 from src.backend.storage.api.dependencies import (
-    get_minio_client,
     minio_client_dependency,
 )
-from src.backend.storage.api.utils import create_bucket, link_s3_bucket_with_kafka_event
+from src.backend.storage.api.utils import (
+    lifespan,
+)
 
 logging.config.dictConfig(LOGGING_CONFIG)
 logger = logging.getLogger(__name__)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    minio_client = await get_minio_client()
-
-    # create the bucket if it does not exist
-    # and link between the bucket and the event topic
-    await create_bucket(minio_client=minio_client, bucket_name=settings.S3_VENUS_BUCKET)
-    await link_s3_bucket_with_kafka_event(
-        minio_client=minio_client,
-        bucket_name=settings.S3_VENUS_BUCKET,
-        event_name_name=settings.S3_VENUS_BUCKET_KAFKA_EVENT,
-    )
-    yield
 
 
 app = FastAPI(
@@ -50,14 +37,35 @@ async def ee(request: Request):
 @app.post("/upload")
 async def upload(
     minio_client: minio_client_dependency,
-    file: UploadFile = File(...),
+    files: List[UploadFile] = File(...),
+    user_id: UUID = Form(),
+    chat_id: UUID = Form(),
 ):
-    logger.info(f"Received upload file: {file.filename}...")
-    minio_client.put_object(
-        bucket_name=settings.S3_VENUS_BUCKET,
-        object_name=f"venus/private/{file.filename}",
-        data=file.file,
-        content_type=file.content_type,
+    logger.info(
+        f"Received {len(files)} files to upload from user[{user_id}], chat[{chat_id}]"
     )
-
-    return {"message": "File uploaded successfully"}
+    file_ids = [uuid4() for _ in range(0, len(files))]
+    task_ids = [uuid4() for _ in range(0, len(files))]
+    for file_, file_id, task_id in zip(files, file_ids, task_ids):
+        logger.info(f"Received upload file: {file_.filename}...")
+        await file_.seek(0)
+        minio_client.put_object(
+            bucket_name=settings.S3_VENUS_BUCKET,
+            object_name=f"venus/private/{str(file_id)}",
+            data=file_.file,
+            length=file_.size,
+            content_type=file_.content_type,
+            metadata={
+                "user_id": str(user_id),
+                "chat_id": str(chat_id),
+                "file_id": str(chat_id),
+                "task_id": str(task_id),
+                "filename": file_.filename,
+            },
+        )
+    return {
+        "user_id": str(user_id),
+        "chat_id": str(chat_id),
+        "file_ids": [str(file_id) for file_id in file_ids],
+        "task_ids": [str(task_id) for task_id in task_ids],
+    }

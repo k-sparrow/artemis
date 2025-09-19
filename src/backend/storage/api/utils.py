@@ -1,11 +1,20 @@
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
+from fastapi import FastAPI
 from minio import Minio
 from minio.error import MinioException
 from minio.notificationconfig import NotificationConfig, QueueConfig
 
+from src.backend.storage.api.config import storage_settings as settings
+from src.backend.storage.api.dependencies import (
+    get_minio_client,
+)
 
 __all__ = [
     "create_bucket",
     "link_s3_bucket_with_kafka_event",
+    "lifespan",
 ]
 
 
@@ -44,3 +53,18 @@ async def link_s3_bucket_with_kafka_event(
         )
     except MinioException:
         raise
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    minio_client = await get_minio_client()
+
+    # create the bucket if it does not exist
+    # and link between the bucket and the event topic
+    await create_bucket(minio_client=minio_client, bucket_name=settings.S3_VENUS_BUCKET)
+    await link_s3_bucket_with_kafka_event(
+        minio_client=minio_client,
+        bucket_name=settings.S3_VENUS_BUCKET,
+        event_name_name=settings.S3_VENUS_BUCKET_KAFKA_EVENT,
+    )
+    yield

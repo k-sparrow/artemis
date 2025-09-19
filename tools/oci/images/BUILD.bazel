@@ -105,7 +105,7 @@ kafka_connect_connector_instance(
 
 
 kafka_connect_init_image(
-    name = "venus-kafka-connect-init",
+    name = "kafka-connect-init",
     # we use curl to manipulate the Kafka Connect via its REST API
     base = "@curl",
     # connector instance configuration JSON files will end up
@@ -114,7 +114,6 @@ kafka_connect_init_image(
     connectors = [
         # ":qdrant-sink-connector-0",
         ":http-sink-connector-library",
-        ":http-sink-connector-ingestion-controller",
     ],
     # this is where the initialization script will run from inside the container
     # the entrypoint is currently fixed to "sh -c /<exec_dir>/init-script.sh"
@@ -122,7 +121,7 @@ kafka_connect_init_image(
 )
 
 oci_load(
-    name = "venus-kafka-connect-init.tarball",
-    image = ":venus-kafka-connect-init",
+    name = "kafka-connect-init.tarball",
+    image = ":kafka-connect-init",
     repo_tags = ["venus/cp-kafka-connect-init:latest"],
 )
