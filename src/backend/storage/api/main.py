@@ -1,18 +1,17 @@
-from uuid import UUID, uuid4
-from typing import List
-
 import logging
 import logging.config
+from uuid import UUID
+from typing import List
 
 from fastapi import FastAPI, File, UploadFile, Request, Form
 
-from src.backend.storage.api.config import storage_settings as settings, LOGGING_CONFIG
+from src.backend.storage.api.config import LOGGING_CONFIG
 from src.backend.storage.api.dependencies import (
     minio_client_dependency,
 )
+import src.backend.storage.api.service as service
 from src.backend.storage.api.utils import (
     lifespan,
-    s3_dump_object,
 )
 
 logging.config.dictConfig(LOGGING_CONFIG)
@@ -42,29 +41,9 @@ def upload(
     user_id: UUID = Form(),
     chat_id: UUID = Form(),
 ):
-    logger.info(
-        f"Received {len(files)} files to upload from user[{user_id}], chat[{chat_id}]"
+    return service.upload(
+        minio_client,
+        files,
+        user_id,
+        chat_id,
     )
-    file_ids = [uuid4() for _ in range(0, len(files))]
-    task_ids = [uuid4() for _ in range(0, len(files))]
-    for file_, file_id, task_id in zip(files, file_ids, task_ids):
-        logger.info(f"Received upload file: {file_.filename}...")
-        s3_dump_object(
-            minio_client,
-            file_io=file_.file,
-            content_type=file_.content_type,
-            size=file_.size,
-            task_id=task_id,
-            file_id=file_id,
-            s3_metadata={
-                "user_id": str(user_id),
-                "chat_id": str(chat_id),
-                "filename": file_.filename,
-            },
-        )
-    return {
-        "user_id": str(user_id),
-        "chat_id": str(chat_id),
-        "file_ids": [str(file_id) for file_id in file_ids],
-        "task_ids": [str(task_id) for task_id in task_ids],
-    }

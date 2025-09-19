@@ -54,6 +54,7 @@ py_library(
     deps = [
         ":config",
         ":dependencies",
+        ":service",
         ":utils",
         requirement("fastapi"),
         requirement("python-multipart"),
@@ -80,6 +81,19 @@ py_library(
     deps = [
         ":config",
         ":dependencies",
+        requirement("fastapi"),
+        requirement("minio"),
+    ]
+)
+
+py_library(
+    name = "service",
+    srcs = [
+        "service.py",
+    ],
+    deps = [
+        ":config",
+        ":utils",
         requirement("fastapi"),
         requirement("minio"),
     ]
