@@ -54,6 +54,7 @@ py_library(
     deps = [
         ":config",
         ":dependencies",
+        ":schemas",
         ":service",
         ":utils",
         requirement("fastapi"),
@@ -83,6 +84,17 @@ py_library(
         ":dependencies",
         requirement("fastapi"),
         requirement("minio"),
+    ]
+)
+
+py_library(
+    name = "schemas",
+    srcs = [
+        "schemas.py",
+    ],
+    deps = [
+        requirement("fastapi"),
+        requirement("pydantic"),
     ]
 )
 

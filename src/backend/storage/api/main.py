@@ -3,12 +3,13 @@ import logging.config
 from uuid import UUID
 from typing import List
 
-from fastapi import FastAPI, File, UploadFile, Request, Form
+from fastapi import FastAPI, File, UploadFile, Request, Form, status
 
 from src.backend.storage.api.config import LOGGING_CONFIG
 from src.backend.storage.api.dependencies import (
     minio_client_dependency,
 )
+from src.backend.storage.api.schemas import PrivateUploadResponse
 import src.backend.storage.api.service as service
 from src.backend.storage.api.utils import (
     lifespan,
@@ -34,7 +35,11 @@ async def ee(request: Request):
     return {"message": "Hello from Venus!"}
 
 
-@app.post("/upload")
+@app.post(
+    "/upload",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=PrivateUploadResponse,
+)
 def upload(
     minio_client: minio_client_dependency,
     files: List[UploadFile] = File(...),
@@ -42,8 +47,8 @@ def upload(
     chat_id: UUID = Form(),
 ):
     return service.upload(
-        minio_client,
-        files,
-        user_id,
-        chat_id,
+        minio_client=minio_client,
+        files=files,
+        user_id=user_id,
+        chat_id=chat_id,
     )
