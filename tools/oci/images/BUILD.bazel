@@ -19,10 +19,13 @@ load("@rules_oci//oci:defs.bzl", "oci_image", "oci_push", oci_load = "oci_tarbal
 _CP_KAFKA_CONNECT_CONNECTORS_SRCS = {
     "qdrant-sink-kafka-connect": ["@qdrant-sink-kafka-connect-1.2.0//:srcs"],
     "http-sink-kafka-connect": ["@aiven-http-sink-kafka-connect-0.9.0//:srcs"],
+    "rabbitmq-sink-kafka-connect": ["@camel-spring-rabbitmq-sink-connect-4.10.3//:srcs"],
+    "jdbc-sink-kafka-connect": ["@debezium-jdbc-sink-connect-3.2.0//:srcs"],
+    "postgresql-source-kafka-connect": ["@debezium-postgres-source-connect-3.2.0//:srcs"],
 }
 
 kafka_connect_image(
-    name = "venus-cp-kafka-connect",
+    name = "venus-kafka-connect",
     base = "@cp-kafka-connect",
     connectors_srcs = _CP_KAFKA_CONNECT_CONNECTORS_SRCS,
     # this is where the components sources (mainly JARs) sit under
@@ -32,10 +35,10 @@ kafka_connect_image(
 )
 
 oci_load(
-    name = "venus-cp-kafka-connect.tarball",
-    image = ":venus-cp-kafka-connect",
+    name = "venus-kafka-connect.tarball",
+    image = ":venus-kafka-connect",
     # use this tag as image name for Kafka Connect worker in docker-compose.yaml
-    repo_tags = ["venus/cp-kafka-connect:latest"],
+    repo_tags = ["venus/kafka-connect:latest"],
 )
 
 # Kafka Connect connector specification and packaging

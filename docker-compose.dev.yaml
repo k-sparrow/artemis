@@ -123,7 +123,7 @@ services:
     ports:
       - 8081:8081
   kafka-connect:
-    image: venus/cp-kafka-connect:latest
+    image: venus/kafka-connect:latest
     container_name: kafka-connect
     depends_on:
       - broker

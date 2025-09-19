@@ -138,7 +138,8 @@ http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "ht
 http_archive(
     name = "aiven-http-sink-kafka-connect-0.9.0",
     url = "https://github.com/Aiven-Open/http-connector-for-apache-kafka/releases/download/v0.9.0/http-connector-for-apache-kafka-0.9.0.tar",
-    build_file = "@//tools/kafka/connectors:generic.BUILD"
+    build_file = "@//tools/kafka/connectors:generic.BUILD",
+    integrity = "sha256-cv6hTqPFilydCOCMXa4kBMtbBKj3MgbF1xfZfhP7vwc="
 )
 
 # Qdrant kafka sink connector compiled sources
@@ -147,4 +148,25 @@ http_archive(
     url = "https://github.com/qdrant/qdrant-kafka/releases/download/v1.12.0/qdrant-kafka-1.2.0.zip",
     build_file = "@//tools/kafka/connectors:generic.BUILD",
     integrity = "sha256-lfIWT7snY5p3emLI4vwTE311mxRKw2ysd9AeL0pRZIQ=",
+)
+
+http_archive(
+    name = "camel-spring-rabbitmq-sink-connect-4.10.3",
+    url = "https://repo.maven.apache.org/maven2/org/apache/camel/kafkaconnector/camel-spring-rabbitmq-sink-kafka-connector/4.10.3/camel-spring-rabbitmq-sink-kafka-connector-4.10.3-package.tar.gz",
+    build_file = "@//tools/kafka/connectors:generic.BUILD",
+    integrity = "sha256-Qwwcwnv8JHeL/95nEsVyFqFeG/gWbl7RY/dN56AXjfc=",
+)
+
+http_archive(
+    name = "debezium-jdbc-sink-connect-3.2.0",
+    url = "https://repo1.maven.org/maven2/io/debezium/debezium-connector-jdbc/3.2.0.Final/debezium-connector-jdbc-3.2.0.Final-plugin.tar.gz",
+    build_file = "@//tools/kafka/connectors:generic.BUILD",
+    integrity = "sha256-eaL1oCzRjTwaGfSLJuLhFwGQZ2oa8mZwI4lw0a4TbQU=",
+)
+
+http_archive(
+    name = "debezium-postgres-source-connect-3.2.0",
+    url = "https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/3.2.0.Final/debezium-connector-postgres-3.2.0.Final-plugin.tar.gz",
+    build_file = "@//tools/kafka/connectors:generic.BUILD",
+    integrity = "sha256-KvzR91X/xsrbaif8SWoScAUS40PoMKdewORWbblTj1A=",
 )

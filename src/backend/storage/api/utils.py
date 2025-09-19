@@ -8,6 +8,7 @@ __all__ = [
     "link_s3_bucket_with_kafka_event",
 ]
 
+
 # TODO: move this to a utility module
 def format_kafka_event_arn_sqs(main_name: str) -> str:
     return f"arn:minio:sqs::{main_name}:kafka"
