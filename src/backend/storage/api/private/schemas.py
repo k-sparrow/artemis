@@ -1,8 +1,7 @@
 from typing import List
 from uuid import UUID
 
-from fastapi import Form, UploadFile, File
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 __all__ = [

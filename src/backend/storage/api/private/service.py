@@ -1,29 +1,36 @@
-import logging
-import logging.config
 from uuid import UUID, uuid4
 from typing import List
 
 from fastapi import UploadFile
 from minio import Minio
 
-from src.backend.storage.api.config import LOGGING_CONFIG
-from src.backend.storage.api.utils import (
-    s3_dump_object,
+from src.backend.storage.api.private.exceptions import FilesAndFileIdsLengthMismatch
+from src.backend.storage.api.private.utils import (
+    s3_dump_file,
 )
 
-logging.config.dictConfig(LOGGING_CONFIG)
-logger = logging.getLogger(__name__)
+__all__ = [
+    "s3_batch_upload",
+]
 
 
-def upload(minio_client: Minio, files: List[UploadFile], user_id: UUID, chat_id: UUID):
-    logger.info(
-        f"Received {len(files)} files to upload from user[{user_id}], chat[{chat_id}]"
-    )
-    file_ids = [uuid4() for _ in range(0, len(files))]
+def s3_batch_upload(
+    minio_client: Minio,
+    user_id: UUID,
+    chat_id: UUID,
+    files: List[UploadFile],
+    file_ids: List[UUID] = [],
+):
+    if not file_ids:
+        file_ids = [uuid4() for _ in range(0, len(files))]
+    elif len(file_ids) != len(files):
+        raise FilesAndFileIdsLengthMismatch(
+            n_files=len(files), n_file_ids=len(file_ids)
+        )
+
     task_ids = [uuid4() for _ in range(0, len(files))]
     for file_, file_id, task_id in zip(files, file_ids, task_ids):
-        logger.info(f"Received upload file: {file_.filename}...")
-        s3_dump_object(
+        s3_dump_file(
             minio_client,
             file_io=file_.file,
             content_type=file_.content_type,

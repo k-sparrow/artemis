@@ -15,7 +15,7 @@ load("//tools/oci:py_layer.bzl", "py_oci_image")
 load("//tools/server:uvicorn.bzl", "uvicorn_dev_server")
 load("//tools/server:celery.bzl", "celery_worker")
 
-package(default_visibility = ["//visibility:private"])
+package(default_visibility = ["//src/backend/storage/api:__subpackages__"])
 
 # Equivalent to cmdline:
 #  `uvicorn main:app --host localhost --port 9002`
@@ -53,13 +53,22 @@ py_library(
     ],
     deps = [
         ":config",
-        ":dependencies",
-        ":schemas",
-        ":service",
+        ":exceptions",
         ":utils",
+        "//src/backend/storage/api/private:pkg",
         requirement("fastapi"),
-        requirement("python-multipart"),
     ],
+)
+
+py_library(
+    name = "exceptions",
+    srcs = [
+        "exceptions.py",
+    ],
+    deps = [
+        "//src/backend/storage/api/private:exceptions",
+        requirement("fastapi"),
+    ]
 )
 
 py_library(
@@ -86,31 +95,6 @@ py_library(
         requirement("minio"),
     ]
 )
-
-py_library(
-    name = "schemas",
-    srcs = [
-        "schemas.py",
-    ],
-    deps = [
-        requirement("fastapi"),
-        requirement("pydantic"),
-    ]
-)
-
-py_library(
-    name = "service",
-    srcs = [
-        "service.py",
-    ],
-    deps = [
-        ":config",
-        ":utils",
-        requirement("fastapi"),
-        requirement("minio"),
-    ]
-)
-
 
 py_library(
     name = "config",

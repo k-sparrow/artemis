@@ -1,0 +1,82 @@
+# -------------------------------------
+# Copyright (c) 2025, Dror Kabely
+# -------------------------------------
+#
+# gazelle:python_root
+
+load("@aspect_rules_py//py:defs.bzl", "py_binary", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+package(default_visibility = ["//src/backend/storage/api:__pkg__"])
+
+
+py_library(
+    name = "pkg",
+    srcs = [
+        "__init__.py",
+    ],
+    deps = [
+        ":router",
+    ]
+)
+
+py_library(
+    name = "router",
+    srcs = [
+        "router.py",
+    ],
+    deps = [
+        "//src/backend/storage/api:dependencies",
+        ":schemas",
+        ":service",
+        requirement("fastapi"),
+        requirement("python-multipart"),
+    ],
+)
+
+py_library(
+    name = "schemas",
+    srcs = [
+        "schemas.py",
+    ],
+    deps = [
+        requirement("pydantic"),
+    ]
+)
+
+py_library(
+    name = "service",
+    srcs = [
+        "service.py",
+    ],
+    deps = [
+        ":exceptions",
+        ":utils",
+        requirement("fastapi"),
+        requirement("minio"),
+    ]
+)
+
+py_library(
+    name = "utils",
+    srcs = [
+        "utils.py",
+    ],
+    deps = [
+        "//src/backend/storage/api:config",
+        requirement("fastapi"),
+        requirement("minio"),
+    ]
+)
+
+
+
+py_library(
+    name = "exceptions",
+    srcs = [
+        "exceptions.py",
+    ],
+    deps = [
+        requirement("fastapi"),
+    ]
+)

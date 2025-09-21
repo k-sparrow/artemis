@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, BinaryIO, Dict, Any
+from typing import AsyncIterator, BinaryIO, Dict
 from uuid import UUID
 
 from fastapi import FastAPI
