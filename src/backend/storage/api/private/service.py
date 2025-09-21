@@ -51,7 +51,7 @@ def s3_batch_upload(
                         "filename": file_.filename,
                     }
                 ),
-                "op": operation,
+                "task_op": operation,
             },
         )
     return {
@@ -84,6 +84,6 @@ def s3_batch_delete(
                         "filename": "None",
                     }
                 ),
-                "op": ObjectOperation.DELETE,
+                "task_op": str(ObjectOperation.DELETE),
             },
         )

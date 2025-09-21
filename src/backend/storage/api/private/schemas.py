@@ -1,4 +1,4 @@
-from enum import Enum
+from enum import StrEnum
 from typing import List, Optional, Any
 from uuid import UUID
 
@@ -16,7 +16,7 @@ _all_ = [
 ]
 
 
-class ObjectOperation(str, Enum):
+class ObjectOperation(StrEnum):
     CREATE = "create"
     MODIFY = "modify"
     DELETE = "delete"
