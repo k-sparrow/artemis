@@ -1,0 +1,44 @@
+# -------------------------------------
+# Copyright (c) 2025, Dror Kabely
+# -------------------------------------
+#
+
+load("@aspect_rules_py//py:defs.bzl", "py_binary", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+package(default_visibility = ["//visibility:private"])
+
+py_library(
+    name = "pkg",
+    srcs = [
+        "__init__.py",
+    ],
+    deps = [
+        ":router"
+    ],
+    visibility = ["//src/backend/storage/api:__pkg__"]
+)
+
+py_library(
+    name = "router",
+    srcs = [
+        "router.py",
+    ],
+    deps = [
+        ":checks",
+        "//src/backend/storage/api:config",
+        "//src/backend/storage/api:dependencies",
+        requirement("fastapi-healthchecks"),
+    ]
+)
+
+py_library(
+    name = "checks",
+    srcs = [
+        "checks.py",
+    ],
+    deps = [
+        requirement("fastapi-healthchecks"),
+        requirement("minio"),
+    ],
+)

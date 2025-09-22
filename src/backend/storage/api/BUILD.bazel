@@ -46,6 +46,11 @@ py_library(
     ]
 )
 
+API_ROUTER_PKGS = [
+    "//src/backend/storage/api/private:pkg",
+    "//src/backend/storage/api/health:pkg",
+]
+
 py_library(
     name = "main",
     srcs = [
@@ -55,9 +60,8 @@ py_library(
         ":config",
         ":exceptions",
         ":utils",
-        "//src/backend/storage/api/private:pkg",
         requirement("fastapi"),
-    ],
+    ] + API_ROUTER_PKGS,
 )
 
 py_library(
