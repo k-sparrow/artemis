@@ -629,7 +629,12 @@ fastapi==0.114.2 \
     --hash=sha256:44474a22913057b1acb973ab90f4b671ba5200482e7622816d79105dcece1ac5
     # via
     #   -r requirements.in
+    #   fastapi-healthchecks
     #   fastapi-users
+fastapi-healthchecks==1.1.0 \
+    --hash=sha256:2a2b12b9e18dadda78888cda4c0834fc6d3a4552e3a2c4ffad840f6e1dca24e3 \
+    --hash=sha256:4c75e5c7abddeb806ffd95219a73ab79d66435e47197ed4d710fd7f48af382c5
+    # via -r requirements.in
 fastapi-users==14.0.1 \
     --hash=sha256:074df59676dccf79412d2880bdcb661ab1fabc2ecec1f043b4e6a23be97ed9e1 \
     --hash=sha256:8c032b3a75c6fb2b1f5eab8ffce5321176e9916efe1fe93e7c15ee55f0b02236
@@ -2400,6 +2405,7 @@ pydantic==2.11.2 \
     #   docling-ibm-models
     #   docling-parse
     #   fastapi
+    #   fastapi-healthchecks
     #   langchain
     #   langchain-core
     #   langchain-qdrant
@@ -2516,6 +2522,7 @@ pydantic-settings==2.6.0 \
     # via
     #   -r requirements.in
     #   docling
+    #   fastapi-healthchecks
     #   langchain-community
 pyflakes==3.2.0 \
     --hash=sha256:1c61603ff154621fb2a9172037d84dca3500def8c8b630657d1701f026f8af3f \

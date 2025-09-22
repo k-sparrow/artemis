@@ -1599,6 +1599,17 @@ manifest:
     fastapi.types: fastapi
     fastapi.utils: fastapi
     fastapi.websockets: fastapi
+    fastapi_healthchecks: fastapi_healthchecks
+    fastapi_healthchecks.api: fastapi_healthchecks
+    fastapi_healthchecks.api.models: fastapi_healthchecks
+    fastapi_healthchecks.api.router: fastapi_healthchecks
+    fastapi_healthchecks.checks: fastapi_healthchecks
+    fastapi_healthchecks.checks.ceph: fastapi_healthchecks
+    fastapi_healthchecks.checks.http: fastapi_healthchecks
+    fastapi_healthchecks.checks.postgres: fastapi_healthchecks
+    fastapi_healthchecks.checks.rabbit_mq: fastapi_healthchecks
+    fastapi_healthchecks.checks.redis: fastapi_healthchecks
+    fastapi_healthchecks.checks.settings: fastapi_healthchecks
     fastapi_users: fastapi_users
     fastapi_users.authentication: fastapi_users
     fastapi_users.authentication.authenticator: fastapi_users
@@ -16445,4 +16456,4 @@ manifest:
     zstandard.backend_cffi: zstandard
   pip_repository:
     name: pip
-integrity: 6b4464734ceae60add85755519a7c848372dc36b580e539609566c1ce79f5440
+integrity: e1457d050c6d8cc5e7c9858203ff317127004255142df04920aaf307ff51e77b

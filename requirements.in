@@ -10,6 +10,7 @@ httpx==0.27.2
 fastapi==0.114.2
 fastapi-users==14.0.1
 fastapi-users-db-sqlalchemy==7.0.0
+fastapi-healthchecks==1.1.0
 python-multipart==0.0.20
 uvicorn==0.30.6
 gunicorn==23.0.0 
