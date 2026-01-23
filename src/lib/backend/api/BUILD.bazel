@@ -1,0 +1,27 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "pkg",
+    srcs = [
+        "__init__.py",
+    ],
+    deps = [
+        ":exceptions",
+    ]
+)
+
+py_library(
+    name = "exceptions",
+    srcs = [
+        "exceptions.py",
+    ],
+    deps = [
+        requirement("fastapi"),
+    ]
+)
