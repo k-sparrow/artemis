@@ -1,0 +1,30 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+package(default_visibility = ["//visibility:private"])
+
+py_library(
+    name = "pkg",
+    srcs = [
+        "__init__.py",
+    ],
+    deps = [
+        ":configurable",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+py_library(
+    name = "configurable",
+    srcs = [
+        "configurable.py",
+    ],
+    deps = [
+        requirement("langchain"),
+    ],
+)
