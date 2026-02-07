@@ -1,0 +1,44 @@
+load("@aspect_bazel_lib//lib:tar.bzl", "mtree_mutate", "mtree_spec", "tar")
+load("@rules_oci//oci:defs.bzl", "oci_image", oci_load = "oci_tarball")
+
+package(default_visibility = ["//tools:__subpackages__"])
+
+_TAR_SRCS = [
+    "//tools/oci/images/postgres:init.sql",
+]
+
+mtree_spec(
+    name = "init-spec",
+    srcs = _TAR_SRCS,
+)
+
+mtree_mutate(
+    name = "init-spec.mtree",
+    mtree = ":init-spec",
+    package_dir = "docker-entrypoint-initdb.d",
+    strip_prefix = package_name(),
+)
+
+# Tar file with PostgreSQL configuration files at /var/lib/postgresql/data
+# Where PostgreSQL expects its configuration file to be.
+tar(
+    name = "init",
+    srcs = _TAR_SRCS,
+    mtree = "init-spec.mtree",
+)
+
+# Postgres image definition with custom configuration file.
+oci_image(
+    name = "image",
+    base = "@postgres",
+    tars = [
+        ":init",
+    ],
+)
+
+oci_load(
+    name = "tarball",
+    image = ":image",
+    # use this tag as image name for PostgreSQL in docker-compose.yaml
+    repo_tags = ["artemis/postgres:latest"],
+)

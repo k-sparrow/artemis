@@ -3,14 +3,15 @@ from typing import AsyncIterator, Annotated
 from fastapi import Depends
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
-from langchain_huggingface.embeddings import HuggingFaceEndpointEmbeddings
+
+from qdrant_client import AsyncQdrantClient
 
 from src.backend.indexing.api.config import settings
 from src.backend.indexing.lib.handler import (
     QdrantVectorStoreHandler,
     VectorStoreHandler,
 )
-
+from src.lib.core.embeddings.huggingface import HuggingFaceEndpointEmbeddings
 
 __all__ = [
     "vectorstore_dependency",
@@ -19,6 +20,10 @@ __all__ = [
 
 
 async def get_embeddings() -> Embeddings:
+    return HuggingFaceEndpointEmbeddings(model=settings.TEI_HOST_URL)
+
+
+def get_embeddings_sync() -> Embeddings:
     return HuggingFaceEndpointEmbeddings(model=settings.TEI_HOST_URL)
 
 
@@ -37,6 +42,10 @@ async def get_vectorstore_handler(
         base_url=settings.QDRANT_HOST_URI,
         eager=False,
     )
+
+
+def get_async_qdrant_client() -> AsyncQdrantClient:
+    return AsyncQdrantClient(url=settings.QDRANT_HOST_URI, prefer_grpc=False)
 
 
 # an ugly patch for lifespan

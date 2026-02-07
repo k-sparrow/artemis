@@ -1,31 +1,10 @@
-from contextlib import asynccontextmanager
-from typing import List, AsyncIterator
-from logging import getLogger, INFO
+from fastapi import FastAPI
 
-
-from fastapi import FastAPI, UploadFile, File
-from langchain_core.documents import Document
-
-import src.backend.indexing.api.service as service
-from src.backend.indexing.api.dependencies import (
-    get_vectorstore_handler,
-    VectorStoreHandler,
-    get_vectorstore_handler_solved,
-)
-
-
-logger = getLogger(__name__)
-logger.setLevel(INFO)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    logger.info("Starting FastAPI setup...")
-    handler: VectorStoreHandler = await get_vectorstore_handler_solved()
-    await handler.acreate()
-    yield
-    await handler.aclose()
-    logger.info("Tearing down application...")
+from src.lib.backend.api import register_custom_exception_handlers
+from src.backend.indexing.api.exceptions import EXCEPTION_HANDLER_MAPPING
+from src.backend.indexing.api.utils import lifespan
+from src.backend.indexing.api.health import router as health_router
+from src.backend.indexing.api.index import router as index_router
 
 
 app = FastAPI(
@@ -33,10 +12,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+register_custom_exception_handlers(app, EXCEPTION_HANDLER_MAPPING)
 
-@app.post(
-    "/ingest",
-    response_model=List[Document],
-)
-async def ingest_endpoint(file: UploadFile = File(...)) -> List[Document]:
-    return await service.ingest(file)
+app.include_router(health_router, prefix="/health")
+app.include_router(index_router)

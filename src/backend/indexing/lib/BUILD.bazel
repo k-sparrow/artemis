@@ -1,0 +1,22 @@
+# -------------------------------------
+# Copyright (c) 2025, Dror Kabely
+# -------------------------------------
+#
+
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+py_library(
+    name = "pkg",
+    srcs = [
+        "__init__.py",
+    ],
+    visibility = ["//src/backend/indexing:__subpackages__"],
+)
+
+py_library(
+    name = "exceptions",
+    srcs = [
+        "exceptions.py",
+    ],
+    visibility = ["//src/backend/indexing:__subpackages__"],
+)

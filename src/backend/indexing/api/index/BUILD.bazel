@@ -1,0 +1,38 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "service",
+    srcs = ["service.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/backend/indexing/api:config",
+        "//src/backend/indexing/client/generated:pkg",
+        "//src/backend/indexing/client/generated/api:pkg",
+        "//src/backend/indexing/client/generated/api/default:pkg",
+        "//src/backend/indexing/client/generated/models:pkg",
+        requirement("fastapi"),
+        requirement("langchain-core"),
+    ],
+)
+
+py_library(
+    name = "router",
+    srcs = ["router.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":service",
+        "//src/lib/backend/logging:pkg",
+        requirement("fastapi"),
+        requirement("langchain-core"),
+    ],
+)
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":router",
+    ],
+)

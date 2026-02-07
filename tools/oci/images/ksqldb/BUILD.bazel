@@ -1,0 +1,100 @@
+"""
+Apache Kafka KSQLDB custom image creation module
+
+Creates a custom KSQLDB image with the necessary initialization scripts and configurations.
+"""
+
+load("@aspect_bazel_lib//lib:tar.bzl", "mtree_mutate", "mtree_spec", "tar")  # @unused
+load("@rules_oci//oci:defs.bzl", "oci_image", oci_load = "oci_tarball")  #@unused
+
+# This script contains the KSQL code that creates and manipulates Kafka streams
+# using KSQL language
+KSQLDB_INIT_SCRIPT_NAME = "init.ksql"
+
+KSQLDB_INIT_SCRIPT_DIR = "home/appuser"
+
+KSQLDB_INIT_SCRIPT_PATH = "/".join([
+    "",
+    KSQLDB_INIT_SCRIPT_DIR,
+    KSQLDB_INIT_SCRIPT_NAME,
+])
+
+_TAR_SRCS = [
+    ":" + KSQLDB_INIT_SCRIPT_NAME,
+]
+
+mtree_spec(
+    name = "init.ksql.spec",
+    srcs = _TAR_SRCS,
+)
+
+mtree_mutate(
+    name = "init.ksql.mtree",
+    mtree = ":init.ksql.spec",
+    package_dir = KSQLDB_INIT_SCRIPT_DIR,
+    strip_prefix = package_name(),
+)
+
+tar(
+    name = "init.ksql.pkg",
+    srcs = _TAR_SRCS,
+    mtree = ":init.ksql.mtree",
+)
+
+# This is a bash script that waits for KSQLDB server
+# to be available and then runs the KSQL script above.
+KSQLDB_SHELL_INIT_SCRIPT = "ksqldb-cli-init.sh"
+
+KSQLDB_SHELL_INIT_SCRIPT_DIR = "usr/share/ksqldb"
+
+KSQLDB_SHELL_INIT_SCRIPT_PATH = "/".join([
+    "",
+    KSQLDB_SHELL_INIT_SCRIPT_DIR,
+    KSQLDB_SHELL_INIT_SCRIPT,
+])
+
+_TAR_SH_SRCS = [
+    ":" + KSQLDB_SHELL_INIT_SCRIPT,
+]
+
+mtree_spec(
+    name = "init.sh.spec",
+    srcs = _TAR_SH_SRCS,
+)
+
+mtree_mutate(
+    name = "init.sh.mtree",
+    mtree = ":init.sh.spec",
+    package_dir = KSQLDB_SHELL_INIT_SCRIPT_DIR,
+    strip_prefix = package_name(),
+)
+
+tar(
+    name = "init.sh.pkg",
+    srcs = _TAR_SH_SRCS,
+    mtree = ":init.sh.mtree",
+)
+
+oci_image(
+    name = "image",
+    base = "@cp-ksqldb-cli",
+    entrypoint = [
+        "bash",
+        "-c",
+        KSQLDB_SHELL_INIT_SCRIPT_PATH,
+        KSQLDB_INIT_SCRIPT_PATH,
+    ],
+    tars = [
+        ":init.ksql.pkg",
+        ":init.sh.pkg",
+    ],
+    visibility = ["//tools/oci/images:__pkg__"],
+)
+
+oci_load(
+    name = "tarball",
+    image = ":image",
+    # use this tag as image name for KSQLDB in docker-compose.yaml
+    repo_tags = ["apollo/ksqldb-cli:latest"],
+    visibility = ["//tools/oci/images:__pkg__"],
+)

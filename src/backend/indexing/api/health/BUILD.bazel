@@ -1,0 +1,35 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "checks",
+    srcs = ["checks.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        requirement("fastapi-healthchecks"),
+        requirement("langchain-core"),
+        requirement("qdrant-client"),
+    ],
+)
+
+py_library(
+    name = "router",
+    srcs = ["router.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":checks",
+        "//src/backend/indexing/api:config",
+        "//src/backend/indexing/api:dependencies",
+        requirement("fastapi-healthchecks"),
+        requirement("qdrant-client"),
+    ],
+)
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":router",
+    ],
+)

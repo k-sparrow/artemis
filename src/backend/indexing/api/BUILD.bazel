@@ -1,76 +1,38 @@
 # -------------------------------------
-# Copyright (c) 2025, Dror Kabely
+# Copyright (c) 2026, Dror Kabely
 # -------------------------------------
 #
 # gazelle:python_root
 
-load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
-load("@aspect_bazel_lib//lib:tar.bzl", "tar", "mtree_spec", "mtree_mutate")
-load("@aspect_bazel_lib//lib:testing.bzl", "assert_archive_contains")
-load("@rules_oci//oci:defs.bzl", oci_load = "oci_tarball", "oci_push")
-load("@bazel_skylib//rules:write_file.bzl", "write_file")
-load("@aspect_rules_py//py:defs.bzl", "py_binary", "py_library")
+load("@aspect_bazel_lib//lib:tar.bzl", "mtree_spec", "tar")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
 load("@pip//:requirements.bzl", "requirement")
-
+load("@rules_oci//oci:defs.bzl", "oci_push", oci_load = "oci_tarball")
+load("//tools/backend:uvicorn.bzl", "uvicorn_server")
 load("//tools/oci:py_layer.bzl", "py_oci_image")
-load("//tools/server:uvicorn.bzl", "uvicorn_dev_server")
-load("//tools/server:celery.bzl", "celery_worker")
 
-package(default_visibility = ["//visibility:private"])
+package(default_visibility = [
+    "//src/backend:__subpackages__",
+    "//src/backend/indexing/api:__subpackages__",
+    "//tests:__subpackages__",
+])
 
+INDEXING_SERVICE_PORT = "10000"
 
-# Equivalent to cmdline:
-#  `uvicorn main:app --host localhost --port 9003`
-uvicorn_dev_server(
-    name = "dev",
-    args = [
-        "main:app",
-        "--host",
-        "localhost",
-        "--port",
-        "9003",
-        "--reload",
-    ],
-    imports = ["."],
-    data = ["//:.env"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":backend-main",
-    ],
-)
-
+API_ROUTERS = [
+    "//src/backend/indexing/api/health:pkg",
+    "//src/backend/indexing/api/index:pkg",
+]
 
 py_library(
-    name = "backend-main",
+    name = "exceptions",
     srcs = [
-        "__init__.py",
-        "main.py",
-    ],
-    imports = ["."],
-    deps = [
-        ":dependencies",
-        ":service",
-        requirement("aiohttp"),
-        requirement("fastapi"),
-        requirement("langchain-core"),
-        requirement("python-multipart"),
-    ]
-)
-
-py_library(
-    name = "service",
-    srcs = [
-        "service.py",
+        "exceptions.py",
     ],
     deps = [
-        ":config",
-        "//src/backend/indexing/client/generated/api:pkg",
-        "//src/backend/indexing/client/generated/api/default:pkg",
-        "//src/backend/indexing/client/generated/models:pkg",
-        "//src/backend/indexing/client/generated:pkg",
+        "//src/backend/indexing/lib:exceptions",
         requirement("fastapi"),
-        requirement("langchain-core"),
-    ]
+    ],
 )
 
 py_library(
@@ -81,10 +43,11 @@ py_library(
     deps = [
         ":config",
         "//src/backend/indexing/lib/handler:pkg",
+        "//src/lib/core/embeddings:pkg",
         requirement("fastapi"),
         requirement("langchain-core"),
-        requirement("langchain-huggingface"),
-    ]
+        requirement("qdrant-client"),
+    ],
 )
 
 py_library(
@@ -92,58 +55,84 @@ py_library(
     srcs = [
         "config.py",
     ],
+    visibility = ["//src/backend/indexing/api:__subpackages__"],
     deps = [
         requirement("pydantic"),
         requirement("pydantic-settings"),
     ],
 )
 
-_SRCS = [
-    "//:.env"
-]
-
-mtree_spec(
-    name = "mtree-env",
-    srcs = _SRCS
+py_library(
+    name = "utils",
+    srcs = [
+        "utils.py",
+    ],
+    deps = [
+        ":config",
+        ":dependencies",
+        "//src/lib/backend/logging:pkg",
+        requirement("fastapi"),
+    ],
 )
 
+py_library(
+    name = "main",
+    srcs = [
+        "__init__.py",
+        "main.py",
+    ],
+    imports = ["."],
+    deps = [
+        ":exceptions",
+        ":utils",
+        "//src/lib/backend/api:pkg",
+        requirement("fastapi"),
+        requirement("python-multipart"),
+    ] + API_ROUTERS,
+)
 
-tar(
-    name = "env",
-    srcs = _SRCS,
-    mtree = ":mtree-env",
+# Main FastAPI entrypoint
+#
+# Creates two targets:
+# 1. apollo-indexing.dev: Development server (Uvicorn)
+# 2. apollo-indexing:     Deployment server (Gunicorn)
+uvicorn_server(
+    name = "artemis-indexing",
+    app = "src.backend.indexing.ingestion.api.main:app",
+    host = "0.0.0.0",
+    port = INDEXING_SERVICE_PORT,
+    deps = [
+        ":main",
+    ],
 )
 
 py_oci_image(
-    name = "image",
-    base = "@ubuntu",
-    binary = ":dev",
+    name = "image.dev",
+    base = "//tools/oci/images/ubuntu:noble",
+    binary = ":artemis-indexing.dev",
     entrypoint = [
-        "/src/backend/indexing/api/dev",
-        "main:app",
+        "/src/backend/indexing/api/artemis-indexing.dev",
+        "src.backend.indexing.api.main:app",
         "--host",
         "0.0.0.0",  # this should allow connections from host
         "--port",
-        "9003",
+        INDEXING_SERVICE_PORT,
+        "--reload",
     ],
-    exposed_ports = ["9003"],
-    tars = [
-        ":env",
-    ],
+    exposed_ports = [INDEXING_SERVICE_PORT],
     visibility = ["//src/backend:__pkg__"],
 )
 
-
-# $ bazel run //src/backend/indexing/api:tarball
+# $ bazel run //src/backend/indexing/api:tarball.dev
 oci_load(
-    name = "tarball",
-    image = ":image",
-    repo_tags = ["celery-ingestion/backend:latest"],
+    name = "tarball.dev",
+    image = ":image.dev",
+    repo_tags = ["artemis/backend-indexing:dev"],
 )
 
 oci_push(
-    name = "push",
-    image = ":image",
-    repository = "localhost:5000/celery-ingestion-backend",
-    remote_tags = ["latest"]
+    name = "push.dev",
+    image = ":image.dev",
+    remote_tags = ["dev"],
+    repository = "localhost:5000/artemis-backend-indexing",
 )

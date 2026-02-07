@@ -1,0 +1,342 @@
+-- set the ksqlDB topic offsets to earliest
+SET 'auto.offset.reset'='earliest';
+
+-- 1. 
+-- model the raw S3 event stream coming from the S3 storage topic
+-- load only the needed stuff
+CREATE OR REPLACE STREAM `apollo-ingestion-storage-s3` (
+  EventName STRING, 
+  Key STRING, 
+  Records ARRAY<STRUCT<s3 STRUCT<bucket STRUCT<name STRING>,
+                                 object STRUCT<key STRING, 
+                                               userMetadata STRUCT<"content-type" STRING,
+                                                                   "X-Amz-Meta-Action" STRING, 
+                                                                   "X-Amz-Meta-Info" VARCHAR, 
+                                                                   "X-Amz-Meta-Type" STRING,
+                                                                   "X-Amz-Meta-Task_id" STRING>>>>>) 
+  WITH (KAFKA_TOPIC = 'apollo.ingestion.storage.s3', VALUE_FORMAT = 'JSON', PARTITIONS=1);
+
+-- 2.
+-- flatten the S3 event stream to extract the bucket name, key, content type, upload type, action, info, and task_id
+CREATE OR REPLACE STREAM `ksqldb__apollo_ingestion_storage_s3_flattened` WITH (
+  KAFKA_TOPIC = 'apollo.ingestion.storage.s3.library.processed',
+  VALUE_FORMAT = 'JSON_SR',
+  KEY_FORMAT = 'JSON_SR'
+)
+AS SELECT
+  STRUCT("task_id" := Records[1]->s3->object->userMetadata->`X-Amz-Meta-Task_id`) AS KEY, 
+  Records[1]->s3->bucket->name AS `bucket`,
+  REPLACE(Records[1]->s3->object->key, '%2F', '/') AS `object`, -- replace escaped slashes
+  Records[1]->s3->object->userMetadata->`content-type` AS `content_type`,
+  Records[1]->s3->object->userMetadata->`X-Amz-Meta-Type` AS `upload_type`, 
+  Records[1]->s3->object->userMetadata->`X-Amz-Meta-Action` AS `upload_action`, 
+  Records[1]->s3->object->userMetadata->`X-Amz-Meta-Info` AS `info`
+FROM `apollo-ingestion-storage-s3`
+PARTITION BY STRUCT("task_id" := Records[1]->s3->object->userMetadata->`X-Amz-Meta-Task_id`)
+EMIT CHANGES;
+
+-- 3. 
+-- A stream to process file operations before they are sent to RabbitMQ connector
+-- to be processed by Celery
+-- This stream comes from a Postgres table which is populated by the Debezium connector
+CREATE OR REPLACE STREAM `apollo-ingestion-operations` 
+(
+  `bucket` STRING,
+  `object` STRING,
+  `content_type` STRING,
+  `upload_type` STRING,
+  `upload_action` STRING,
+  `info` STRING,
+  `headers` ARRAY<STRUCT<key STRING, value BYTES>> HEADERS
+)
+WITH (
+  KAFKA_TOPIC = 'apollo.ingestion.operations.bookkeeper.public.file_operations',
+  VALUE_FORMAT = 'JSON',
+  KEY_FORMAT = 'JSON',
+  PARTITIONS = 1
+);
+
+
+-- 4.
+-- Split `apollo-ingestion-operations` to two streams:
+-- 1. `apollo-ingestion-bookkeeper-to-private-task` for private uploads sent to Celery private task
+-- 2. `apollo-ingestion-bookkeeper-to-library-task` for library uploads send to Celery library task
+--
+-- These streams also transform the data in order to fit Celery input requirements:
+-- - `args` is an empty array
+-- - `kwargs` is a mapping of key-value arguments
+-- - Headers are implicitly passed from `apollo-ingestion-operations`
+-- - - This is a crucial step since Celery expects the task ID to be passed in the headers
+-- - - otherwise Celery will not accept the job request
+CREATE OR REPLACE STREAM `apollo-ingestion-operations-to-celery-private-task` 
+WITH (
+  KAFKA_TOPIC = 'apollo.ingestion.celery.tasks.private',
+  VALUE_FORMAT = 'JSON',
+  KEY_FORMAT = 'JSON'
+)
+AS 
+SELECT
+  ARRAY_REMOVE(ARRAY[0], 0) AS `args`, -- this stupid thing is needed to create an empty array BC there is not empty array constructor in ksqlDB
+  STRUCT(
+    "s3" := STRUCT(
+      "bucket" := `bucket`, 
+      "object" := `object`),
+    "source" := STRUCT(
+      "path" := EXTRACTJSONFIELD(`info`, '$.source'),
+      "content_type" := `content_type`
+    ),
+    "upload_action" := `upload_action`,
+    "info" := STRUCT(
+      "user_id" := EXTRACTJSONFIELD(`info`, '$.user_id'),
+      "chat_id" := EXTRACTJSONFIELD(`info`, '$.chat_id'),
+      "doc_id" := EXTRACTJSONFIELD(`info`, '$.doc_id')
+    )
+  ) AS `kwargs`
+FROM `apollo-ingestion-operations`
+WHERE `upload_type` = 'private'
+EMIT CHANGES;
+  
+
+CREATE OR REPLACE STREAM `apollo-ingestion-operations-to-celery-library-task` 
+WITH (
+  KAFKA_TOPIC = 'apollo.ingestion.celery.tasks.library',
+  VALUE_FORMAT = 'JSON',
+  KEY_FORMAT = 'JSON'
+)
+AS 
+SELECT
+  ARRAY_REMOVE(ARRAY[0], 0) AS `args`, -- this stupid thing is needed to create an empty array BC there is not empty array constructor in ksqlDB
+  STRUCT(
+    "s3" := STRUCT(
+      "bucket" := `bucket`, 
+      "object" := `object`
+    ),
+    "source" := STRUCT(
+      "path" := EXTRACTJSONFIELD(`info`, '$.source'),
+      "content_type" := `content_type`
+    ),
+    "upload_action" := `upload_action`,
+    "info" := STRUCT(
+      "namespace" := EXTRACTJSONFIELD(`info`, '$.namespace')
+    )
+  ) AS `kwargs`
+FROM `apollo-ingestion-operations`
+WHERE `upload_type` = 'library'
+EMIT CHANGES;
+
+-- Backend result stream processing
+CREATE OR REPLACE STREAM `apollo-ingestion-backend-result-celery-taskmeta`(
+  `id` BIGINT, 
+  `task_id` STRING, 
+  `status` STRING,
+  `result` STRING,
+  `date_done` TIMESTAMP,
+  `traceback` STRING,
+  `name` STRING,
+  `args` BYTES,
+  `kwargs` BYTES,
+  `queue` STRING
+) 
+WITH (KAFKA_TOPIC = 'apollo.ingestion.celery.results.public.apollo_celery_taskmeta', VALUE_FORMAT = 'JSON', KEY_FORMAT = 'JSON', PARTITIONS=1);
+
+-- a bit of processing - convert the args and kwargs from bytes to readable format
+CREATE OR REPLACE STREAM `ksqldb__apollo-ingestion-backend-result-celery-taskmeta-readable`
+AS SELECT 
+  `id`,
+  `task_id`,
+  `status`,
+  `result`,
+  `date_done`,
+  `traceback`,
+  `name`,
+  FROM_BYTES(`args`, 'ascii') AS `args`,
+  FROM_BYTES(`kwargs`, 'ascii') AS `kwargs`,
+  `queue`
+FROM `apollo-ingestion-backend-result-celery-taskmeta`;
+
+-- (Succesfully) Finished tasks
+-- This stream will be populated with the results of successfully finished tasks
+CREATE OR REPLACE STREAM `ksqldb__apollo-ingestion-backend-result-finished-successfully`
+AS SELECT 
+  * 
+FROM `ksqldb__apollo-ingestion-backend-result-celery-taskmeta-readable`
+WHERE `status` = 'SUCCESS';
+
+--------------------------------- Public files processing ---------------------------------------------
+CREATE OR REPLACE STREAM `ksqldb__apollo-ingestion-backend-result-finished-successfully-library-and-structured`
+AS SELECT 
+  `task_id`,
+  `result`,
+  `date_done`,
+  JSON_RECORDS(`kwargs`) AS `kwargs`
+FROM `ksqldb__apollo-ingestion-backend-result-finished-successfully`
+WHERE `name` = 'tasks.ingestion.library' AND IS_JSON_STRING(`kwargs`);
+
+
+CREATE OR REPLACE STREAM `ksqldb__apollo-ingestion-library-files-raw`
+AS SELECT
+  `date_done`,
+  `kwargs`['upload_action'] AS `upload_action`,
+  JSON_RECORDS(`kwargs`['source']) AS `source`,
+  JSON_RECORDS(`kwargs`['info']) AS `info`
+FROM `ksqldb__apollo-ingestion-backend-result-finished-successfully-library-and-structured`;
+
+CREATE OR REPLACE STREAM `ksqldb__apollo-ingestion-library-files-processed`
+AS SELECT
+  `date_done`,
+  `upload_action`,
+  `source`['content_type'] AS `content_type`,
+  `source`['path'] AS `path`,
+  SPLIT(`source`['path'], '/')[-1] AS `filename`,
+  `info`['namespace'] AS `namespace`
+FROM `ksqldb__apollo-ingestion-library-files-raw`;
+
+CREATE OR REPLACE STREAM `ksqldb__apollo-ingestion-library-files-keyed`
+AS SELECT
+  STRUCT("namespace" := `namespace`, "path" := `path`) AS KEY,
+  `date_done`,
+  `filename`,
+  `upload_action`,
+  `content_type`
+FROM `ksqldb__apollo-ingestion-library-files-processed`
+PARTITION BY STRUCT("namespace" := `namespace`, "path" := `path`);
+
+CREATE OR REPLACE STREAM `ksqldb__apollo-ingestion-library-files-keyed-non-delete` WITH (
+  KAFKA_TOPIC = 'apollo.ingestion.files.catalog',
+  VALUE_FORMAT = 'JSON_SR',
+  KEY_FORMAT = 'JSON_SR'
+)
+AS SELECT
+  KEY,
+  `date_done`,
+  `filename`,
+  `content_type`
+FROM `ksqldb__apollo-ingestion-library-files-keyed`
+WHERE `upload_action` <> 'DELETE';
+
+CREATE OR REPLACE STREAM `ksqldb__apollo-ingestion-library-files-keyed-delete` WITH (
+  KAFKA_TOPIC = 'apollo.ingestion.files.catalog',
+  VALUE_FORMAT = 'KAFKA',  -- essential for the tombstone message to be correctly formatted as NULL
+  KEY_FORMAT = 'JSON_SR'
+)
+AS SELECT
+  KEY,
+  cast(NULL AS VARCHAR) -- create a tombstone with a non-null key to let the JDBC connector delete records
+FROM `ksqldb__apollo-ingestion-library-files-keyed`
+WHERE `upload_action` = 'DELETE';
+--------------------------------- End of Public files processing ---------------------------------------------
+
+
+--------------------------------- Private files processing ---------------------------------------------
+CREATE OR REPLACE STREAM `ksqldb__apollo-ingestion-backend-result-finished-successfully-private-and-structured`
+AS SELECT 
+  `task_id`,
+  `result`,
+  `date_done`,
+  JSON_RECORDS(`kwargs`) AS `kwargs`
+FROM `ksqldb__apollo-ingestion-backend-result-finished-successfully`
+WHERE `name` = 'tasks.ingestion.private' AND IS_JSON_STRING(`kwargs`);
+
+
+CREATE OR REPLACE STREAM `ksqldb__apollo-ingestion-private-files-raw`
+AS SELECT
+  `date_done`,
+  `kwargs`['upload_action'] AS `upload_action`,
+  JSON_RECORDS(`kwargs`['source']) AS `source`,
+  JSON_RECORDS(`kwargs`['info']) AS `info`
+FROM `ksqldb__apollo-ingestion-backend-result-finished-successfully-private-and-structured`;
+
+-- ignore AUTO_DELETE results, users do not need to know about them
+-- and we do not sink them to the private files table since their owner (chat/user) do
+-- not exist anymore and that will cause a foreign-key exchange error
+CREATE OR REPLACE STREAM `ksqldb__apollo-ingestion-private-files-processed`
+AS SELECT
+  `date_done`,
+  CASE
+    WHEN `upload_action` = 'DELETE' THEN true
+    ELSE false
+  END AS `__marked_for_delete`,
+  `source`['content_type'] AS `content_type`,
+  `source`['path'] AS `filename`,
+  `info`['doc_id'] AS `doc_id`,
+  `info`['chat_id'] AS `chat_id`,
+  `info`['user_id'] AS `user_id`
+FROM `ksqldb__apollo-ingestion-private-files-raw`
+WHERE `upload_action` <> 'AUTO_DELETE';
+
+CREATE OR REPLACE STREAM `apollo-ingestion-private-files` WITH (
+  KAFKA_TOPIC = 'apollo.ingestion.files.private',
+  VALUE_FORMAT = 'JSON_SR',
+  KEY_FORMAT = 'JSON_SR'
+)
+AS SELECT
+  STRUCT("id" := `doc_id`, "chat_id" := `chat_id`, "user_id" := `user_id`) AS KEY,
+  `filename`,
+  `content_type`,
+  `__marked_for_delete`
+FROM `ksqldb__apollo-ingestion-private-files-processed`
+PARTITION BY STRUCT("id" := `doc_id`, "chat_id" := `chat_id`, "user_id" := `user_id`);
+
+
+-- a stream that reads changes from the 'apollo.ingestion.tables.public.files' topic
+-- The CDC connector serializes the events using JSON (and not JSON_SR)
+CREATE OR REPLACE STREAM `apollo-ingestion-table-cdc-private-files` 
+(
+  `key` STRUCT<
+    `id` STRING,
+    `chat_id` STRING,
+    `user_id` STRING
+  > KEY,
+  `id` STRING,
+  `chat_id` STRING,
+  `user_id` STRING,
+  `filename` STRING,
+  `content_type` STRING,
+  `__marked_for_delete` BOOLEAN,
+  `__deleted` STRING -- either 'true' or 'false', but stored as a string
+)
+WITH (KAFKA_TOPIC = 'apollo.ingestion.tables.public.files', VALUE_FORMAT = 'JSON', KEY_FORMAT = 'JSON', PARTITIONS=1);
+
+-- a loopback stream that deletes messages if marked for deletion
+-- sends a tombstone message which is then translated by the JDBC connector to a DELETE operations
+-- in the database
+-- This stream is created in order to prevent the CDC connector on the table from sending DELETE events
+-- when a file is delted manually by the user. That scenario goes through main street, by accessing the storage service
+-- The other scenerio occurs when a user or one of their chats is deleted - then all of the associated file entries
+-- will be deleted automatically by the CASCADE DELETE relationship set by the DB. In that case the CDC connector
+-- will send an event with `__deleted` = 'true' and `__marked_for_delete` = 'false' (the XOR negative of this stream condition)
+-- that can be used to issue a DELETE event to evict all associated document chunks and related info from the vectorstore
+
+-- see above explanation for the existence of this stream
+CREATE OR REPLACE STREAM `apollo-ingestion-table-cdc-private-files-auto-deleted` WITH (
+  KAFKA_TOPIC = 'apollo.ingestion.files.private.auto.deleted',
+  VALUE_FORMAT = 'JSON_SR',
+  KEY_FORMAT = 'JSON_SR'
+)
+AS SELECT
+  `key`,
+  `id`,
+  `chat_id`,
+  `user_id`
+FROM `apollo-ingestion-table-cdc-private-files`
+WHERE `__marked_for_delete` = FALSE AND `__deleted` = 'true';
+
+-- a light processing to adjust inputs to the storage service that has the following input schema
+-- {
+--   "doc_ids": List[UUID],
+--   "chat_session_id": UUID,
+--   "user_id": UUID
+-- }
+CREATE OR REPLACE STREAM `apollo-ingestion-auto-deleted-to-storage-service` WITH (
+  KAFKA_TOPIC = 'apollo.ingestion.storage.private.auto.deleted',
+  VALUE_FORMAT = 'JSON',
+  KEY_FORMAT = 'JSON'
+)
+AS SELECT
+  `key`,
+  ARRAY[`id`] AS `doc_ids`,
+  `chat_id` AS `chat_session_id`,
+  `user_id`
+FROM `apollo-ingestion-table-cdc-private-files-auto-deleted`;
+
+--------------------------------- End of Private files processing ---------------------------------------------

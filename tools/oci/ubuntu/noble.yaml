@@ -8,7 +8,6 @@
 #
 # See debian_package_index at WORKSPACE.bazel
 version: 1
-
 sources:
   - channel: jammy main
     url: https://snapshot.ubuntu.com/ubuntu/20240301T030400Z
@@ -18,10 +17,8 @@ sources:
     url: https://snapshot.ubuntu.com/ubuntu/20240301T030400Z
   - channel: jammy-security main
     url: https://snapshot.ubuntu.com/ubuntu/20240301T030400Z
-
 archs:
   - "amd64"
-
 packages:
   - "libgl1"
   - "libglib2.0-0"

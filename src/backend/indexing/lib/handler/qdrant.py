@@ -11,7 +11,7 @@ __all__ = [
 
 
 class QdrantVectorStoreHandler(BaseVectorHandler):
-    client: AsyncQdrantClient | QdrantClient
+    client: QdrantClient
 
     def __init__(
         self,
@@ -45,23 +45,12 @@ class QdrantVectorStoreHandler(BaseVectorHandler):
                     ),
                 )
 
-                # create an multitenancy index for chats, separated by "metadata.chat_id"
+                # create a multi-tenancy index on namespace (UUID) for tenant isolation
                 self.client.create_payload_index(
                     collection_name=self._collection_name,
-                    field_name="metadata.chat_id",
+                    field_name="metadata.namespace",
                     field_schema=models.UuidIndexParams(
                         type=models.UuidIndexType.UUID,
-                        is_tenant=True,
-                    ),
-                )
-
-                # create another multitenancy index for project IDs,
-                # separated by "metadata.project_id"
-                self.client.create_payload_index(
-                    collection_name=self._collection_name,
-                    field_name="metadata.project_id",
-                    field_schema=models.KeywordIndexParams(
-                        type=models.KeywordIndexType.KEYWORD,
                         is_tenant=True,
                     ),
                 )
@@ -75,4 +64,4 @@ class QdrantVectorStoreHandler(BaseVectorHandler):
                 raise
 
     async def aclose(self):
-        await self.client.close()
+        self.client.close()

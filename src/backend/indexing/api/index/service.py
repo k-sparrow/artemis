@@ -77,6 +77,6 @@ class DoclingClient:
 
 
 async def ingest(file_or_url: UploadFile | str) -> List[Document]:
-    client = DoclingClient(base_url=settings.DOCLING_BACKEND_URL)
-    doc = await client(file=file_or_url)
-    return [doc]
+    # client = DoclingClient(base_url=settings.DOCLING_BACKEND_URL)
+    # doc = await client(file=file_or_url)
+    return [Document(page_content="Hello")]

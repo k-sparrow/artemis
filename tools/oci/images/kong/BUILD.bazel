@@ -1,0 +1,67 @@
+"""
+Kong API gateway 
+
+Creates a TAR package containing an initialization script for Kong
+connecting all backend services to the API gateway as upstream services
+
+Service and route creation is done via Kong's Admin API using curl (hence the base image)
+"""
+
+load("@aspect_bazel_lib//lib:tar.bzl", "mtree_mutate", "mtree_spec", "tar")  # @unused
+load("@rules_oci//oci:defs.bzl", "oci_image", oci_load = "oci_tarball")  #@unused
+# This script contains the KSQL code that creates and manipulates Kafka streams
+# using KSQL language
+
+INIT_SCRIPT_NAME = "init.sh"
+
+INIT_SCRIPT_DIR = "home/appuser"
+
+INIT_SCRIPT_PATH = "/".join([
+    "",
+    INIT_SCRIPT_DIR,
+    INIT_SCRIPT_NAME,
+])
+
+_TAR_SRCS = [
+    ":" + INIT_SCRIPT_NAME,
+]
+
+mtree_spec(
+    name = "init.sh.spec",
+    srcs = _TAR_SRCS,
+)
+
+mtree_mutate(
+    name = "init.sh.mtree",
+    mtree = ":init.sh.spec",
+    package_dir = INIT_SCRIPT_DIR,
+    strip_prefix = package_name(),
+)
+
+tar(
+    name = "init.sh.pkg",
+    srcs = _TAR_SRCS,
+    mtree = ":init.sh.mtree",
+)
+
+oci_image(
+    name = "image",
+    base = "@curl",
+    entrypoint = [
+        "sh",
+        "-c",
+        INIT_SCRIPT_PATH,
+    ],
+    tars = [
+        ":init.sh.pkg",
+    ],
+    visibility = ["//tools/oci/images:__pkg__"],
+)
+
+oci_load(
+    name = "tarball",
+    image = ":image",
+    # use this tag as image name for Kong connection script to backend services
+    repo_tags = ["apollo/api-gateway-connect-init:latest"],
+    visibility = ["//tools/oci/images:__pkg__"],
+)

@@ -13,12 +13,12 @@ py_library(
     srcs = [
         "__init__.py",
     ],
+    visibility = ["//visibility:public"],
     deps = [
         ":base",
         ":semi_structured",
         ":simple",
     ],
-    visibility = ["//visibility:public"],
 )
 
 py_library(
@@ -42,7 +42,6 @@ py_library(
         requirement("langchain_core"),
     ],
 )
-
 
 py_library(
     name = "semi_structured",

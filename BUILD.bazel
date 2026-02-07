@@ -3,16 +3,23 @@
 # -------------------------------------
 #
 
+load("@bazel_gazelle//:def.bzl", "gazelle")
+
+# load("@rules_multirun//:defs.bzl", "multirun")
+load("@buildifier_prebuilt//:rules.bzl", "buildifier")
 load("@pip//:requirements.bzl", "all_whl_requirements")
+load("@rules_python//python:pip.bzl", "compile_pip_requirements")
 load("@rules_python_gazelle_plugin//manifest:defs.bzl", "gazelle_python_manifest")
 load("@rules_python_gazelle_plugin//modules_mapping:def.bzl", "modules_mapping")
-load("@rules_python//python:pip.bzl", "compile_pip_requirements")
-load("@bazel_gazelle//:def.bzl", "gazelle")
 
 compile_pip_requirements(
     name = "requirements",
     src = "requirements.in",
-    extra_args = ["--verbose"],
+    extra_args = [
+        "--allow-unsafe",
+        "--resolver=backtracking",
+        "-v",
+    ],
     requirements_txt = "requirements_lock.txt",
 )
 
@@ -46,6 +53,10 @@ gazelle_python_manifest(
 # See https://github.com/bazelbuild/bazel-gazelle/blob/master/extend.rst#example
 gazelle(
     name = "gazelle",
+    extra_args = [
+        "-exclude",
+        "*venv*",
+    ],
     gazelle = "@rules_python_gazelle_plugin//python:gazelle_binary",
 )
 
@@ -57,21 +68,32 @@ exports_files(
         ".ruff.toml",
         ".flake8",
         ".env",
-    ]
+    ],
 )
-
 
 alias(
     name = "format",
     actual = "//tools/format",
 )
 
+# linting for .bzl and BUILD files
+buildifier(
+    name = "buildifier.check",
+    exclude_patterns = [
+        "./.git/*",
+        "*venv*",
+    ],
+    lint_mode = "warn",
+    mode = "diff",
+)
+
 test_suite(
-    name = "health",
+    name = "repo-code-health",
     testonly = True,
     tests = [
-        ":requirements_test",
-        ":gazelle_python_manifest.test",
+        "//:gazelle_python_manifest.test",
+        "//:requirements_test",
         "//tools/format:format_test",
-    ]
+    ],
+    visibility = ["//visibility:public"],
 )

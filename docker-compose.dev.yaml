@@ -1,4 +1,15 @@
-name: venus-ingestion
+name: "artemis"
+x-jwt-common: &jwt-common
+  JWT_ISS: &jwt_iss "0b39e2ee-40b5-42c4-ae84-0de05c8dd8d2"
+  # TODO: replace this with a real secret
+  JWT_SECRET: &jwt_secret "DONOTUSE"
+  JWT_ALGORITHM: &jwt_alg "HS256"
+x-kong-config: &kong-env-common
+  KONG_DATABASE: postgres # Use Postgres as the backing database
+  KONG_PG_HOST: kong-ee-database # Hostname of the Postgres service
+  KONG_PG_DATABASE: kong # Name of the database to connect to
+  KONG_PG_USER: kong # Database username
+  KONG_PG_PASSWORD: kong # Database password
 x-minio-common: &minio-common
   image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
   command: server --console-address ":9090" /mnt/data
@@ -7,95 +18,405 @@ x-minio-common: &minio-common
     - "9090"
   ports:
     - 9000:9000
-    - 10090:9090
+    - 9090:9090
   environment:
     MINIO_ROOT_USER: minioadmin
     MINIO_ROOT_PASSWORD: minioadmin
     MINIO_VOLUMES: "/mnt/data"
+    MINIO_NOTIFY_KAFKA_ENABLE_ARTEMIS: "on"
+    MINIO_NOTIFY_KAFKA_BROKERS_ARTEMIS: broker:29092
+    MINIO_NOTIFY_KAFKA_TOPIC_ARTEMIS: artemis.ingestion.storage.s3
   healthcheck:
     test: ["CMD", "mc", "ready", "local"]
     interval: 5s
     timeout: 5s
     retries: 5
 services:
-  # embedding model
-  tei:
-    image: ghcr.io/huggingface/text-embeddings-inference:86-1.5  # RTX 3090 is an Ampere 86 card
-    restart: no
-    expose:
-      - 80
+  # S3 compatible storage
+  minio:
+    !!merge <<: *minio-common
+    hostname: minio
     volumes:
-      - /ckpts/.tei:/data
-    command: --model-id "sentence-transformers/msmarco-MiniLM-L-12-v3"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-  postgres:
-    image: postgres:14-alpine
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    volumes:
-      - db-data:/var/lib/postgresql/data
+      - s3-storage:/mnt/data
     restart: unless-stopped
-    ports:
-      - 5432:5432
-    environment:
-      POSTGRES_PASSWORD: &database_password ${DATABASE_PASSWORD}
-      POSTGRES_USER: &database_user ${DATABASE_USERNAME:-postgres}
-      POSTGRES_DB: &database_name ${DATABASE_NAME:-ingestion}
-  vectorstore:
-    image: qdrant/qdrant:v1.13.6-unprivileged
-    expose:
-      - "6333"
-      - "6334"
-    ports:
-      - 6333:6333
-  docling-serve:
-    image: ghcr.io/docling-project/docling-serve-cu124
     healthcheck:
-      test: curl -X GET http://localhost:5001/health || exit 1
-      interval: 1m30s
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
       timeout: 30s
       retries: 5
       start_period: 30s
-    expose:
-      - 5001
-    ports:
-      - 5001:5001
+    networks:
+      - default
+  # artemis's vectorstore database
+  vectorstore:
+    image: qdrant/qdrant:v1.12.5-unprivileged
+    healthcheck:
+      # taken from here:
+      # https://github.com/qdrant/qdrant/issues/4250#issuecomment-3145007055
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6333 && echo -e 'GET /readyz HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q 'HTTP/1.1 200' <&3"]
+      interval: 10s
+      timeout: 30s
+      retries: 5
+    volumes:
+      - qdrant-vectorstore:/qdrant/storage
     environment:
-      - NUM_WORKERS=1
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-  # Kafka broker for streaming the following events:
+      - RUN_MODE=dev
+      - QDRANT__TELEMETRY_DISABLED=true
+      - QDRANT__LOG_LEVEL=INFO
+    ports:
+      - 6333:6333
+    expose:
+      - "6333"
+    networks:
+      - default
+  # artemis RDBMS database
+  postgres:
+    image: artemis/postgres:latest
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "documents"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - db-storage:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_PASSWORD=testpass
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=documents
+      - PGDATA=/var/lib/postgresql/data
+    command: |
+      postgres
+      -c wal_level=logical
+      -c hot_standby=on
+      -c max_wal_senders=10
+      -c max_replication_slots=10
+      -c hot_standby_feedback=on
+    networks:
+      - default
+  # task queue for ingestion
+  rabbitmq:
+    image: rabbitmq:4.1.2-management-alpine
+    container_name: rabbitmq
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-artemis}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-artemis}
+      RABBITMQ_DEFAULT_VHOST: artemis
+    ports:
+      - 5672:5672
+      - 15672:15672
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 15s
+      retries: 5
+    networks:
+      - default
+  # RDBMS monitor (for development and testing ONLY)
+  pgadmin:
+    container_name: pgadmin
+    image: dpage/pgadmin4:8.13.0
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    ports:
+      - 5444:80
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=dkabely@gmail.com
+      - PGADMIN_DEFAULT_PASSWORD=admin
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - default
   #
-  # 1. Stored 
+  #  artemis custom services
+  #
+  # artemis frontend UI
+  frontend:
+    image: artemis/frontend:latest
+    restart: unless-stopped
+    depends_on:
+      kong-cp: # the backend API gateway
+        condition: service_healthy
+    healthcheck:
+      test: wget http://localhost:8501/healthz || exit 1
+      interval: 20s
+      timeout: 20s
+      retries: 5
+      start_period: 30s
+    expose:
+      - "8501"
+    ports:
+      - "8511:8501"
+    environment:
+      BACKEND_BASE_URL: http://kong-cp:8000
+      BACKEND_AUTH_ENDPOINT: /auth # authentication service is at http://kong-cp:8000/auth
+      BACKEND_STORAGE_ENDPOINT: /storage # storage service is at        http://kong-cp:8000/storage
+      BACKEND_CHAT_ENDPOINT: /chat # chat service is at           http://kong-cp:8000/chats
+    networks:
+      - default
+  # artemis main backend service
+  backend-main:
+    image: artemis/backend-main:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: wget http://localhost:10001/health || exit 1
+      interval: 20s
+      timeout: 20s
+      retries: 5
+      start_period: 30s
+    environment:
+      SQL_DB_USER: postgres
+      SQL_DB_PASSWORD: testpass
+      SQL_DB_HOST: postgres
+      SQL_DB_PORT: 5432
+      SQL_DB_DATABASE: documents
+      SQL_DRIVER: postgresql+asyncpg
+      JWT_SECRET: *jwt_secret
+      JWT_ISS: *jwt_iss
+      JWT_ALGORITHM: *jwt_alg
+    expose:
+      - 10001
+    ports:
+      - "10001:10001"
+    networks:
+      - default
+  backend-main-chat:
+    image: artemis/backend-chat:dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend-indexing-retrieval:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: wget http://localhost:10010/health || exit 1
+      interval: 20s
+      timeout: 20s
+      retries: 5
+      start_period: 30s
+    environment:
+      SQL_DB_USER: postgres
+      SQL_DB_PASSWORD: testpass
+      SQL_DB_HOST: postgres
+      SQL_DB_PORT: 5432
+      SQL_DB_DATABASE: documents
+      SQL_DRIVER: postgresql+asyncpg
+      JWT_SECRET: *jwt_secret
+      JWT_ISS: *jwt_iss
+      JWT_ALGORITHM: *jwt_alg
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OLLAMA_MODEL: llama3.1:8b-instruct-fp16
+      RETRIEVER_SERVICE_BASE_URL: http://backend-indexing-retrieval:10006
+      RETRIEVER_SERVICE_HEALTH_ENDPOINT: /health
+      RETRIEVER_SERVICE_RETRIEVE_ENDPOINT: /retrieve
+      CHAT_HISTORY_PLACEHOLDER: "chat_history"
+    expose:
+      - 10010
+    ports:
+      - "10011:10010"
+    networks:
+      - default
+  # artemis interface to minio
+  backend-indexing-storage:
+    image: artemis/backend-indexing-storage:dev
+    restart: unless-stopped
+    depends_on:
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: wget http://localhost:8080/health || exit 1
+      interval: 20s
+      timeout: 20s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - ./test_dir:/tmp/test_dir
+      - /projects/opentitan/my_html/docs/:/projects/opentitan/my_html/docs/
+      - /projects/akko/my_html/docs/:/projects/akko/my_html/docs/
+      - /projects/tavor/my_html/docs/:/projects/tavor/my_html/docs/
+      # one of OT docs links here so need to mount it as well
+      - /homes/homes_cd1/cdweb/my_html/projects_introductions:/homes/homes_cd1/cdweb/my_html/projects_introductions
+    expose:
+      - "8080"
+    ports:
+      - "10002:8080"
+    environment:
+      S3_ENDPOINT_URL: minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_artemis_BUCKET: artemis
+      # translates to MINIO_NOTIFY_KAFKA_TOPIC_VENUS value
+      S3_artemis_BUCKET_KAFKA_EVENT: artemis
+    networks:
+      - default
+  # artemis's indexing task queue controller worker (Celery)
+  backend-indexing-controller-celery-worker:
+    image: artemis/backend-indexing-controller-worker:latest
+    restart: unless-stopped
+    healthcheck:
+      test: //src/backend/indexing/controller/worker/main -A src.backend.indexing.controller.worker.celery.app status || exit 1
+      interval: 20s
+      timeout: 20s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      # message broker for Celery
+      rabbitmq:
+        condition: service_healthy
+      # result backend for Celery
+      postgres:
+        condition: service_healthy
+      # Storage service from which we read the object to send for ingestion
+      minio:
+        condition: service_healthy
+      # ingestion endpoint (private file uploads)
+      backend-indexing-ingestion:
+        condition: service_healthy
+    environment:
+      # Message broker connection settings
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: artemis
+      RABBITMQ_PASSWORD: artemis
+      RABBITMQ_VHOST: artemis
+      # Result backend settings
+      SQL_DB_HOST: postgres
+      SQL_DB_PORT: 5432
+      SQL_DB_USER: postgres
+      SQL_DB_PASSWORD: testpass
+      SQL_DB_DATABASE: documents
+      SQL_DRIVER: postgresql+psycopg
+      # S3 client configuration
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_SECURE: false
+      # Task settings
+      EXCHANGE_NAME: ingestion_test0
+      # Ingestion service URLs
+      LIBRARY_INGESTION_SERVICE_URL: http://backend-indexing-ingestion-library:10000/index/upload
+      PRIVATE_INGESTION_SERVICE_URL: http://backend-indexing-ingestion-private:10000/index/upload
+    networks:
+      - default
+  backend-indexing-ingestion:
+    image: artemis/backend-indexing:dev
+    depends_on:
+      vectorstore:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      docling-serve:
+        condition: service_healthy
+    healthcheck:
+      test: wget http://localhost:10000/health/readiness || exit 1
+      interval: 20s
+      timeout: 30s
+      retries: 5
+      start_period: 30s
+    environment:
+      QDRANT_HOST_URL: "http://vectorstore:6333"
+      QDRANT_COLLECTION_NAME: "artemis"
+      TEI_HOST_URL: "http://host.docker.internal:11435"
+      DOCLING_SERVE_URI: "http://docling-serve:5001"
+      # SQL_DB_USER: "postgres"
+      # SQL_DB_PASSWORD: "testpass"
+      # SQL_DB_HOST: "postgres"
+      # SQL_DB_PORT: "5432"
+      # SQL_DB_DATABASE: "documents"
+      # SQL_DRIVER: "postgresql+asyncpg"
+      DEBUG: true
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    expose:
+      - "10000"
+    ports:
+      - "10000:10000"
+    networks:
+      - default
+  backend-indexing-retrieval:
+    image: artemis/backend-indexing-retrieval:dev
+    depends_on:
+      vectorstore:
+        condition: service_healthy
+      backend-indexing-ingestion:
+        condition: service_healthy
+    healthcheck:
+      test: wget http://localhost:10006/health || exit 1
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 20s
+    environment:
+      QDRANT_HOST_URL: "http://vectorstore:6333"
+      QDRANT_COLLECTION_NAME: "artemis"
+      SQL_DB_USER: postgres
+      SQL_DB_PASSWORD: testpass
+      SQL_DB_HOST: postgres
+      SQL_DB_PORT: 5432
+      SQL_DB_DATABASE: documents
+      SQL_DRIVER: postgresql+asyncpg
+      TEXT_EMBEDDING_INFERENCE_EMBEDDING_HOST_URL: "http://host.docker.internal:11435"
+      SESSION_ID_CONFIG_KEYWORD: "chat_id"
+      SESSION_ID_VECTORSTORE_INDEX_KEYWORD: "metadata.chat_id"
+      NAMESPACE_CONFIG_KEYWORD: "namespace"
+      NAMESPACE_VECTORSTORE_INDEX_KEYWORD: "metadata.namespace"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    expose:
+      - "10006"
+    ports:
+      - "10006:10006"
+    networks:
+      - default
+  # backend-watchdog-gonen:
+  #   image: artemis/backend-filesystem-watcher:latest
+  #   depends_on:
+  #     - broker
+  #     - schemaregistry
+  #   volumes:
+  #     - /proj/eng/gonen/my_html:/projects/gonen/my_html/docs/specs/
+  #   entrypoint: >
+  #     /src/backend/indexing/watcher/main --namespace Gonen --dir /projects/gonen/my_html/docs/specs/
+  #   environment:
+  #     KAFKA_BOOTSTRAP_SERVERS: broker:29092
+  #     KAFKA_SCHEMAREGISTERY_URL: http://schemaregistry:8081
+  #     WATCHER_KAFKA_TOPIC: artemis.ingestion.watchdog.library.test
+  # Kafka broker is used for inter-service communications
+  # and essentially breaks the system into highly decoupled and
+  # self contained single-responsibility services, which overall
+  # helps with the conceptual organization, design, development and
+  # maintenance of the entire project
+  # 
+  # Inter-communication is the backbone of the ingestion pipeline, and goes as follows:
+  #
+  # 1. A file is uploaded to S3 compatible storage (MinIO, not AWS)
+  # 2. An S3ObjectPut event is sent to a Kafka topic from S3 storage
+  # 3. An HTTP sink consumes said event and forwards it to the ingestion service
+  # 4. The ingestion service picks the stored file object (and possibly metadata) 
+  #    from S3 storage and ingests the contents 
+  # 5. The ingestion service stores ingested data in vectorstore and emits an IngestionDone
+  #    event to signal the user their file has been ingested
+  # 
+  # Note: 1. (Ideally) The ingestion service should be stateless, so we should strive to decouple the vectorstore
+  #          from the ingestion prodcess itself, and communicate the ingestion results via a Kafka topic and only store
+  #          them to the vectorstore storage using a Kafka sink connector
   broker:
     image: apache/kafka:4.0.0
     hostname: broker
     container_name: broker
-    healthcheck:
-      test: /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1
-      interval: 1m30s
-      timeout: 30s
-      retries: 5
-      start_period: 30s
-    expose:
-      - "9092"
-      - "9097"
     ports:
-      - 9092:9092
+      - "9092:9092"
+      - "9097:9097"
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
@@ -111,42 +432,41 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
-      KAFKA_CREATE_TOPICS: "_connect-status,_connect-offsets,_connect-configs"
-      KAFKA_JMX_PORT: "9997"
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_JMX_PORT: 9997
+      KAFKA_JMX_OPTS: -Dcom.sun.management.jmxremote -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false -Djava.rmi.server.hostname=kafka0 -Dcom.sun.management.jmxremote.rmi.port=9997
+      KAFKA_CREATE_TOPICS: "_connect-configs,_connect-offsets,_connect-status"
+    networks:
+      - default
+  # Apache Kafka Schema Registry
   schemaregistry:
     image: confluentinc/cp-schema-registry:6.0.0
-    hostname: schemaregistry
-    container_name: schemaregistry
     restart: always
-    healthcheck:
-      test: curl --output /dev/null --silent --head --fail http://schemaregistry:8081/subjects || exit 1
-      interval: 1m30s
-      timeout: 30s
-      retries: 5
-      start_period: 30s
+    ports:
+      - "8081:8081"
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schemaregistry
       SCHEMA_REGISTRY_LISTENERS: "http://schemaregistry:8081"
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://broker:29092
-    ports:
-      - 8081:8081
+    networks:
+      - default
   kafka-connect:
-    image: venus/kafka-connect:latest
+    image: artemis/cp-kafka-connect:latest
     container_name: kafka-connect
-    hostname: kafka-connect
     depends_on:
       - broker
       - schemaregistry
+    volumes:
+      - ./test_dir:/tmp/test_dir
+      - /projects/opentitan/my_html/docs/:/projects/opentitan/my_html/docs/
+      - /projects/akko/my_html/docs/:/projects/akko/my_html/docs/
+      - /projects/tavor/my_html/docs/:/projects/tavor/my_html/docs/
     ports:
-      - 8083:8083
+      - "8083:8083"
     environment:
       CONNECT_BOOTSTRAP_SERVERS: "broker:29092"
       CONNECT_REST_PORT: 8083
       CONNECT_GROUP_ID: kafka-connect
-      CONNECT_CONFIG_STORAGE_TOPIC: _connect-configs
-      CONNECT_OFFSET_STORAGE_TOPIC: _connect-offsets
-      CONNECT_STATUS_STORAGE_TOPIC: _connect-status
       CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
       CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.storage.StringConverter
       CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: 'http://schemaregistry:8081'
@@ -155,61 +475,204 @@ services:
       CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: "1"
       CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: "1"
       CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: "1"
-    #  ---------------
+      CONNECT_CONFIG_STORAGE_TOPIC: _connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _connect-status
+      #  ---------------
       CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components,/data/connect-jars
+    networks:
+      - default
+  # Apache Kafka Connect initialization script
+  # Creates connector instances via Kafka Connect's REST API
   kafka-connect-init:
-    image: venus/cp-kafka-connect-init:latest
+    image: artemis/cp-kafka-connect-init:latest
+    depends_on:
+      backend-indexing-storage:
+        condition: service_healthy
+      backend-indexing-controller-celery-worker:
+        condition: service_healthy
     environment:
       KAFKA_CONNECT_CLUSTER_URI: http://kafka-connect:8083
+    networks:
+      - default
+  # Apache Kafka cat utility (for development and testing ONLY)
   kafkacat:
     image: confluentinc/cp-kafkacat
-    container_name: kafkacat
     command: sleep infinity
+    networks:
+      - default
+  # User interface for monitoring the Kafka cluster (connectors, topics, events etc.)
+  # (for development and testing ONLY)
   kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
     container_name: kafka-ui
-    image: provectuslabs/kafka-ui:latest
     ports:
-      - 18080:8080
+      - "18080:8080"
     depends_on:
       - broker
       - schemaregistry
       - kafka-connect
     environment:
-      KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: broker:29092
+      KAFKA_CLUSTERS_0_NAME: artemis
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "broker:29092"
       KAFKA_CLUSTERS_0_METRICS_PORT: 9997
       KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schemaregistry:8081
-      KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: first
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: broker
       KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS: http://kafka-connect:8083
       DYNAMIC_CONFIG_ENABLED: 'true'
-  # S3 compatible storage
-  minio:
-    <<: *minio-common
-    hostname: minio
-    environment:
-      MINIO_NOTIFY_KAFKA_ENABLE_VENUS: "on"
-      MINIO_NOTIFY_KAFKA_BROKERS_VENUS: broker:29092
-      MINIO_NOTIFY_KAFKA_TOPIC_VENUS: venus.ingestion.storage.s3
-    volumes:
-      - minio-data-1:/mnt/data
-  backend-storage:
-    image: venus/backend-storage:latest
+    networks:
+      - default
+  ksqldb-server:
+    image: confluentinc/cp-ksqldb-server:7.9.1
+    hostname: ksqldb-server
+    container_name: ksqldb-server
     depends_on:
-      minio:
-        condition: service_healthy
-    environment:
-      S3_ENDPOINT_URL: minio:9000
-      S3_ACCESS_KEY: minioadmin
-      S3_SECRET_KEY: minioadmin
-      S3_VENUS_BUCKET: venus
-      S3_VENUS_BUCKET_KAFKA_EVENT: VENUS
-    expose:
-      - 7000
+      - broker
+      - kafka-connect
     ports:
-      - 7000:7000
+      - "8088:8088"
+    environment:
+      KSQL_CONFIG_DIR: "/etc/ksql"
+      KSQL_BOOTSTRAP_SERVERS: "broker:29092"
+      KSQL_HOST_NAME: ksqldb-server
+      KSQL_LISTENERS: "http://0.0.0.0:8088"
+      KSQL_CACHE_MAX_BYTES_BUFFERING: 0
+      KSQL_KSQL_SCHEMA_REGISTRY_URL: "http://schemaregistry:8081"
+      # KSQL_PRODUCER_INTERCEPTOR_CLASSES: "io.confluent.monitoring.clients.interceptor.MonitoringProducerInterceptor"
+      # KSQL_CONSUMER_INTERCEPTOR_CLASSES: "io.confluent.monitoring.clients.interceptor.MonitoringConsumerInterceptor"
+      KSQL_KSQL_CONNECT_URL: "http://kafka-connect:8083"
+      KSQL_KSQL_LOGGING_PROCESSING_TOPIC_REPLICATION_FACTOR: 1
+      KSQL_KSQL_LOGGING_PROCESSING_TOPIC_AUTO_CREATE: 'true'
+      KSQL_KSQL_LOGGING_PROCESSING_STREAM_AUTO_CREATE: 'true'
+    networks:
+      - default
+  ksqldb-cli:
+    image: artemis/ksqldb-cli:latest
+    container_name: ksqldb-cli
+    environment:
+      KSQLDB_SERVER_URL: http://ksqldb-server:8088
+    depends_on:
+      - broker
+      - kafka-connect
+      - ksqldb-server
+    tty: true
+    networks:
+      - default
+  docling-serve:
+    image: ghcr.io/docling-project/docling-serve-cu126:main
+    container_name: docling-serve
+    ports:
+      - "5001:5001"
+    healthcheck:
+      test: wget http://localhost:5001/health || exit 1
+      interval: 20s
+      timeout: 20s
+      retries: 5
+      start_period: 30s
+    environment:
+      DOCLING_SERVE_ENABLE_UI: "true"
+      DOCLING_SERVE_MAX_SYNC_WAIT: 12000
+      NVIDIA_VISIBLE_DEVICES: "all" # https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/docker-specialized.html
+    deploy: # This section is for compatibility with Swarm
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    runtime: nvidia
+    restart: always
+    networks:
+      - default
+  # Kong API Gateway setup
+  kong-ee-database:
+    container_name: kong-ee-database
+    image: postgres:latest # Official Postgres image
+    restart: on-failure # Restart if the container fails
+    volumes:
+      - kong_db_data:/var/lib/postgresql/data # Mount the volume for persistent data
+    networks:
+      - kong-ee-net # Connect to the shared Kong network
+    environment:
+      POSTGRES_USER: kong # Set DB user inside the container
+      POSTGRES_DB: kong # Create this database on first run
+      POSTGRES_PASSWORD: kong # Set the password for the DB user
+    healthcheck: # Ensure the DB is ready before starting dependent services
+      test: ["CMD", "pg_isready", "-U", "kong"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+    expose:
+      - '5432'
+  kong-bootstrap:
+    image: '${GW_IMAGE:-kong/kong-gateway:3.11.0.2}' # Kong Gateway image (default to latest version)
+    container_name: kong-bootstrap
+    networks:
+      - default
+      - kong-ee-net
+    depends_on:
+      kong-ee-database:
+        condition: service_healthy # Wait until Postgres is up and healthy
+    restart: on-failure
+    environment:
+      !!merge <<: *kong-env-common # Reuse environment config from x-kong-config
+      KONG_PASSWORD: handyshake # Admin GUI password (required for RBAC)
+    command: kong migrations bootstrap # Run DB migrations to initialize Kong schema
+  kong-cp:
+    image: '${GW_IMAGE:-kong/kong-gateway:3.11.0.2}' # Main Kong Gateway Control Plane (default to latest version)
+    container_name: kong-cp
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    networks:
+      - default
+      - kong-ee-net
+    environment:
+      !!merge <<: *kong-env-common
+      KONG_ADMIN_LISTEN: 0.0.0.0:8001, 0.0.0.0:8444 ssl # Admin API on HTTP + HTTPS
+      KONG_ADMIN_GUI_LISTEN: 0.0.0.0:8002, 0.0.0.0:8445 ssl # Kong Manager on HTTP + HTTPS
+      KONG_ADMIN_GUI_URL: http://${GW_HOST:-localhost}:8002 # URL for GUI links
+      KONG_PASSWORD: handyshake # Required for logging in to Kong Manager (RBAC)
+    depends_on:
+      kong-bootstrap:
+        condition: service_completed_successfully # Start only after bootstrap has succeeded
+    ports:
+      - "8000:8000" # Proxy HTTP
+      - "8443:8443" # Proxy HTTPS
+      - "8001:8001" # Admin API HTTP
+      - "8444:8444" # Admin API HTTPS
+      - "8002:8002" # Kong Manager HTTP
+      - "8445:8445" # Kong Manager HTTPS
+  api-gateway-connect-init:
+    image: artemis/api-gateway-connect-init:latest
+    depends_on:
+      kong-bootstrap:
+        condition: service_completed_successfully
+      kong-cp:
+        condition: service_healthy
+      backend-indexing-storage:
+        condition: service_healthy
+    networks:
+      - kong-ee-net
+    environment:
+      KONG_CP_ADMIN_API: http://kong-cp:8001
+      BACKEND_AUTH_URL: http://backend-main:10001
+      BACKEND_INDEXING_STORAGE_URL: http://backend-indexing-storage:8080
+      BACKEND_CHAT_URL: http://backend-main-chat:10010
+      BACKEND_CATALOG_URL: http://backend-indexing-retrieval:10006/catalog
+      JWT_SECRET: *jwt_secret
+      JWT_ISS: *jwt_iss
+      JWT_ALGORITHM: *jwt_alg
+networks:
+  default:
+    driver: bridge
+  kong-ee-net: # Custom bridge network for isolated Kong and Postgres communication
+    driver: bridge
 volumes:
-  db-data:
-  hf_cache:
-  ocr_cache:
-  docling:
-  minio-data-1:
+  qdrant-vectorstore:
+  db-storage:
+  s3-storage:
+  kong_db_data: {} # Named volume to persist Postgres data across container restarts

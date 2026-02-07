@@ -1,4 +1,3 @@
-
 # -------------------------------------
 # Copyright (c) 2023, Dror Kabely
 # -------------------------------------
@@ -7,25 +6,37 @@
 load(
     "@//tools/oci/images:kafka.bzl",
     "kafka_connect_connector_instance",
+    "kafka_connect_file_source_connector_instance",
+    "kafka_connect_file_watch_connector_instance",
     "kafka_connect_image",
     "kafka_connect_init_image",
 )
-load("@aspect_bazel_lib//lib:tar.bzl", "mtree_mutate", "mtree_spec", "tar")
-load("@aspect_bazel_lib//lib:testing.bzl", "assert_archive_contains")
-load("@bazel_skylib//rules:write_file.bzl", "write_file")
-load("@rules_oci//oci:defs.bzl", "oci_image", "oci_push", oci_load = "oci_tarball")
+load("@rules_multirun//:defs.bzl", "command", "multirun")
+load("@rules_oci//oci:defs.bzl", oci_load = "oci_tarball")
 
 # srcs of the custom connects
 _CP_KAFKA_CONNECT_CONNECTORS_SRCS = {
     "qdrant-sink-kafka-connect": ["@qdrant-sink-kafka-connect-1.2.0//:srcs"],
     "http-sink-kafka-connect": ["@aiven-http-sink-kafka-connect-0.9.0//:srcs"],
-    "rabbitmq-sink-kafka-connect": ["@camel-spring-rabbitmq-sink-connect-4.10.3//:srcs"],
-    "jdbc-sink-kafka-connect": ["@debezium-jdbc-sink-connect-3.2.0//:srcs"],
-    "postgresql-source-kafka-connect": ["@debezium-postgres-source-connect-3.2.0//:srcs"],
+    "debezium-postgres-cdc-connector": ["@debezium-postgres-cdc-source-connector-3.1.1.final//:srcs"],
+    "debezium-jdbc-sink-connector": ["@debezium-jdbc-sink-connector-3.1.1.final//:srcs"],
+    "camel-file-watch-source-kafka-connector": [
+        "@camel-file-watch-source-kafka-connector-4.10.3//:srcs",
+    ],
+    "camel-file-source-kafka-connector-4.10.3": [
+        "@camel-file-source-kafka-connector-4.10.3//:srcs",
+    ],
+    "camel-github-pullrequest-comment-source-kafka-connector": [
+        "@camel-github-pullrequest-comment-source-kafka-connector-4.10.3//:srcs",
+    ],
+    "camel-spring-rabbitmq-sink-kafka-connector": [
+        "@camel-spring-rabbitmq-sink-kafka-connector-4.10.3//:srcs",
+    ],
+    "camel-http-sink-kafka-connector": ["@camel-http-sink-kafka-connect-4.10.3//:srcs"],
 }
 
 kafka_connect_image(
-    name = "venus-kafka-connect",
+    name = "kafka-connect",
     base = "@cp-kafka-connect",
     connectors_srcs = _CP_KAFKA_CONNECT_CONNECTORS_SRCS,
     # this is where the components sources (mainly JARs) sit under
@@ -35,10 +46,15 @@ kafka_connect_image(
 )
 
 oci_load(
-    name = "venus-kafka-connect.tarball",
-    image = ":venus-kafka-connect",
+    name = "kafka-connect.tarball",
+    image = ":kafka-connect",
     # use this tag as image name for Kafka Connect worker in docker-compose.yaml
-    repo_tags = ["venus/kafka-connect:latest"],
+    repo_tags = ["apollo/cp-kafka-connect:latest"],
+)
+
+command(
+    name = "kafka-connect.cmd",
+    command = ":kafka-connect.tarball",
 )
 
 # Kafka Connect connector specification and packaging
@@ -49,7 +65,7 @@ kafka_connect_connector_instance(
         "value.converter.schemas.enable": "false",
         "key.converter": "org.apache.kafka.connect.storage.StringConverter",
         "value.converter": "org.apache.kafka.connect.json.JsonConverter",
-        "topics": "venus.ingestion.vectorstore",
+        "topics": "artemis.ingestion.vectorstore",
         "errors.deadletterqueue.topic.name": "dead_queue",
         "errors.deadletterqueue.topic.replication.factor": "1",
         "qdrant.grpc.url": "http://vectorstore:6334",
@@ -60,68 +76,692 @@ kafka_connect_connector_instance(
 # connection between library uploads watchdog service to the S3 bucket storage
 # front
 kafka_connect_connector_instance(
-    name = "http-sink-connector-library",
+    name = "camel-ot-github-pullrequest-comment-source-kafka-connector",
     connector_config = {
-        "connector.class": "io.aiven.kafka.connect.http.HttpSinkConnector",
-        "topics": "venus.ingestion.watchdog.library",
-        "http.authorization.type": "none",
-        "http.url": "http://backend-storage:8080/library",
-        "batching.enabled": False,
+        # connector settings
+        "connector.class": "org.apache.camel.kafkaconnector.githubpullrequestcommentsource.CamelGithubpullrequestcommentsourceSourceConnector",
+        "topics": "apollo.ingestion.ot.github.pullrequest.comments",
         "tasks.max": "1",
-        "key.converter": "org.apache.kafka.connect.storage.StringConverter",
-        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+
+        # github settings
+        "camel.kamelet.github-pullrequest-comment-source.repoName": "opentitan",
+        "camel.kamelet.github-pullrequest-comment-source.repoOwner": "lowRISC",
+        # TODO: change this to a proper secret
+        "camel.kamelet.github-pullrequest-comment-source.oauthToken": "{{GITHUB_OAUTH_TOKEN}}",
+    },
+    connector_name = "CamelGithubPullRequestCommentSourceConnector__OTGHPullRequestCommentSourceToS3Upload",
+)
+
+kafka_connect_connector_instance(
+    name = "camel-file-watch-source-kafka-connector",
+    connector_config = {
+        "connector.class": "org.apache.camel.kafkaconnector.filewatchsource.CamelFilewatchsourceSourceConnector",
+        "topics": "apollo.ingestion.watchdog.library.changes",
+        "camel.kamelet.file-watch-source.filePath": "/tmp/test_dir",
+        # The value here is just the full path name.
+        # However, we cannot hoist this to a JSON as the object that's
+        # being manipulated the this connector is JavaFile (a bug of the connector)
+        # therefore and value transformation will be performed on the consumer
+        # connector side
+        "value.converter": "org.apache.kafka.connect.storage.StringConverter",
+        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
         "key.converter.schemas.enable": False,
         "value.converter.schemas.enable": False,
+        "tasks.max": "1",
+        # 'CREATE' event will be handled by a corresponding CamelFileSourceConnector
+        # that cannot DELETE and MODIFY events, so it is a complement for this connector
+        # Also, the source connector will send existing files in the directory which this
+        # connector cannot do
+        "camel.kamelet.file-watch-source.events": "MODIFY,DELETE",
+        # This will will copy the reason the event was triggered (CREATE|MODIFY|DELETE)
+        # and place it as the message key
+        # This is important because it will create a key for the message
+        # on top which we can apply SMT's. Otherwise, if the key is empty,
+        # no SMTs can be applied (they all be noop)
+        "camel.source.camelMessageHeaderKey": "CamelFileEventType",
+
+        # Key transformations (key should be the namespace name)
+        # 1. b"DELETE" -> {"reason": "DELETE"}
+        # 2. {"reason": "DELETE"} -> {"reason": "DELETE", "namespace": "Gonen"}
+        # 3. {"reason": "DELETE", "namespace": "Gonen"} -> {"namespace": "Gonen"}
+        # 3.b. {"namespace": "Gonen"} -> Header{"NTILHeader.namespace": "Gonen"} [copy]
+        # 4. {"namespace": "Gonen"} -> b"Gonen"
+        #
+        # dkabely: I know these are stupid transformations, but this connector will not
+        # Create any key if not explicitly told so, and since there's no conveinent SMT way to
+        # manipulate the key value beside JSON operations, this is the way to go
+        "transforms": ",".join([
+            # 1. b"DELETE" -> {"reason": "DELETE"},
+            "HoistKeyField",
+            # 2. {"reason": "DELETE"} -> {"reason": "DELETE", "namespace": "Gonen"}
+            "InsertNamespaceKey",
+            # 3. {"reason": "DELETE", "namespace": "Gonen"} -> {"namespace": "Gonen"}
+            "RemoveReasonKey",
+            # 3.b. {"namespace": "Gonen"} -> Header{"NTILHeader.namespace": "Gonen"}
+            "copyNamespaceToHeader",
+            # 4. {"namespace": "Gonen"} -> b"Gonen"
+            "ExtractNamespaceKeyField",
+            # 5. Drop redundant Camel.* headers (not all of them though)
+            "DropCamelHeaders",
+        ]),
+        # 1. b"DELETE" -> {"reason": "DELETE"}
+        "transforms.HoistKeyField.type": "org.apache.kafka.connect.transforms.HoistField$Key",
+        "transforms.HoistKeyField.field": "reason",
+
+        # 2. {"reason": "DELETE"} -> {"reason": "DELETE", "namespace": "Gonen"}
+        "transforms.InsertNamespaceKey.type": "org.apache.kafka.connect.transforms.InsertField$Key",
+        "transforms.InsertNamespaceKey.static.field": "namespace",
+        "transforms.InsertNamespaceKey.static.value": "Gonen",
+
+        # 3. {"reason": "DELETE", "namespace": "Gonen"} -> {"namespace": "Gonen"}
+        "transforms.RemoveReasonKey.type": "org.apache.kafka.connect.transforms.ReplaceField$Key",
+        "transforms.RemoveReasonKey.exclude": "reason",
+
+        # 3.b. {"namespace": "Gonen"} -> Header{"NTIL.namespace": "Gonen"} [copy]
+        "transforms.copyNamespaceToHeader.type": "org.apache.kafka.connect.transforms.HeaderFrom$Key",
+        "transforms.copyNamespaceToHeader.fields": "namespace",
+        "transforms.copyNamespaceToHeader.headers": "NTILHeader.namespace",
+        "transforms.copyNamespaceToHeader.operation": "copy",
+        # 4. {"namespace": "Gonen"} -> b"Gonen"
+        "transforms.ExtractNamespaceKeyField.type": "org.apache.kafka.connect.transforms.ExtractField$Key",
+        "transforms.ExtractNamespaceKeyField.field": "namespace",
+
+        # 5. Drop redundant Camel.* headers
+        "transforms.DropCamelHeaders.type": "org.apache.kafka.connect.transforms.DropHeaders",
+        "transforms.DropCamelHeaders.headers": ",".join([
+            "CamelHeader.CamelFileNameConsumed",
+            "CamelHeader.CamelFileNameOnly",
+            "CamelHeader.CamelFileRelativePath",
+            "CamelHeader.CamelFileLength",
+            "CamelHeader.CamelFileParent",
+            "CamelHeader.CamelFileAbsolute",
+        ]),
     },
-    connector_name = "HttpSinkConnectorConnector_LibraryToStorage",
+    connector_name = "CamelFileWatchSourceConnector__FileWatchSourceToS3Upload",
+)
+
+# Test Files
+kafka_connect_file_watch_connector_instance(
+    name = "camel-file-watch-kafka-connector-test",
+    connector_name = "CamelFileWatchSourceConnector__TestFileWatchSourceToS3Upload",
+    events = "MODIFY,DELETE",
+    namespace = "Test",
+    root_dir = "/tmp/test_dir",
+    topic = "apollo.ingestion.watchdog.library.changes",
+)
+
+kafka_connect_file_source_connector_instance(
+    name = "camel-file-source-kafka-connector-test",
+    accepted_filetypes = "pdf,docx",
+    connector_name = "CamelFileSourceConnector__TestFileSourceToS3Upload",
+    namespace = "Test",
+    root_dir = "/tmp/test_dir",
+    topic = "apollo.ingestion.watchdog.library.files",
+)
+
+kafka_connect_file_watch_connector_instance(
+    name = "camel-file-watch-kafka-connector-opentitan",
+    connector_name = "CamelFileWatchSourceConnector__OpentitanFileWatchSourceToS3Upload",
+    events = "MODIFY,DELETE",
+    namespace = "Opentitan",
+    root_dir = "/projects/opentitan/my_html/docs/",
+    topic = "apollo.ingestion.watchdog.library.changes",
+)
+
+kafka_connect_file_source_connector_instance(
+    name = "camel-file-source-kafka-connector-opentitan",
+    accepted_filetypes = "pdf,docx",
+    connector_name = "CamelFileSourceConnector__OpentitanFileSourceToS3Upload",
+    namespace = "Opentitan",
+    root_dir = "/projects/opentitan/my_html/docs/",
+    topic = "apollo.ingestion.watchdog.library.files",
+)
+
+kafka_connect_file_watch_connector_instance(
+    name = "camel-file-watch-kafka-connector-akko",
+    connector_name = "CamelFileWatchSourceConnector__AkkoFileWatchSourceToS3Upload",
+    events = "MODIFY,DELETE",
+    namespace = "Akko",
+    root_dir = "/projects/akko/my_html/docs/",
+    topic = "apollo.ingestion.watchdog.library.changes",
+)
+
+kafka_connect_file_source_connector_instance(
+    name = "camel-file-source-kafka-connector-akko",
+    accepted_filetypes = "pdf,docx",
+    connector_name = "CamelFileSourceConnector__AkkoFileSourceToS3Upload",
+    namespace = "Akko",
+    root_dir = "/projects/akko/my_html/docs/",
+    topic = "apollo.ingestion.watchdog.library.files",
+)
+
+kafka_connect_file_watch_connector_instance(
+    name = "camel-file-watch-kafka-connector-tavor",
+    connector_name = "CamelFileWatchSourceConnector__TavorFileWatchSourceToS3Upload",
+    events = "MODIFY,DELETE",
+    namespace = "Tavor",
+    root_dir = "/projects/tavor/my_html/docs/",
+    topic = "apollo.ingestion.watchdog.library.changes",
+)
+
+kafka_connect_file_source_connector_instance(
+    name = "camel-file-source-kafka-connector-tavor",
+    accepted_filetypes = "pdf,docx",
+    connector_name = "CamelFileSourceConnector__TavorFileSourceToS3Upload",
+    namespace = "Tavor",
+    root_dir = "/projects/tavor/my_html/docs/",
+    topic = "apollo.ingestion.watchdog.library.files",
+)
+
+kafka_connect_connector_instance(
+    name = "http-sink-connector-file-watch-to-s3-upload",
+    connector_config = {
+        "connector.class": "io.aiven.kafka.connect.http.HttpSinkConnector",
+        "errors.deadletterqueue.topic.name": "artemis.ingestion.dlq.http-sink.library.files",
+        "errors.deadletterqueue.topic.replication.factor": 1,
+        "topics": ",".join(
+            [
+                "apollo.ingestion.watchdog.library.{file_topic}".format(
+                    file_topic = file_topic,
+                )
+                for file_topic in [
+                    "changes",
+                    "files",
+                ]
+            ],
+        ),
+        "http.authorization.type": "none",
+        # This is the module that will pick up the
+        # messages from the watchdog service and store
+        # the pointed document to S3 storage
+        "http.url": "http://backend-indexing-storage:8080/library",
+        # Here we set batching to True, because the ingestion service
+        # can will eventually send a batch of files to be ingested to the
+        # ingestion backend
+        "batching.enabled": False,
+        # Send up to 4 files for ingestion at once
+        "tasks.max": "1",
+        # Key is expected to a plain string, so we use a StringConverter
+        "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+        # Using a string converter for the value, because the JSON deserializer
+        # can't handle unescaped "/" characters in the JSON string
+        "value.converter": "org.apache.kafka.connect.storage.StringConverter",
+        "key.converter.schemas.enable": False,
+        "value.converter.schemas.enable": False,
+
+        # Value transformations
+        # 1. <path> (bytes) -> {"path": <path>} (JSON)
+        # 2. {"path": <path>} -> {"path": <path>, "namespace": <namespace>, "reason": <reason>}
+        "transforms": ",".join([
+            "HoistValueField",
+            "CopyNTILNamespaceHeadersToValue",
+            "RemovePathFieldForExistingFiles",
+            "InsertFilePathFromHeaderForExistingFiles",
+        ]),
+        "predicates": "IsExistingFileTopic",
+
+        # Formats the Kafka message to the format the indexing service expects
+        # 1. <path> (bytes) -> {"path": <path>} (JSON)
+        "transforms.HoistValueField.type": "org.apache.kafka.connect.transforms.HoistField$Value",
+        "transforms.HoistValueField.field": "path",
+
+        # 2. {"path": <path>} -> {"path": <path>, "namespace": <namespace>, "reason": <reason>}
+        "transforms.CopyNTILNamespaceHeadersToValue.type": "io.debezium.transforms.HeaderToValue",
+        "transforms.CopyNTILNamespaceHeadersToValue.headers": "NTILHeader.namespace,CamelHeader.CamelFileEventType",
+        "transforms.CopyNTILNamespaceHeadersToValue.fields": "namespace,reason",
+        "transforms.CopyNTILNamespaceHeadersToValue.operation": "copy",
+
+        # Small custom adjustments from files coming out of the apollo.ingestion.watchdog.library.files topic
+        # These have a "path" field that is not formatted correctly, and thakes the form "GenerticFile[<path>]"
+        # Which is not suitable for us, so we drop the field and then properly insert it from the header
+
+        # drop the "path" field from the value as it's ill formatted by the source connector
+        # and use the absolute path from the CamelHeader.CamelFileAbsolutePath header instead
+        "transforms.RemovePathFieldForExistingFiles.type": "org.apache.kafka.connect.transforms.ReplaceField$Value",
+        "transforms.RemovePathFieldForExistingFiles.exclude": "path",
+        "transforms.RemovePathFieldForExistingFiles.predicate": "IsExistingFileTopic",
+        "transforms.InsertFilePathFromHeaderForExistingFiles.type": "io.debezium.transforms.HeaderToValue",
+        "transforms.InsertFilePathFromHeaderForExistingFiles.headers": "CamelHeader.CamelFileAbsolutePath",
+        "transforms.InsertFilePathFromHeaderForExistingFiles.fields": "path",
+        "transforms.InsertFilePathFromHeaderForExistingFiles.operation": "copy",
+        "transforms.InsertFilePathFromHeaderForExistingFiles.predicate": "IsExistingFileTopic",
+        "predicates.IsExistingFileTopic.type": "org.apache.kafka.connect.transforms.predicates.TopicNameMatches",
+        "predicates.IsExistingFileTopic.pattern": "apollo\\.ingestion\\.watchdog\\.library\\.files",
+    },
+    connector_name = "AivenHttpSinkConnector__FileSourceWatcherToIngestionController",
 )
 
 # connection between S3 storage to ingestion controller
 kafka_connect_connector_instance(
-    name = "http-sink-connector-ingestion-controller",
+    name = "debezium-jdbc-sink-connector-file-ops-table",
     connector_config = {
-        "connector.class": "io.aiven.kafka.connect.http.HttpSinkConnector",
-        "topics": "venus.ingestion.storage.s3",
-        "http.authorization.type": "none",
-        "http.url": "http://backend-ingestion:8080/files",
-        "batching.enabled": True,
-        "batch.max.size": 2,
-        "batch.prefix": "[",
-        "batch.suffix": "]",
-        "batch.separator": ",",
+        "connector.class": "io.debezium.connector.jdbc.JdbcSinkConnector",
         "tasks.max": "1",
-        "key.converter": "org.apache.kafka.connect.storage.StringConverter",
-        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
-        "key.converter.schemas.enable": False,
-        "value.converter.schemas.enable": False,
-        # backeoff strategy
-        "kafka.retry.backoff.ms": 3,
-        "max.retries": 50,
-        "retry.backoff.ms": 3000,
+        # A topic created by KSQLDB processing streams
+        "topics": "apollo.ingestion.storage.s3.library.processed",
+        # Key and value are written as JSON Schema objects by KSQLDB
+        # see corresponding KSQLDB stream
+        "value.converter": "io.confluent.connect.json.JsonSchemaConverter",
+        "value.converter.schemas.enable": True,
+        "value.converter.schema.registry.url": "http://schemaregistry:8081",
+        "key.converter": "io.confluent.connect.json.JsonSchemaConverter",
+        "key.converter.schemas.enable": True,
+        "key.converter.schema.registry.url": "http://schemaregistry:8081",
+
+        # name of the table in the database to write to
+        "collection.name.format": "file_operations",
+
+        # Database connection properties
+        "connection.url": "jdbc:postgresql://postgres:5432/documents",
+        "connection.password": "debezium",  # TODO: change this to a proper secret
+        "connection.username": "debezium",  # TODO: change this to a non-privileged user
+
+        # Debzeium JDBC sink connector properties
+        "schema.evolution": "basic",
+        "insert.mode": "upsert",
+
+        # This allows the connector to delete records
+        "delete.enabled": "false",
+        # Tells the connector to use the message key to find the table's primary key
+        # and the value to delete
+        "primary.key.mode": "record_key",
+        # The actualy name of the field inside the message key (it's called "key" in the JSON struct to denote the object key)
+        "primary.key.fields": "task_id",
+        "use.time.zone": "UTC",
     },
-    connector_name = "HttpSinkConnectorConnector_StorageToIngestionController",
+    connector_name = "DebeziumJdbcSinkConnector__S3ToFilesOpsTable",
 )
 
+kafka_connect_connector_instance(
+    name = "debezium-cdc-postgres-connector-file-ops",
+    connector_config = {
+        "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+        # Consider changing this to "filtered" to allow Debezium to create publications automatically
+        # The 'debezium' user has ownership of the table so it can create publications
+        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "key.converter.schemas.enable": "false",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter.schemas.enable": "false",
 
+        # PostgreSQL connection properties
+        "database.user": "debezium",
+        "database.password": "debezium",  # TODO: change this to a proper secret
+        "database.dbname": "documents",
+        "database.port": "5432",
+        "database.hostname": "postgres",
+
+        # Debezium PostgreSQL connector properties
+        # Creates the topic 'apollo.ingestion.operations.bookkeeper.public.file_operations'
+        "topic.prefix": "apollo.ingestion.operations.bookkeeper",
+        "table.include.list": "public.file_operations",
+
+        # Use pgoutput plugin for logical decoding
+        "plugin.name": "pgoutput",
+
+        # Publication configuration
+        "publication.name": "files_operation_publication",
+        # TODO: consider changing this to "filtered" to allow Debezium to create publications automatically
+        # public.file_operations is ownded by the 'debezium' user, so it can create publications
+        "publication.autocreate.mode": "disabled",
+
+        # Subscrition configuration
+        "slot.name": "apollo_library_files_rep_slot",
+
+        # Use the ExtractNewRecordState transformation to extract the new record state
+        "transforms": "unwrap,taskIdToHeaders",
+        "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+        "transforms.unwrap.delete.tombstone.handling.mode": "rewrite",  # removes the tombstone messages and adds a '__deleted' field to the message value
+
+        # This transformation will take the 'task_id' field from the message value
+        # and copy it to the message headers as 'Camel.task_id'
+        # This is a preparation for the RabbitMQ sink connector
+        # which sinks messages into Celery. We do this because to Celery's message protocol V2
+        # requires the task ID to be present in the headers of the message:
+        #   See: https://docs.celeryq.dev/en/stable/internals/protocol.html#version-2
+        "transforms.taskIdToHeaders.type": "org.apache.kafka.connect.transforms.HeaderFrom$Value",
+        "transforms.taskIdToHeaders.fields": "task_id",
+        "transforms.taskIdToHeaders.headers": "CamelHeader.id",
+        "transforms.taskIdToHeaders.operation": "move",
+    },
+    connector_name = "DebeziumPostgresSourceConnector__FileOpsBookkeeperToIngestion",
+)
+
+# define the configuration for the RabbitMQ sink connectors
+# for events produced via S3 storage events and pushed to Kafka
+[
+    kafka_connect_connector_instance(
+        name = "camel-rabbitmq-sink-connector-ingestion-task-queue-{namespace}".format(namespace = namespace),
+        connector_config = {
+            "connector.class": "org.apache.camel.kafkaconnector.springrabbitmqsink.CamelSpringrabbitmqsinkSinkConnector",
+            "topics": "apollo.ingestion.celery.tasks.{namespace}".format(namespace = namespace),
+            "value.converter.schemas.enable": "false",
+            "tasks.max": "1",
+
+            # RabbitMQ connection properties
+            "camel.kamelet.spring-rabbitmq-sink.host": "rabbitmq",
+            "camel.kamelet.spring-rabbitmq-sink.port": "5672",
+            "camel.kamelet.spring-rabbitmq-sink.password": "apollo",
+            "camel.kamelet.spring-rabbitmq-sink.username": "apollo",
+
+            # Virtual Host, exchange and queues properties
+            # Apollo has a single RabbitMQ virtual host for all namespaces
+            "camel.kamelet.spring-rabbitmq-sink.vhost": "apollo",
+            # We a have a single exchange for all namespaces
+            # Messages will be routed to the appropriate queue using the routing key
+            # All ingestion messages will be routed via the the "ingestion" exchange
+            "camel.kamelet.spring-rabbitmq-sink.exchangeName": "ingestion",
+
+            # Messages will be routed to the appropriate queue using the routing key
+            # For example: a connector with a configured routing key "library" will send
+            # the Kafka topic messages to the "apollo.ingestion.library" queue
+            "camel.kamelet.spring-rabbitmq-sink.routingKey": "{namespace}".format(namespace = namespace),
+            "camel.kamelet.spring-rabbitmq-sink.queues": "apollo.ingestion.{namespace}".format(namespace = namespace),
+
+            # Queue declaration happens automatically
+            # when the connector starts, so we don't need to declare them manually
+            "camel.kamelet.spring-rabbitmq-sink.autoDeclareProducer": "true",
+
+            # We need to add the two following fields to the headers in order for Celery to acdept messages
+            # sinked by this connector
+            # 1. CamelHeader.id - taken care of by the CDC connector which puts the task_id in the headers
+            # 2. CamelHeader.task - the name of the Celery task that recieves the message
+            # 3. CamelHeader.CamelRabbitmqContentType - the content type of the message, which is "application/json"
+            #
+            #    This is required by Celery to process the message correctly
+            "transforms": "insertTaskNameHeader,insertCamelContentTypeHeader",
+
+            # 1. CamelHeader.task - the name of the Celery task that recieves the message
+            "transforms.insertTaskNameHeader.type": "org.apache.kafka.connect.transforms.InsertHeader",
+            "transforms.insertTaskNameHeader.header": "CamelHeader.task",
+            "transforms.insertTaskNameHeader.value.literal": "tasks.ingestion.{namespace}".format(namespace = namespace),
+
+            # 2. CamelHeader.CamelRabbitmqContentType - the content type of the message, which is "application/json"
+            #    This is required by Celery to process the message correctly
+            "transforms.insertCamelContentTypeHeader.type": "org.apache.kafka.connect.transforms.InsertHeader",
+            "transforms.insertCamelContentTypeHeader.header": "CamelHeader.CamelSpringRabbitmqContentType",
+            "transforms.insertCamelContentTypeHeader.value.literal": "application/json",
+        },
+        connector_name = "CamelRabbitMQSinkConnector__KSQLDB{namespace}TasksToTaskQueue".format(namespace = namespace.capitalize()),
+    )
+    for namespace in [
+        "library",
+        "private",
+    ]
+]
+
+kafka_connect_connector_instance(
+    name = "debezium-cdc-postgres-task-results",
+    connector_config = {
+        "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter.schemas.enable": "false",
+        "key.converter.schemas.enable": "false",
+
+        # This connector will publish the Celery task results to the Kafka topic
+        # 'apollo.ingestion.celery.results.public.apollo_celery_taskmeta'
+        "topic.prefix": "apollo.ingestion.celery.results",
+        "table.include.list": "public.apollo_celery_taskmeta",
+
+        # Connection configuration
+        "database.user": "debezium",
+        "database.password": "debezium",  # TODO: change this to a proper secret
+        "database.hostname": "postgres",
+        "database.port": "5432",
+        "database.dbname": "documents",
+
+        # Pub/sub configuration
+        "slot.name": "apollo_taskmeta_table_rep_slot",
+        "publication.name": "celery_results_publication",
+        "publication.autocreate.mode": "disabled",
+        "plugin.name": "pgoutput",
+        "transforms": "unwrap",
+        "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+        "transforms.unwrap.delete.tombstone.handling.mode": "rewrite",
+    },
+    connector_name = "DebeziumPostgresSourceConnector__CeleryResultBackendPublish",
+)
+
+kafka_connect_connector_instance(
+    name = "debezium-jdbc-sink-private-files-table",
+    connector_config = {
+        "connector.class": "io.debezium.connector.jdbc.JdbcSinkConnector",
+        "tasks.max": "1",
+        "topics": "apollo.ingestion.files.private",
+        "value.converter": "io.confluent.connect.json.JsonSchemaConverter",
+        "value.converter.schemas.enable": True,
+        "value.converter.schema.registry.url": "http://schemaregistry:8081",
+        "key.converter": "io.confluent.connect.json.JsonSchemaConverter",
+        "key.converter.schemas.enable": True,
+        "key.converter.schema.registry.url": "http://schemaregistry:8081",
+        "connection.password": "debezium",
+        "connection.username": "debezium",
+        "connection.url": "jdbc:postgresql://postgres:5432/documents",
+
+        # sink results from the topic to the public.files table
+        "collection.name.format": "files",
+
+        # primary key configuration
+        # Messages are expected to have these fields (id, user_id, chat_id)
+        # in the message key
+        "primary.key.mode": "record_key",
+        "primary.key.fields": "id,user_id,chat_id",
+
+        # updates on conflict, allows deletion from the table
+        "insert.mode": "upsert",
+        "delete.enabled": "true",
+        "schema.evolution": "basic",
+        "use.time.zone": "UTC",
+    },
+    connector_name = "DebeziumJdbcSinkConnector__TaskResultToFilesPrivateTable",
+)
+
+kafka_connect_connector_instance(
+    name = "debezium-jdbc-sink-library-files-table",
+    connector_config = {
+        "connector.class": "io.debezium.connector.jdbc.JdbcSinkConnector",
+        "tasks.max": "1",
+        "topics": "apollo.ingestion.files.catalog",
+        "value.converter": "io.confluent.connect.json.JsonSchemaConverter",
+        "value.converter.schemas.enable": True,
+        "value.converter.schema.registry.url": "http://schemaregistry:8081",
+        "key.converter": "io.confluent.connect.json.JsonSchemaConverter",
+        "key.converter.schemas.enable": True,
+        "key.converter.schema.registry.url": "http://schemaregistry:8081",
+        "connection.password": "debezium",
+        "connection.username": "debezium",
+        "connection.url": "jdbc:postgresql://postgres:5432/documents",
+
+        # sink results from the topic to the public.catalog table
+        "collection.name.format": "catalog",
+
+        # primary key configuration
+        # Messages are expected to have these fields (id, user_id, chat_id)
+        # in the message key
+        "primary.key.mode": "record_key",
+        "primary.key.fields": "namespace,path",
+
+        # updates on conflict, allows deletion from the table
+        "insert.mode": "upsert",
+        "delete.enabled": "true",
+        "schema.evolution": "basic",
+        "use.time.zone": "UTC",
+    },
+    connector_name = "DebeziumJdbcSinkConnector__TaskResultToFilesCatalogTable",
+)
+
+kafka_connect_connector_instance(
+    name = "debezium-cdc-postgres-private-files",
+    connector_config = {
+        "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter.schemas.enable": False,
+        "key.converter.schemas.enable": False,
+
+        # This connector will publish the Celery task results to the Kafka topic
+        # 'apollo.ingestion.tables.public.files'
+        "topic.prefix": "apollo.ingestion.tables",
+        "table.include.list": "public.files",
+
+        # Connection configuration
+        "database.user": "debezium",
+        "database.password": "debezium",  # TODO: change this to a proper secret
+        "database.hostname": "postgres",
+        "database.port": "5432",
+        "database.dbname": "documents",
+
+        # Pub/sub configuration
+        "slot.name": "private_files_table_rep_slot",
+        "publication.name": "files_publication",
+        "publication.autocreate.mode": "disabled",
+        "plugin.name": "pgoutput",
+        "transforms": "unwrap",
+        "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+        "transforms.unwrap.delete.tombstone.handling.mode": "rewrite",
+    },
+    connector_name = "DebeziumPostgresSourceConnector__FilesPrivatePublish",
+)
+
+kafka_connect_connector_instance(
+    name = "camel-http-sink-private-files-auto-delete",
+    connector_config = {
+        "connector.class": "org.apache.camel.kafkaconnector.httpsink.CamelHttpsinkSinkConnector",
+        "tasks.max": 1,
+
+        # pulling messages from a KSQLDB stream that processes
+        # CDC events from public.files tables and convert them
+        # to a format suitable for the /upload/auto input schema
+        # in the backend indexing storage service:
+        #   {
+        #       "doc_ids": List[UUID],
+        #       "user_id": UUID,
+        #       "chat_session_id": UUID,
+        #   }
+        #
+        #
+        #
+        "topics": "apollo.ingestion.storage.private.auto.deleted",
+
+        # Camel don't play nice with Json-ish converters, so use a plain string converter
+        # for above topic messages
+        "value.converter": "org.apache.kafka.connect.storage.StringConverter",
+        "value.converter.schemas.enable": False,
+        "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+        "key.converter.schemas.enable": False,
+
+        # Using PUT message here because Camel Http sink connector refuses to send
+        # an HTTP body for a DELETE request unless a special flag is chosen
+        # (https://camel.apache.org/components/4.10.x/http-component.html#_endpoint_query_option_deleteWithBody)
+        # and I don't know how to set it for this connector
+        "camel.kamelet.http-sink.url": "http://backend-indexing-storage:8080/upload/auto",
+        "camel.kamelet.http-sink.method": "PUT",
+    },
+    connector_name = "CamelHttpSinkConnector__PrivateFilesAutoDelete",
+)
 
 kafka_connect_init_image(
     name = "kafka-connect-init",
-    # we use curl to manipulate the Kafka Connect via its REST API
+    # we use curl to configure connectors to Kafka Connect via its REST API
     base = "@curl",
     # connector instance configuration JSON files will end up
     # under /config/ directory in the resulting image
     connector_config_dir = "config",
     connectors = [
-        # ":qdrant-sink-connector-0",
-        ":http-sink-connector-library",
+        # OT GitHub Pull Request Comments -> Kafka
+        # ":camel-ot-github-pullrequest-comment-source-kafka-connector",
+
+        # Files -> Kafka (Files)
+        ":camel-file-source-kafka-connector-test",
+        ":camel-file-watch-kafka-connector-test",
+        ":camel-file-source-kafka-connector-opentitan",
+        ":camel-file-watch-kafka-connector-opentitan",
+        ":camel-file-source-kafka-connector-akko",
+        ":camel-file-watch-kafka-connector-akko",
+        ":camel-file-source-kafka-connector-tavor",
+        ":camel-file-watch-kafka-connector-tavor",
+
+        # Kafka (Files) -> S3
+        ":http-sink-connector-file-watch-to-s3-upload",
+
+        # Kafka (S3) -> file operations SQL table
+        ":debezium-jdbc-sink-connector-file-ops-table",
+
+        # File operations SQL table + (task_id -> headers) -> Kafka (CDC)
+        ":debezium-cdc-postgres-connector-file-ops",
+
+        # Kafka (CDC) -> Celery (RabbitMQ task queues)
+        ":camel-rabbitmq-sink-connector-ingestion-task-queue-library",
+        ":camel-rabbitmq-sink-connector-ingestion-task-queue-private",
+
+        # Celery task results -> Kafka (CDC)
+        ":debezium-cdc-postgres-task-results",
+
+        # Kafka (CDC) -> Private File Table (SQL)
+        ":debezium-jdbc-sink-private-files-table",
+        ":debezium-jdbc-sink-library-files-table",
+
+        # Private File Table (SQL) -> Kafka
+        ":debezium-cdc-postgres-private-files",
+
+        # Kafka (private files auto delete) -> backend storage service (HTTP)
+        ":camel-http-sink-private-files-auto-delete",
     ],
     # this is where the initialization script will run from inside the container
     # the entrypoint is currently fixed to "sh -c /<exec_dir>/init-script.sh"
-    exec_dir = "etc/bin",
+    exec_dir = "etc/bin",  # nit: does this actually have to be exposed to the user?
 )
 
 oci_load(
     name = "kafka-connect-init.tarball",
     image = ":kafka-connect-init",
-    repo_tags = ["venus/cp-kafka-connect-init:latest"],
+    repo_tags = ["apollo/cp-kafka-connect-init:latest"],
+)
+
+command(
+    name = "kafka-connect-init.cmd",
+    command = ":kafka-connect-init.tarball",
+)
+
+filegroup(
+    name = "build.all",
+    srcs = [
+        "//tools/oci/images/{tool}:image".format(tool = tool)
+        for tool in [
+            "kong",
+            "ksqldb",
+            "postgres",
+        ]
+    ] + [
+        ":kafka-connect",
+        ":kafka-connect-init",
+    ],
+    visibility = ["//:__pkg__"],
+)
+
+[
+    command(
+        name = "{tool}.cmd".format(tool = tool),
+        command = "//tools/oci/images/{tool}:tarball".format(tool = tool),
+    )
+    for tool in [
+        "kong",
+        "ksqldb",
+        "postgres",
+    ]
+]
+
+multirun(
+    name = "load.all",
+    commands = [
+        "{tool}.cmd".format(tool = tool)
+        for tool in [
+            "kafka-connect",
+            "kafka-connect-init",
+            "kong",
+            "ksqldb",
+            "postgres",
+        ]
+    ],
+    visibility = ["//:__pkg__"],
 )

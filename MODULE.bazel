@@ -1,66 +1,60 @@
 # -------------------------------------
-# Copyright (c) 2023, Dror Kabely
+# Copyright (c) 2026, Dror Kabely
 # -------------------------------------
 #
 
 module(
-    name = "celery-ingestion",
+    name = "artemis",
     version = "0.0.1",
     compatibility_level = 1,
 )
 
-# load python bazel rules
-PY_RULES_VERSION = "0.27.1"
-
-OCI_RULES_VERSION = "1.8.0"
-
-CONTAINER_STRUCTURE_TEST_VERSION = "1.16.0"
-
-ASPECT_BAZEL_LIB_VERSION = "2.15.3"
+PY_RULES_VERSION = "0.36.0"
 
 PY_VERSION = "3.11"
 
-bazel_dep(name = "rules_python", version = "0.40.0")
-bazel_dep(name = "rules_oci", version = OCI_RULES_VERSION)
-bazel_dep(name = "container_structure_test", version = CONTAINER_STRUCTURE_TEST_VERSION)
-bazel_dep(name = "aspect_rules_py", version = "0.7.3")
-bazel_dep(name = "aspect_rules_lint", version = "1.0.2")
-bazel_dep(name = "rules_multirun", version = "0.9.0")
-bazel_dep(name = "rules_distroless", version = "0.5.1")
+ASPECT_RULES_LINT_VERSION = "1.0.2"
 
-bazel_dep(name = "aspect_bazel_lib", version = ASPECT_BAZEL_LIB_VERSION)
-bazel_dep(name = "aspect_rules_jest", version = "0.22.0")
-bazel_dep(name = "aspect_rules_js", version = "2.0.2")
-bazel_dep(name = "aspect_rules_swc", version = "2.0.1")
-bazel_dep(name = "aspect_rules_ts", version = "3.1.0")
-bazel_dep(name = "aspect_rules_rollup", version = "2.0.0")
-bazel_dep(name = "aspect_rules_webpack", version = "0.16.0")
-bazel_dep(name = "bazel_skylib", version = "1.7.1")
-bazel_dep(name = "rules_nodejs", version = "6.2.0")
+BUILDIFIER_PREBUILT_VERSION = "7.3.1"
 
+# declare dependency on Bazel's Python rules
+bazel_dep(name = "rules_python", version = PY_RULES_VERSION)
 
-# ----------------------- PYTHON GAZELLE ------------------------------------
+# ------------------ LINT & FORMAT ----------------------------------------------
+bazel_dep(name = "aspect_rules_lint", version = ASPECT_RULES_LINT_VERSION)
+bazel_dep(name = "buildifier_prebuilt", version = BUILDIFIER_PREBUILT_VERSION)
+# -------------------------------------------------------------------------------
+
+# ------------------ PYTHON GAZELLE ---------------------------------------------
 # The following stanza defines the dependency rules_python_gazelle_plugin.
 # For typical setups you set the version.
-bazel_dep(name = "rules_python_gazelle_plugin", version = "0.22.0")
+bazel_dep(name = "rules_python_gazelle_plugin", version = "0.36.0")
 
 # The following stanza defines the dependency gazelle.
-bazel_dep(name = "gazelle", version = "0.31.0", repo_name = "bazel_gazelle")
-# ----------------------- PYTHON GAZELLE ------------------------------------
+bazel_dep(name = "gazelle", version = "0.39.1", repo_name = "bazel_gazelle")
+# -------------------------------------------------------------------------------
 
-# We next initialize the python toolchain using the extension.
-# You can set different Python versions in this block.
+# ------------------ Containerization -------------------------------------------
+bazel_dep(name = "aspect_bazel_lib", version = "2.16.0")
+bazel_dep(name = "container_structure_test", version = "1.16.0")
+bazel_dep(name = "aspect_rules_py", version = "1.0.0-rc1")
+bazel_dep(name = "rules_oci", version = "1.8.0")
+bazel_dep(name = "platforms", version = "0.0.10")
+bazel_dep(name = "rules_multirun", version = "0.9.0")
+bazel_dep(name = "bazel_skylib", version = "1.7.1")
+bazel_dep(name = "rules_distroless", version = "0.5.1")
+# -------------------------------------------------------------------------------
+
+# Next, initialize the hermetic Python toolchain using this extension.
+# This will allow running Python separated from the system interpreter
+# and without manually creating a virtual environment
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.toolchain(
     configure_coverage_tool = True,
-    # Only set when you have mulitple toolchain versions.
     is_default = True,
     python_version = PY_VERSION,
 )
-
-# You only need to load this repositories if you are using multiple Python versions.
-# I'm doing this for the sake of consistency with the original G repo
-use_repo(python, "python_3_11", "python_versions")
+use_repo(python, "python_3_11")
 
 # Register an already-defined toolchain so that Bazel can use it during toolchain resolution.
 register_toolchains(
@@ -87,23 +81,42 @@ use_repo(pip, "pip")
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
 oci.pull(
     name = "ubuntu",
+    digest = "sha256:b359f1067efa76f37863778f7b6d0e8d911e3ee8efa807ad01fbf5dc1ef9006b",
     image = "ubuntu",
     platforms = [
         "linux/arm64/v8",
         "linux/amd64",
     ],
     tag = "latest",
-    digest = "sha256:b359f1067efa76f37863778f7b6d0e8d911e3ee8efa807ad01fbf5dc1ef9006b",
+)
+oci.pull(
+    name = "postgres",
+    digest = "sha256:5af45ac79f38cb3b0584ff4ff222917edbdde309d187aa69aa91671807e6bc61",
+    image = "postgres",
+    platforms = [
+        "linux/amd64",
+    ],
+    tag = "17.2-bullseye",
 )
 oci.pull(
     name = "cp-kafka-connect",
+    digest = "sha256:93c0175e000ca49be814afe10cc42da281b475e937d20180e56c390667947636",
     image = "docker.io/confluentinc/cp-kafka-connect-base",
     platforms = [
         "linux/arm64/v8",
         "linux/amd64",
     ],
     tag = "7.9.0",
-    digest = "sha256:93c0175e000ca49be814afe10cc42da281b475e937d20180e56c390667947636",
+)
+oci.pull(
+    name = "cp-ksqldb-cli",
+    digest = "sha256:68a87a469e577c6b5c02f1a39a80d901f5af35a5027609ee77d525d010ef8fa7",
+    image = "index.docker.io/confluentinc/cp-ksqldb-cli",
+    platforms = [
+        "linux/arm64/v8",
+        "linux/amd64",
+    ],
+    tag = "7.9.1",
 )
 oci.pull(
     name = "curl",
@@ -115,58 +128,76 @@ oci.pull(
     ],
     tag = "8.13.0",
 )
+
+# make images ready for use as third-party repos
 use_repo(
-    oci, 
-    "ubuntu",
+    oci,
+    "cp-kafka-connect",
+    "cp-ksqldb-cli",
     "curl",
-    "cp-kafka-connect"
+    "postgres",
+    "ubuntu",
 )
 
-
-apt = use_extension("@rules_distroless//apt:extensions.bzl", "apt")
+apt = use_extension(
+    "@rules_distroless//apt:extensions.bzl",
+    "apt",
+    dev_dependency = True,
+)
 apt.install(
     name = "noble",
-    #lock = "//tools/oci/ubuntu:noble.lock.json",
-    nolock=True,
-    manifest = "//tools/oci/ubuntu:noble.yaml",
-    # resolve_transitive=False,
+    lock = "//tools/oci/images/ubuntu:noble.lock.json",
+    manifest = "//tools/oci/images/ubuntu:noble.yaml",
 )
 use_repo(apt, "noble")
 
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
 # HTTP kafka sink connector compiled sources
 http_archive(
     name = "aiven-http-sink-kafka-connect-0.9.0",
-    url = "https://github.com/Aiven-Open/http-connector-for-apache-kafka/releases/download/v0.9.0/http-connector-for-apache-kafka-0.9.0.tar",
     build_file = "@//tools/kafka/connectors:generic.BUILD",
-    integrity = "sha256-cv6hTqPFilydCOCMXa4kBMtbBKj3MgbF1xfZfhP7vwc="
+    integrity = "sha256-cv6hTqPFilydCOCMXa4kBMtbBKj3MgbF1xfZfhP7vwc=",
+    url = "https://github.com/Aiven-Open/http-connector-for-apache-kafka/releases/download/v0.9.0/http-connector-for-apache-kafka-0.9.0.tar",
 )
 
 # Qdrant kafka sink connector compiled sources
 http_archive(
     name = "qdrant-sink-kafka-connect-1.2.0",
-    url = "https://github.com/qdrant/qdrant-kafka/releases/download/v1.12.0/qdrant-kafka-1.2.0.zip",
     build_file = "@//tools/kafka/connectors:generic.BUILD",
     integrity = "sha256-lfIWT7snY5p3emLI4vwTE311mxRKw2ysd9AeL0pRZIQ=",
+    url = "https://github.com/qdrant/qdrant-kafka/releases/download/v1.12.0/qdrant-kafka-1.2.0.zip",
 )
 
 http_archive(
     name = "camel-spring-rabbitmq-sink-connect-4.10.3",
-    url = "https://repo.maven.apache.org/maven2/org/apache/camel/kafkaconnector/camel-spring-rabbitmq-sink-kafka-connector/4.10.3/camel-spring-rabbitmq-sink-kafka-connector-4.10.3-package.tar.gz",
     build_file = "@//tools/kafka/connectors:generic.BUILD",
     integrity = "sha256-Qwwcwnv8JHeL/95nEsVyFqFeG/gWbl7RY/dN56AXjfc=",
+    url = "https://repo.maven.apache.org/maven2/org/apache/camel/kafkaconnector/camel-spring-rabbitmq-sink-kafka-connector/4.10.3/camel-spring-rabbitmq-sink-kafka-connector-4.10.3-package.tar.gz",
 )
 
 http_archive(
     name = "debezium-jdbc-sink-connect-3.2.0",
-    url = "https://repo1.maven.org/maven2/io/debezium/debezium-connector-jdbc/3.2.0.Final/debezium-connector-jdbc-3.2.0.Final-plugin.tar.gz",
     build_file = "@//tools/kafka/connectors:generic.BUILD",
     integrity = "sha256-eaL1oCzRjTwaGfSLJuLhFwGQZ2oa8mZwI4lw0a4TbQU=",
+    url = "https://repo1.maven.org/maven2/io/debezium/debezium-connector-jdbc/3.2.0.Final/debezium-connector-jdbc-3.2.0.Final-plugin.tar.gz",
 )
 
 http_archive(
     name = "debezium-postgres-source-connect-3.2.0",
-    url = "https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/3.2.0.Final/debezium-connector-postgres-3.2.0.Final-plugin.tar.gz",
     build_file = "@//tools/kafka/connectors:generic.BUILD",
     integrity = "sha256-KvzR91X/xsrbaif8SWoScAUS40PoMKdewORWbblTj1A=",
+    url = "https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/3.2.0.Final/debezium-connector-postgres-3.2.0.Final-plugin.tar.gz",
+)
+
+http_archive(
+    name = "camel-file-watch-source-kafka-connector-4.10.3",
+    build_file = "@//tools/kafka/connectors:generic.BUILD",
+    url = "https://repo.maven.apache.org/maven2/org/apache/camel/kafkaconnector/camel-file-watch-source-kafka-connector/4.10.3/camel-file-watch-source-kafka-connector-4.10.3-package.tar.gz",
+)
+
+http_archive(
+    name = "camel-file-source-kafka-connector-4.10.3",
+    build_file = "@//tools/kafka/connectors:generic.BUILD",
+    url = "https://repo.maven.apache.org/maven2/org/apache/camel/kafkaconnector/camel-file-kafka-connector/4.10.3/camel-file-kafka-connector-4.10.3-package.tar.gz",
 )
