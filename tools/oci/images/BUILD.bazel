@@ -16,23 +16,19 @@ load("@rules_oci//oci:defs.bzl", oci_load = "oci_tarball")
 
 # srcs of the custom connects
 _CP_KAFKA_CONNECT_CONNECTORS_SRCS = {
-    "qdrant-sink-kafka-connect": ["@qdrant-sink-kafka-connect-1.2.0//:srcs"],
+    "qdrant-sink-kafka-connect": ["@qdrant-sink-kafka-connect-1.3.0//:srcs"],
     "http-sink-kafka-connect": ["@aiven-http-sink-kafka-connect-0.9.0//:srcs"],
-    "debezium-postgres-cdc-connector": ["@debezium-postgres-cdc-source-connector-3.1.1.final//:srcs"],
-    "debezium-jdbc-sink-connector": ["@debezium-jdbc-sink-connector-3.1.1.final//:srcs"],
+    "debezium-postgres-cdc-connector": ["@debezium-postgres-cdc-source-connect-3.2.0//:srcs"],
+    "debezium-jdbc-sink-connector": ["@debezium-jdbc-sink-connect-3.2.0//:srcs"],
     "camel-file-watch-source-kafka-connector": [
         "@camel-file-watch-source-kafka-connector-4.10.3//:srcs",
     ],
     "camel-file-source-kafka-connector-4.10.3": [
         "@camel-file-source-kafka-connector-4.10.3//:srcs",
     ],
-    "camel-github-pullrequest-comment-source-kafka-connector": [
-        "@camel-github-pullrequest-comment-source-kafka-connector-4.10.3//:srcs",
+    "camel-spring-rabbitmq-sink-kafka-connector-4.10.3": [
+        "@camel-spring-rabbitmq-sink-connect-4.10.3//:srcs",
     ],
-    "camel-spring-rabbitmq-sink-kafka-connector": [
-        "@camel-spring-rabbitmq-sink-kafka-connector-4.10.3//:srcs",
-    ],
-    "camel-http-sink-kafka-connector": ["@camel-http-sink-kafka-connect-4.10.3//:srcs"],
 }
 
 kafka_connect_image(
@@ -49,7 +45,7 @@ oci_load(
     name = "kafka-connect.tarball",
     image = ":kafka-connect",
     # use this tag as image name for Kafka Connect worker in docker-compose.yaml
-    repo_tags = ["apollo/cp-kafka-connect:latest"],
+    repo_tags = ["artemis/cp-kafka-connect:latest"],
 )
 
 command(

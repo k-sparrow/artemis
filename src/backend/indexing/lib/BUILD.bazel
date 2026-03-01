@@ -12,11 +12,3 @@ py_library(
     ],
     visibility = ["//src/backend/indexing:__subpackages__"],
 )
-
-py_library(
-    name = "exceptions",
-    srcs = [
-        "exceptions.py",
-    ],
-    visibility = ["//src/backend/indexing:__subpackages__"],
-)

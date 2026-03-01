@@ -1,0 +1,44 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+
+package(
+    default_visibility = [
+        "//visibility:private",
+    ],
+)
+
+py_library(
+    name = "conftest",
+    testonly = True,
+    srcs = ["conftest.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//tests/lib/testcontainers/tei:pkg",
+        requirement("langchain-core"),
+        requirement("pytest"),
+        requirement("requests"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_huggingface",
+    srcs = ["test_huggingface.py"],
+    env = {
+        "TC_MAX_TRIES": "1000000000",
+    },
+    tags = ["unit"],
+    deps = [
+        ":conftest",
+        "//src/lib/core/adapters/embedding:pkg",
+        requirement("langchain-core"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+    ],
+)

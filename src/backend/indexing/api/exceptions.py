@@ -1,7 +1,7 @@
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from src.backend.indexing.lib.exceptions import DocumentProcessingException
+from src.lib.core.ingestion.exceptions import DocumentProcessingException
 
 __all__ = [
     "EXCEPTION_HANDLER_MAPPING",

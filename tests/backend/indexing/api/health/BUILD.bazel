@@ -1,0 +1,25 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library", "py_test")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "conftest",
+    srcs = ["conftest.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        requirement("pytest"),
+        requirement("qdrant-client"),
+    ],
+)
+
+py_test(
+    name = "test_checks",
+    srcs = ["test_checks.py"],
+    deps = [
+        ":conftest",
+        "//src/backend/indexing/api/health:checks",
+        requirement("aiohttp"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+        requirement("qdrant-client"),
+    ],
+)

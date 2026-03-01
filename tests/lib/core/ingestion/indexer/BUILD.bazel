@@ -1,0 +1,16 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+
+py_test(
+    name = "test_simple",
+    srcs = ["test_simple.py"],
+    env = {},
+    tags = ["unit"],
+    deps = [
+        "//src/lib/core/ingestion/indexer:simple",
+        "//tests/lib/core/ingestion:conftest",
+        requirement("langchain_core"),
+        requirement("pytest"),
+    ],
+)

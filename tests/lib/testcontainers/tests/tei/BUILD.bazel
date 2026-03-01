@@ -1,0 +1,44 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@pip//:requirements.bzl", "requirement")
+
+package(
+    default_visibility = ["//visibility:private"],
+)
+
+py_test(
+    name = "test_tei",
+    srcs = [
+        "conftest.py",
+        "test_tei.py",
+    ],
+    env = {"TC_MAX_TRIES": "1000000000"},
+    tags = ["unit"],
+    deps = [
+        "//src/lib/core/adapters/document_compressors/huggingface:client",
+        "//tests/lib/testcontainers/tei:pkg",
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_tei_integration",
+    srcs = [
+        "conftest.py",
+        "test_tei.py",
+    ],
+    env = {"TC_MAX_TRIES": "1000000000"},
+    tags = ["integration"],
+    deps = [
+        "//src/lib/core/adapters/document_compressors/huggingface:client",
+        "//tests/lib/testcontainers/tei:pkg",
+        requirement("pytest"),
+        requirement("requests"),
+        requirement("testcontainers"),
+    ],
+)

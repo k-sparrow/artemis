@@ -1,25 +1,24 @@
-from src.backend.indexing.lib.processing.pipeline import (
+"""Legacy processing module - moved to src.lib.core.ingestion.
+
+This module provides backward compatibility by re-exporting from the new location.
+All new code should import directly from src.lib.core.ingestion.
+"""
+
+# Re-export from new location for backward compatibility
+from src.lib.core.ingestion import (  # noqa: F401
     BasePipeline,
     Pipeline,
-)
-from src.backend.indexing.lib.processing.indexer import (
     Indexer,
     SimpleIndexer,
     SemiStructuredIndexer,
-)
-from src.backend.indexing.lib.processing.upserter import (
     Upserter,
     SimpleUpserter,
     SemiStructuredUpserter,
-)
-from src.backend.indexing.lib.processing.types import (
     InputT,
     OutputT,
-    PipelineInput,
-    PipelineOutput,
-    ProcessedData,
     ProcessedT,
     SplitChunks,
+    DocumentProcessingException,
 )
 
 __all__ = [
@@ -35,11 +34,10 @@ __all__ = [
     "SimpleUpserter",
     "SemiStructuredUpserter",
     # Types
-    "PipelineInput",
-    "ProcessedData",
-    "PipelineOutput",
     "SplitChunks",
     "InputT",
     "ProcessedT",
     "OutputT",
+    # Exceptions
+    "DocumentProcessingException",
 ]

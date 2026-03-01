@@ -3,15 +3,10 @@
 # -------------------------------------
 #
 
-load("@rules_oci//oci:defs.bzl", "oci_image", oci_load = "oci_tarball", "oci_push")
-load("@bazel_skylib//rules:write_file.bzl", "write_file")
-load("@aspect_bazel_lib//lib:tar.bzl", "tar", "mtree_spec", "mtree_mutate")
-load("@aspect_bazel_lib//lib:testing.bzl", "assert_archive_contains")
-
 filegroup(
     name = "build.all",
     srcs = [
         "//src/backend/indexing/api:image",
         # "//src/backend/indexing/api:worker-image",
-    ]
+    ],
 )

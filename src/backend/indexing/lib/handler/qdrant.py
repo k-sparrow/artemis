@@ -55,13 +55,16 @@ class QdrantVectorStoreHandler(BaseVectorHandler):
                     ),
                 )
 
-                return AsyncQdrantVectorStore(
-                    client=self.client,
-                    collection_name=self._collection_name,
-                    embedding=self.embeddings,
-                )
             except Exception as e:
-                raise
+                raise RuntimeError(
+                    f"Failed to initialise Qdrant collection '{self._collection_name}'"
+                ) from e
+
+        return AsyncQdrantVectorStore(
+            client=self.client,
+            collection_name=self._collection_name,
+            embedding=self.embeddings,
+        )
 
     async def aclose(self):
         self.client.close()

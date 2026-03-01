@@ -1,16 +1,15 @@
+import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, BinaryIO, Dict
 from uuid import UUID
 
 from fastapi import FastAPI
 from minio import Minio
-from minio.error import MinioException
 from minio.notificationconfig import NotificationConfig, QueueConfig
 
-from src.backend.storage.api.config import storage_settings as settings
-from src.backend.storage.api.dependencies import (
-    get_minio_client,
-)
+from src.backend.storage.api.config import settings
+from src.backend.storage.api.dependencies import get_minio_client
+from src.lib.backend.logging import configure_logging, get_logger
 
 __all__ = [
     "create_bucket",
@@ -20,41 +19,29 @@ __all__ = [
 ]
 
 
-# TODO: move this to a utility module
 def format_kafka_event_arn_sqs(main_name: str) -> str:
     return f"arn:minio:sqs::{main_name}:kafka"
 
 
-# Create a new bucket if it does not exist
 async def create_bucket(minio_client: Minio, bucket_name: str) -> None:
-    try:
-        if not minio_client.bucket_exists(bucket_name=bucket_name):
-            minio_client.make_bucket(bucket_name=bucket_name, object_lock=False)
-    except MinioException:
-        raise
+    if not minio_client.bucket_exists(bucket_name=bucket_name):
+        minio_client.make_bucket(bucket_name=bucket_name, object_lock=False)
 
 
 async def link_s3_bucket_with_kafka_event(
-    minio_client: Minio, bucket_name: str, event_name_name: str
+    minio_client: Minio, bucket_name: str, event_name: str
 ) -> None:
-    try:
-        # link between the bucket and the event topic
-        minio_client.set_bucket_notification(
-            bucket_name=bucket_name,
-            config=NotificationConfig(
-                queue_config_list=[
-                    QueueConfig(
-                        queue=format_kafka_event_arn_sqs(main_name=event_name_name),
-                        # This will emit only s3:ObjectCreated:Put for some reason
-                        # but s3:ObjectCreated:Put will set the event type to "other"
-                        # (also for unknown reason)
-                        events=["s3:ObjectCreated:*"],
-                    )
-                ]
-            ),
-        )
-    except MinioException:
-        raise
+    minio_client.set_bucket_notification(
+        bucket_name=bucket_name,
+        config=NotificationConfig(
+            queue_config_list=[
+                QueueConfig(
+                    queue=format_kafka_event_arn_sqs(main_name=event_name),
+                    events=["s3:ObjectCreated:*"],
+                )
+            ]
+        ),
+    )
 
 
 def s3_dump_object(
@@ -64,7 +51,7 @@ def s3_dump_object(
     size: int,
     file_id: UUID,
     task_id: UUID,
-    s3_metadata: Dict[str, str] = {},
+    s3_metadata: Dict[str, str] | None = None,
 ) -> None:
     file_io.seek(0)
     minio_client.put_object(
@@ -76,21 +63,28 @@ def s3_dump_object(
         metadata={
             "file_id": str(file_id),
             "task_id": str(task_id),
-            **s3_metadata,
+            **(s3_metadata or {}),
         },
     )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    minio_client = await get_minio_client()
+    configure_logging(
+        level=logging.DEBUG if settings.DEBUG else logging.INFO,
+        json_output=not settings.DEBUG,
+        include_otel_context=True,
+    )
+    logger = get_logger("storage")
+    logger.info("lifespan_started")
 
-    # create the bucket if it does not exist
-    # and link between the bucket and the event topic
+    minio_client = await get_minio_client()
     await create_bucket(minio_client=minio_client, bucket_name=settings.S3_VENUS_BUCKET)
     await link_s3_bucket_with_kafka_event(
         minio_client=minio_client,
         bucket_name=settings.S3_VENUS_BUCKET,
-        event_name_name=settings.S3_VENUS_BUCKET_KAFKA_EVENT,
+        event_name=settings.S3_VENUS_BUCKET_KAFKA_EVENT,
     )
+    logger.info("lifespan_ready", bucket=settings.S3_VENUS_BUCKET)
     yield
+    logger.info("lifespan_ended")

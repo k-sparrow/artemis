@@ -1,0 +1,44 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@pip//:requirements.bzl", "requirement")
+
+package(
+    default_visibility = ["//visibility:private"],
+)
+
+py_library(
+    name = "conftest",
+    srcs = ["conftest.py"],
+    visibility = ["//tests/lib/core/ingestion:__subpackages__"],
+    testonly = True,
+    deps = [
+        "//src/lib/core/adapters/embedding:huggingface",
+        "//tests/lib/testcontainers/tei:pkg",
+        requirement("asyncpg"),
+        requirement("langchain"),
+        requirement("langchain-core"),
+        requirement("langchain-qdrant"),
+        requirement("qdrant_client"),
+        requirement("sqlalchemy"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_config",
+    srcs = ["test_config.py"],
+    env = {},
+    tags = ["unit"],
+    deps = [
+        "//src/lib/core/ingestion:config",
+        "//src/lib/core/ingestion/indexer:pkg",
+        "//src/lib/core/ingestion/pipeline:pkg",
+        "//src/lib/core/ingestion/upserter:pkg",
+        requirement("langchain-core"),
+        requirement("pytest"),
+    ],
+)

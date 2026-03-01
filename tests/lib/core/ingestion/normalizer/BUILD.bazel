@@ -1,0 +1,24 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@pip//:requirements.bzl", "requirement")
+
+package(
+    default_visibility = ["//visibility:private"],
+)
+
+py_test(
+    name = "test_metadata",
+    srcs = ["test_metadata.py"],
+    env = {},
+    tags = ["unit"],
+    deps = [
+        "//src/lib/core/ingestion/normalizer:metadata",
+        requirement("langchain-core"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+    ],
+)

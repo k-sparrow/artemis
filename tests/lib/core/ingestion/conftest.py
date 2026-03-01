@@ -1,0 +1,156 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+"""Pytest fixtures for ingestion library tests."""
+
+from __future__ import annotations
+
+import uuid
+from pathlib import Path
+from typing import List
+
+import pytest
+from langchain.indexes import SQLRecordManager
+from langchain_core.documents import Document
+from langchain_qdrant import QdrantVectorStore
+from qdrant_client import AsyncQdrantClient, QdrantClient
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from testcontainers.postgres import PostgresContainer
+from testcontainers.qdrant import QdrantContainer
+
+from src.lib.core.adapters.embedding.huggingface import HuggingFaceEndpointEmbeddings
+from tests.lib.testcontainers.tei import TEIContainer
+
+_EMBEDDING_MODEL = "sentence-transformers/msmarco-MiniLM-L-12-v3"
+
+
+# ---------------------------------------------------------------------------
+# Infrastructure containers (session-scoped — started once per test session)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def tei_container(request: pytest.FixtureRequest) -> TEIContainer:
+    hf_cache = Path.home() / ".cache" / "huggingface"
+    container = TEIContainer(model_id=_EMBEDDING_MODEL)
+    if hf_cache.exists():
+        container.with_hf_cache(str(hf_cache))
+    container.start()
+    request.addfinalizer(container.stop)
+    return container
+
+
+@pytest.fixture(scope="session")
+def qdrant_container(request: pytest.FixtureRequest) -> QdrantContainer:
+    container = QdrantContainer("qdrant/qdrant:latest")
+    container.start()
+    request.addfinalizer(container.stop)
+    return container
+
+
+@pytest.fixture(scope="session")
+def postgres_container(request: pytest.FixtureRequest) -> PostgresContainer:
+    container = PostgresContainer("postgres:16-alpine", driver="asyncpg")
+    container.start()
+    request.addfinalizer(container.stop)
+    return container
+
+
+# ---------------------------------------------------------------------------
+# Derived session-scoped fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def embeddings(tei_container: TEIContainer) -> HuggingFaceEndpointEmbeddings:
+    return HuggingFaceEndpointEmbeddings(model=tei_container.get_url() + "/embed")
+
+
+@pytest.fixture(scope="session")
+def async_engine(
+    request: pytest.FixtureRequest,
+    postgres_container: PostgresContainer,
+) -> AsyncEngine:
+    engine = create_async_engine(postgres_container.get_connection_url())
+    request.addfinalizer(engine.dispose)
+    return engine
+
+
+# ---------------------------------------------------------------------------
+# Per-test fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def qdrant_client(
+    qdrant_container: QdrantContainer,
+) -> AsyncQdrantClient:
+    host = qdrant_container.get_container_host_ip()
+    port = qdrant_container.get_exposed_port(6333)
+    client = AsyncQdrantClient(host=host, port=int(port), prefer_grpc=False)
+    return client
+
+
+@pytest.fixture
+async def vectorstore(
+    request: pytest.FixtureRequest,
+    qdrant_container: QdrantContainer,
+    qdrant_client: AsyncQdrantClient,
+    embeddings: HuggingFaceEndpointEmbeddings,
+) -> QdrantVectorStore:
+    """Fresh Qdrant collection per test, deleted on teardown."""
+    collection_name = uuid.uuid4().hex
+    host = qdrant_container.get_container_host_ip()
+    port = int(qdrant_container.get_exposed_port(6333))
+    vector_size = len(embeddings.embed_query("dummy"))
+
+    await qdrant_client.create_collection(
+        collection_name=collection_name,
+        vectors_config={"size": vector_size, "distance": "Cosine"},
+    )
+
+    def _delete_collection() -> None:
+        c = QdrantClient(host=host, port=port, prefer_grpc=False)
+        c.delete_collection(collection_name)
+        c.close()
+
+    request.addfinalizer(_delete_collection)
+
+    return QdrantVectorStore(
+        client=qdrant_client,
+        collection_name=collection_name,
+        embedding=embeddings,
+    )
+
+
+@pytest.fixture
+async def record_manager(async_engine: AsyncEngine) -> SQLRecordManager:
+    """Per-test SQLRecordManager with a unique namespace, schema pre-created."""
+    namespace = f"qdrant/{uuid.uuid4().hex}"
+    rm = SQLRecordManager(namespace=namespace, engine=async_engine, async_mode=True)
+    await rm.acreate_schema()
+    return rm
+
+
+# ---------------------------------------------------------------------------
+# Sample data
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sample_documents() -> List[Document]:
+    return [
+        Document(
+            page_content="This is the first test document about machine learning.",
+            metadata={"source": "test1.pdf", "page": 1},
+        ),
+        Document(
+            page_content="This is the second test document about natural language processing.",
+            metadata={"source": "test1.pdf", "page": 2},
+        ),
+        Document(
+            page_content="This is a table with data: | Name | Value | | A | 1 | | B | 2 |",
+            metadata={"source": "test2.pdf", "type": "table", "page": 1},
+        ),
+    ]

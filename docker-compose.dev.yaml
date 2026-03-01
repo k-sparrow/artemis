@@ -24,7 +24,7 @@ x-minio-common: &minio-common
     MINIO_ROOT_PASSWORD: minioadmin
     MINIO_VOLUMES: "/mnt/data"
     MINIO_NOTIFY_KAFKA_ENABLE_ARTEMIS: "on"
-    MINIO_NOTIFY_KAFKA_BROKERS_ARTEMIS: broker:29092
+    MINIO_NOTIFY_KAFKA_BROKERS_ARTEMIS: broker:9092
     MINIO_NOTIFY_KAFKA_TOPIC_ARTEMIS: artemis.ingestion.storage.s3
   healthcheck:
     test: ["CMD", "mc", "ready", "local"]
@@ -34,6 +34,7 @@ x-minio-common: &minio-common
 services:
   # S3 compatible storage
   minio:
+    profiles: [infra]
     !!merge <<: *minio-common
     hostname: minio
     volumes:
@@ -49,6 +50,7 @@ services:
       - default
   # artemis's vectorstore database
   vectorstore:
+    profiles: [infra]
     image: qdrant/qdrant:v1.12.5-unprivileged
     healthcheck:
       # taken from here:
@@ -71,6 +73,7 @@ services:
       - default
   # artemis RDBMS database
   postgres:
+    profiles: [infra]
     image: artemis/postgres:latest
     restart: unless-stopped
     healthcheck:
@@ -101,6 +104,7 @@ services:
       - default
   # task queue for ingestion
   rabbitmq:
+    profiles: [infra]
     image: rabbitmq:4.1.2-management-alpine
     container_name: rabbitmq
     restart: always
@@ -120,6 +124,7 @@ services:
       - default
   # RDBMS monitor (for development and testing ONLY)
   pgadmin:
+    profiles: [dev-tools]
     container_name: pgadmin
     image: dpage/pgadmin4:8.13.0
     restart: unless-stopped
@@ -139,6 +144,7 @@ services:
   #
   # artemis frontend UI
   frontend:
+    profiles: [frontend]
     image: artemis/frontend:latest
     restart: unless-stopped
     depends_on:
@@ -163,6 +169,7 @@ services:
       - default
   # artemis main backend service
   backend-main:
+    profiles: [backend]
     image: artemis/backend-main:dev
     depends_on:
       postgres:
@@ -190,6 +197,7 @@ services:
     networks:
       - default
   backend-main-chat:
+    profiles: [backend]
     image: artemis/backend-chat:dev
     depends_on:
       postgres:
@@ -228,6 +236,7 @@ services:
       - default
   # artemis interface to minio
   backend-indexing-storage:
+    profiles: [backend]
     image: artemis/backend-indexing-storage:dev
     restart: unless-stopped
     depends_on:
@@ -261,6 +270,7 @@ services:
       - default
   # artemis's indexing task queue controller worker (Celery)
   backend-indexing-controller-celery-worker:
+    profiles: [backend]
     image: artemis/backend-indexing-controller-worker:latest
     restart: unless-stopped
     healthcheck:
@@ -309,6 +319,7 @@ services:
     networks:
       - default
   backend-indexing-ingestion:
+    profiles: [backend]
     image: artemis/backend-indexing:dev
     depends_on:
       vectorstore:
@@ -344,6 +355,7 @@ services:
     networks:
       - default
   backend-indexing-retrieval:
+    profiles: [backend]
     image: artemis/backend-indexing-retrieval:dev
     depends_on:
       vectorstore:
@@ -411,16 +423,17 @@ services:
   #          from the ingestion prodcess itself, and communicate the ingestion results via a Kafka topic and only store
   #          them to the vectorstore storage using a Kafka sink connector
   broker:
+    profiles: [infra]
     image: apache/kafka:4.0.0
     hostname: broker
     container_name: broker
     ports:
-      - "9092:9092"
+      - "9092:19092" # host:9092 → container EXTERNAL listener on 19092
       - "9097:9097"
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://broker:29092,EXTERNAL://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://broker:9092,EXTERNAL://localhost:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
@@ -428,7 +441,7 @@ services:
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_NODE_ID: 1
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@broker:29093
-      KAFKA_LISTENERS: INTERNAL://broker:29092,CONTROLLER://broker:29093,EXTERNAL://0.0.0.0:9092
+      KAFKA_LISTENERS: INTERNAL://broker:9092,CONTROLLER://broker:29093,EXTERNAL://0.0.0.0:19092
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
@@ -440,6 +453,7 @@ services:
       - default
   # Apache Kafka Schema Registry
   schemaregistry:
+    profiles: [infra]
     image: confluentinc/cp-schema-registry:6.0.0
     restart: always
     ports:
@@ -447,10 +461,11 @@ services:
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schemaregistry
       SCHEMA_REGISTRY_LISTENERS: "http://schemaregistry:8081"
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://broker:29092
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://broker:9092
     networks:
       - default
   kafka-connect:
+    profiles: [kafka]
     image: artemis/cp-kafka-connect:latest
     container_name: kafka-connect
     depends_on:
@@ -464,7 +479,7 @@ services:
     ports:
       - "8083:8083"
     environment:
-      CONNECT_BOOTSTRAP_SERVERS: "broker:29092"
+      CONNECT_BOOTSTRAP_SERVERS: "broker:9092"
       CONNECT_REST_PORT: 8083
       CONNECT_GROUP_ID: kafka-connect
       CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
@@ -485,6 +500,7 @@ services:
   # Apache Kafka Connect initialization script
   # Creates connector instances via Kafka Connect's REST API
   kafka-connect-init:
+    profiles: [backend]
     image: artemis/cp-kafka-connect-init:latest
     depends_on:
       backend-indexing-storage:
@@ -497,6 +513,7 @@ services:
       - default
   # Apache Kafka cat utility (for development and testing ONLY)
   kafkacat:
+    profiles: [dev-tools]
     image: confluentinc/cp-kafkacat
     command: sleep infinity
     networks:
@@ -504,6 +521,7 @@ services:
   # User interface for monitoring the Kafka cluster (connectors, topics, events etc.)
   # (for development and testing ONLY)
   kafka-ui:
+    profiles: [dev-tools]
     image: provectuslabs/kafka-ui:v0.7.2
     container_name: kafka-ui
     ports:
@@ -514,7 +532,7 @@ services:
       - kafka-connect
     environment:
       KAFKA_CLUSTERS_0_NAME: artemis
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "broker:29092"
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "broker:9092"
       KAFKA_CLUSTERS_0_METRICS_PORT: 9997
       KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schemaregistry:8081
       KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: broker
@@ -523,6 +541,7 @@ services:
     networks:
       - default
   ksqldb-server:
+    profiles: [kafka]
     image: confluentinc/cp-ksqldb-server:7.9.1
     hostname: ksqldb-server
     container_name: ksqldb-server
@@ -533,7 +552,7 @@ services:
       - "8088:8088"
     environment:
       KSQL_CONFIG_DIR: "/etc/ksql"
-      KSQL_BOOTSTRAP_SERVERS: "broker:29092"
+      KSQL_BOOTSTRAP_SERVERS: "broker:9092"
       KSQL_HOST_NAME: ksqldb-server
       KSQL_LISTENERS: "http://0.0.0.0:8088"
       KSQL_CACHE_MAX_BYTES_BUFFERING: 0
@@ -547,6 +566,7 @@ services:
     networks:
       - default
   ksqldb-cli:
+    profiles: [dev-tools]
     image: artemis/ksqldb-cli:latest
     container_name: ksqldb-cli
     environment:
@@ -559,6 +579,7 @@ services:
     networks:
       - default
   docling-serve:
+    profiles: [ai, backend]
     image: ghcr.io/docling-project/docling-serve-cu126:main
     container_name: docling-serve
     ports:
@@ -586,6 +607,7 @@ services:
       - default
   # Kong API Gateway setup
   kong-ee-database:
+    profiles: [gateway]
     container_name: kong-ee-database
     image: postgres:latest # Official Postgres image
     restart: on-failure # Restart if the container fails
@@ -605,6 +627,7 @@ services:
     expose:
       - '5432'
   kong-bootstrap:
+    profiles: [gateway]
     image: '${GW_IMAGE:-kong/kong-gateway:3.11.0.2}' # Kong Gateway image (default to latest version)
     container_name: kong-bootstrap
     networks:
@@ -619,6 +642,7 @@ services:
       KONG_PASSWORD: handyshake # Admin GUI password (required for RBAC)
     command: kong migrations bootstrap # Run DB migrations to initialize Kong schema
   kong-cp:
+    profiles: [gateway]
     image: '${GW_IMAGE:-kong/kong-gateway:3.11.0.2}' # Main Kong Gateway Control Plane (default to latest version)
     container_name: kong-cp
     restart: on-failure
@@ -647,6 +671,7 @@ services:
       - "8002:8002" # Kong Manager HTTP
       - "8445:8445" # Kong Manager HTTPS
   api-gateway-connect-init:
+    profiles: [gateway]
     image: artemis/api-gateway-connect-init:latest
     depends_on:
       kong-bootstrap:

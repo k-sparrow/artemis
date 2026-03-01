@@ -1,0 +1,75 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@pip//:requirements.bzl", "requirement")
+
+package(
+    default_visibility = ["//visibility:private"],
+)
+
+py_test(
+    name = "test_kafka",
+    srcs = ["test_kafka.py"],
+    env = {},
+    tags = ["unit"],
+    deps = [
+        "//tests/lib/testcontainers/kafka",
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_connect",
+    srcs = ["test_connect.py"],
+    env = {},
+    tags = ["unit"],
+    deps = [
+        "//tests/lib/testcontainers/kafka:connect",
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_ksqldb",
+    srcs = ["test_ksqldb.py"],
+    env = {},
+    tags = ["unit"],
+    deps = [
+        "//tests/lib/testcontainers/kafka:ksqldb",
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_schema_registry",
+    srcs = ["test_schema_registry.py"],
+    env = {},
+    tags = ["unit"],
+    deps = [
+        "//tests/lib/testcontainers/kafka:schema_registry",
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_integration_kafka_stack",
+    srcs = [
+        "conftest.py",
+        "test_integration_kafka_stack.py",
+    ],
+    env = {},
+    tags = ["integration"],
+    deps = [
+        "//tests/lib/testcontainers/kafka:pkg",
+        requirement("pytest"),
+        requirement("requests"),
+        requirement("testcontainers"),
+    ],
+)

@@ -1,4 +1,6 @@
-from typing import Dict, Any, override
+from typing import Any, Dict
+
+from typing_extensions import override
 
 from langchain.retrievers import MultiVectorRetriever
 from langchain.retrievers.multi_vector import SearchType

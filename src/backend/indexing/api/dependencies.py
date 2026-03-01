@@ -1,22 +1,41 @@
-from typing import AsyncIterator, Annotated
+from typing import AsyncIterator, Annotated, Callable
 
 from fastapi import Depends
+from langchain_core.document_loaders import BaseLoader
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
 
 from qdrant_client import AsyncQdrantClient
 
 from src.backend.indexing.api.config import settings
+from src.lib.core.adapters.loaders import (
+    DoclingAPIServeLoader,
+    DoclingServeAPIDocumentConverter,
+    DEFAULT_CONVERTER_KWARGS,
+)
 from src.backend.indexing.lib.handler import (
     QdrantVectorStoreHandler,
     VectorStoreHandler,
 )
-from src.lib.core.embeddings.huggingface import HuggingFaceEndpointEmbeddings
+from src.lib.core.ingestion import (
+    BasePipeline,
+    PipelineConfig,
+    PipelineResources,
+    PipelineType,
+    create_pipeline,
+)
+from src.lib.core.adapters.embedding.huggingface import HuggingFaceEndpointEmbeddings
 
 __all__ = [
+    "LoaderFactory",
+    "PipelineType",
+    "loader_factory_dependency",
+    "pipeline_dependency",
     "vectorstore_dependency",
     "get_vectorstore_handler_solved",
 ]
+
+LoaderFactory = Callable[[bytes, str, str], BaseLoader]
 
 
 async def get_embeddings() -> Embeddings:
@@ -71,4 +90,40 @@ async def get_vectorstore(
 vectorstore_dependency = Annotated[
     VectorStore,
     Depends(get_vectorstore),
+]
+
+
+async def get_pipeline(
+    pipeline_type: PipelineType,
+    vectorstore: vectorstore_dependency,
+) -> BasePipeline:
+    config = PipelineConfig(pipeline_type=pipeline_type)
+    resources = PipelineResources(vectorstore=vectorstore)
+    return create_pipeline(config=config, resources=resources)
+
+
+pipeline_dependency = Annotated[
+    BasePipeline,
+    Depends(get_pipeline),
+]
+
+
+def get_loader_factory() -> LoaderFactory:
+    """Returns a factory that creates document loaders configured for this service."""
+
+    def factory(file: bytes, filename: str, content_type: str) -> BaseLoader:
+        return DoclingAPIServeLoader(
+            source=(filename, file, content_type),
+            converter=DoclingServeAPIDocumentConverter(
+                base_url=settings.DOCLING_SERVE_URI,
+                **DEFAULT_CONVERTER_KWARGS,
+            ),
+        )
+
+    return factory
+
+
+loader_factory_dependency = Annotated[
+    LoaderFactory,
+    Depends(get_loader_factory),
 ]

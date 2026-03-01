@@ -1,0 +1,47 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+# gazelle:python_root
+
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+package(
+    default_visibility = [
+        "//src/lib/core/ingestion:__subpackages__",
+        "//tests/lib/core/ingestion:__subpackages__",
+    ],
+)
+
+py_library(
+    name = "pkg",
+    srcs = [
+        "__init__.py",
+    ],
+    deps = [
+        ":base",
+        ":metadata",
+    ],
+)
+
+py_library(
+    name = "base",
+    srcs = [
+        "base.py",
+    ],
+    deps = [
+        requirement("langchain-core"),
+    ],
+)
+
+py_library(
+    name = "metadata",
+    srcs = [
+        "metadata.py",
+    ],
+    deps = [
+        ":base",
+        requirement("langchain-core"),
+    ],
+)

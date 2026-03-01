@@ -1,0 +1,67 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+
+package(
+    default_visibility = ["//visibility:private"],
+)
+
+py_library(
+    name = "kafka",
+    testonly = True,
+    srcs = ["kafka.py"],
+    visibility = ["//tests:__subpackages__"],
+    deps = [
+        requirement("testcontainers"),
+    ],
+)
+
+py_library(
+    name = "connect",
+    testonly = True,
+    srcs = ["connect.py"],
+    visibility = ["//tests:__subpackages__"],
+    deps = [
+        requirement("testcontainers"),
+        requirement("typing-extensions"),
+    ],
+)
+
+py_library(
+    name = "ksqldb",
+    testonly = True,
+    srcs = ["ksqldb.py"],
+    visibility = ["//tests:__subpackages__"],
+    deps = [
+        requirement("testcontainers"),
+        requirement("typing-extensions"),
+    ],
+)
+
+py_library(
+    name = "schema_registry",
+    testonly = True,
+    srcs = ["schema_registry.py"],
+    visibility = ["//tests:__subpackages__"],
+    deps = [
+        requirement("testcontainers"),
+        requirement("typing-extensions"),
+    ],
+)
+
+py_library(
+    name = "pkg",
+    testonly = True,
+    srcs = ["__init__.py"],
+    visibility = ["//tests:__subpackages__"],
+    deps = [
+        ":connect",
+        ":kafka",
+        ":ksqldb",
+        ":schema_registry",
+    ],
+)

@@ -6,13 +6,9 @@ py_library(
     srcs = ["service.py"],
     visibility = ["//visibility:public"],
     deps = [
-        "//src/backend/indexing/api:config",
-        "//src/backend/indexing/client/generated:pkg",
-        "//src/backend/indexing/client/generated/api:pkg",
-        "//src/backend/indexing/client/generated/api/default:pkg",
-        "//src/backend/indexing/client/generated/models:pkg",
+        "//src/backend/indexing/api:dependencies",
+        "//src/lib/core/ingestion:pkg",
         requirement("fastapi"),
-        requirement("langchain-core"),
     ],
 )
 
@@ -22,9 +18,9 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         ":service",
+        "//src/backend/indexing/api:dependencies",
         "//src/lib/backend/logging:pkg",
         requirement("fastapi"),
-        requirement("langchain-core"),
     ],
 )
 

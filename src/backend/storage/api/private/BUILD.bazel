@@ -4,11 +4,10 @@
 #
 # gazelle:python_root
 
-load("@aspect_rules_py//py:defs.bzl", "py_binary", "py_library")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
 load("@pip//:requirements.bzl", "requirement")
 
 package(default_visibility = ["//src/backend/storage/api:__pkg__"])
-
 
 py_library(
     name = "pkg",
@@ -17,7 +16,7 @@ py_library(
     ],
     deps = [
         ":router",
-    ]
+    ],
 )
 
 py_library(
@@ -26,9 +25,10 @@ py_library(
         "router.py",
     ],
     deps = [
-        "//src/backend/storage/api:dependencies",
         ":schemas",
         ":service",
+        "//src/backend/storage/api:dependencies",
+        "//src/lib/backend/logging:pkg",
         requirement("fastapi"),
         requirement("python-multipart"),
     ],
@@ -41,7 +41,7 @@ py_library(
     ],
     deps = [
         requirement("pydantic"),
-    ]
+    ],
 )
 
 py_library(
@@ -54,7 +54,7 @@ py_library(
         ":utils",
         requirement("fastapi"),
         requirement("minio"),
-    ]
+    ],
 )
 
 py_library(
@@ -66,10 +66,8 @@ py_library(
         "//src/backend/storage/api:config",
         requirement("fastapi"),
         requirement("minio"),
-    ]
+    ],
 )
-
-
 
 py_library(
     name = "exceptions",
@@ -78,5 +76,5 @@ py_library(
     ],
     deps = [
         requirement("fastapi"),
-    ]
+    ],
 )

@@ -1,0 +1,31 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+
+package(
+    default_visibility = ["//tests:__subpackages__"],
+)
+
+py_library(
+    name = "tei",
+    testonly = True,
+    srcs = ["tei.py"],
+    deps = [
+        "//src/lib/core/adapters/document_compressors/huggingface:client",
+        requirement("testcontainers"),
+        requirement("typing-extensions"),
+    ],
+)
+
+py_library(
+    name = "pkg",
+    testonly = True,
+    srcs = ["__init__.py"],
+    deps = [
+        ":tei",
+    ],
+)

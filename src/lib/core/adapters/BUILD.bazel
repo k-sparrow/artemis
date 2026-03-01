@@ -1,0 +1,21 @@
+# -------------------------------------
+# Copyright (c) 2025, Dror Kabely
+# -------------------------------------
+#
+# gazelle:python_root
+
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+package(default_visibility = ["//src:__subpackages__"])
+
+py_library(
+    name = "pkg",
+    srcs = [
+        "__init__.py",
+    ],
+    deps = [
+        "//src/lib/core/adapters/embedding:pkg",
+        "//src/lib/core/adapters/loaders:pkg",
+        # "//src/lib/core/adapters/vectorstore:pkg",
+    ],
+)

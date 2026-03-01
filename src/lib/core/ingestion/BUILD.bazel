@@ -1,0 +1,62 @@
+# -------------------------------------
+# Copyright (c) 2025, Dror Kabely
+# -------------------------------------
+#
+# gazelle:python_root
+
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+package(
+    default_visibility = [
+        "//src/lib/core/ingestion:__subpackages__",
+        "//tests/lib/core/ingestion:__subpackages__",
+    ],
+)
+
+py_library(
+    name = "pkg",
+    srcs = [
+        "__init__.py",
+    ],
+    deps = [
+        ":config",
+        ":exceptions",
+        ":types",
+        "//src/lib/core/ingestion/indexer:pkg",
+        "//src/lib/core/ingestion/normalizer:pkg",
+        "//src/lib/core/ingestion/pipeline:pkg",
+        "//src/lib/core/ingestion/upserter:pkg",
+    ],
+)
+
+py_library(
+    name = "config",
+    srcs = [
+        "config.py",
+    ],
+    deps = [
+        "//src/lib/core/ingestion/indexer:pkg",
+        "//src/lib/core/ingestion/normalizer:pkg",
+        "//src/lib/core/ingestion/pipeline:pkg",
+        "//src/lib/core/ingestion/upserter:pkg",
+        requirement("langchain-core"),
+    ],
+)
+
+py_library(
+    name = "types",
+    srcs = [
+        "types.py",
+    ],
+    deps = [
+        requirement("langchain-core"),
+    ],
+)
+
+py_library(
+    name = "exceptions",
+    srcs = [
+        "exceptions.py",
+    ],
+)

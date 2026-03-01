@@ -1,0 +1,21 @@
+# -------------------------------------
+# Copyright (c) 2025, Dror Kabely
+# -------------------------------------
+#
+# Legacy processing module - moved to //src/lib/core/ingestion
+# This provides backward compatibility for existing imports
+
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+package(default_visibility = ["//src/backend/indexing:__subpackages__"])
+
+# Backward compatibility re-export
+py_library(
+    name = "pkg",
+    srcs = [
+        "__init__.py",
+    ],
+    deps = [
+        "//src/lib/core/ingestion:pkg",
+    ],
+)

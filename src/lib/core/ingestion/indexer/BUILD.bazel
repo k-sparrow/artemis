@@ -1,0 +1,62 @@
+# -------------------------------------
+# Copyright (c) 2025, Dror Kabely
+# -------------------------------------
+#
+# gazelle:python_root
+
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+package(
+    default_visibility = [
+        "//src/lib/core/ingestion:__subpackages__",
+        "//tests/lib/core:__subpackages__",
+    ],
+)
+
+py_library(
+    name = "pkg",
+    srcs = [
+        "__init__.py",
+    ],
+    deps = [
+        ":base",
+        ":semi_structured",
+        ":simple",
+    ],
+)
+
+py_library(
+    name = "base",
+    srcs = [
+        "base.py",
+    ],
+    deps = [
+        "//src/lib/core/ingestion:types",
+    ],
+)
+
+py_library(
+    name = "simple",
+    srcs = [
+        "simple.py",
+    ],
+    deps = [
+        ":base",
+        requirement("langchain-core"),
+        requirement("langchain-text-splitters"),
+    ],
+)
+
+py_library(
+    name = "semi_structured",
+    srcs = [
+        "semi_structured.py",
+    ],
+    deps = [
+        ":base",
+        "//src/lib/core/ingestion:types",
+        requirement("langchain-core"),
+        requirement("langchain-text-splitters"),
+    ],
+)

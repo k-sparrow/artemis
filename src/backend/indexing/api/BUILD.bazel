@@ -30,7 +30,7 @@ py_library(
         "exceptions.py",
     ],
     deps = [
-        "//src/backend/indexing/lib:exceptions",
+        "//src/lib/core/ingestion:exceptions",
         requirement("fastapi"),
     ],
 )
@@ -43,7 +43,9 @@ py_library(
     deps = [
         ":config",
         "//src/backend/indexing/lib/handler:pkg",
-        "//src/lib/core/embeddings:pkg",
+        "//src/lib/core/adapters/embedding:pkg",
+        "//src/lib/core/adapters/loaders:pkg",
+        "//src/lib/core/ingestion:pkg",
         requirement("fastapi"),
         requirement("langchain-core"),
         requirement("qdrant-client"),
@@ -98,7 +100,7 @@ py_library(
 # 2. apollo-indexing:     Deployment server (Gunicorn)
 uvicorn_server(
     name = "artemis-indexing",
-    app = "src.backend.indexing.ingestion.api.main:app",
+    app = "src.backend.indexing.api.main:app",
     host = "0.0.0.0",
     port = INDEXING_SERVICE_PORT,
     deps = [

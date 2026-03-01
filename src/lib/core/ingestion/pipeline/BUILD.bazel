@@ -1,0 +1,37 @@
+# -------------------------------------
+# Copyright (c) 2025, Dror Kabely
+# -------------------------------------
+#
+# gazelle:python_root
+
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+package(
+    default_visibility = [
+        "//src/lib/core/ingestion:__subpackages__",
+        "//tests/lib/core/ingestion:__subpackages__",
+    ],
+)
+
+py_library(
+    name = "pkg",
+    srcs = [
+        "__init__.py",
+    ],
+    deps = [
+        ":base",
+    ],
+)
+
+py_library(
+    name = "base",
+    srcs = [
+        "base.py",
+    ],
+    deps = [
+        "//src/lib/core/ingestion:types",
+        "//src/lib/core/ingestion/indexer:base",
+        "//src/lib/core/ingestion/normalizer:base",
+        "//src/lib/core/ingestion/upserter:base",
+    ],
+)
