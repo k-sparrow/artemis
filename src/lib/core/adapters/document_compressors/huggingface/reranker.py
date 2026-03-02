@@ -34,7 +34,7 @@ class HuggingFaceEndpointReranker(BaseDocumentCompressor):
     provider: str | None = None
     """Name of the provider to use for inference with the model specified in
         `repo_id`. e.g. "sambanova". if not specified, defaults to HF Inference API.
-        available providers can be found in the [huggingface_hub documentation](https://huggingface.co/docs/huggingface_hub/guides/inference#supported-providers-and-tasks)."""
+        available providers can be found in the [huggingface_hub documentation](https://huggingface.co/docs/huggingface_hub/guides/inference#supported-providers-and-tasks)."""  # noqa: E501
 
     repo_id: str | None = None
     """Huggingfacehub repository id, for backward compatibility."""
@@ -64,7 +64,7 @@ class HuggingFaceEndpointReranker(BaseDocumentCompressor):
         )
 
         try:
-            from src.lib.core.adapters.document_compressors.huggingface._client import (  # type: ignore[import]
+            from src.lib.core.adapters.document_compressors.huggingface._client import (  # noqa: E501 type: ignore[import],
                 AsyncInferenceClient,
                 InferenceClient,
             )
@@ -130,11 +130,13 @@ class HuggingFaceEndpointReranker(BaseDocumentCompressor):
         # ... there is no need to sort the rankings, they are already sorted,
         # in descending order
 
-        # ... and then, filter out the documents that have a "score" lower than the threshold
+        # ... and then, filter out the documents that have a "score" lower
+        # than the threshold
         score_threshold = _model_kwargs.get("score_threshold", 0.0)
         filtered_rankings = [r for r in rankings if r["score"] > score_threshold]
 
-        # ... and finally, return the documents scored as relevant by the rerankers, in descending order
+        # ... and finally, return the documents scored as relevant by the rerankers,
+        # in descending order
         reranked_docs = [documents[r["index"]] for r in filtered_rankings]
 
         return reranked_docs
@@ -162,11 +164,13 @@ class HuggingFaceEndpointReranker(BaseDocumentCompressor):
         # ... there is no need to sort the rankings, they are already sorted,
         # in descending order
 
-        # ... and then, filter out the documents that have a "score" lower than the threshold
+        # ... and then, filter out the documents that have a "score" lower
+        # than the threshold
         score_threshold = _model_kwargs.get("score_threshold", 0.0)
         filtered_rankings = [r for r in rankings if r["score"] > score_threshold]
 
-        # ... and finally, return the documents scored as relevant by the rerankers, in descending order
+        # ... and finally, return the documents scored as relevant by the rerankers,
+        # in descending order
         reranked_docs = [documents[r["index"]] for r in filtered_rankings]
 
         return reranked_docs

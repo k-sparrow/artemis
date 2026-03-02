@@ -1,0 +1,2 @@
+#.ruff.toml
+exclude = ["venv", ".venv"]

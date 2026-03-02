@@ -210,7 +210,7 @@ manifest:
     propcache: propcache
     proxytypes: jsonref
     psutil: psutil
-    psycopg2: psycopg2_binary
+    psycopg_binary: psycopg_binary
     ptyprocess: ptyprocess
     pure_eval: pure_eval
     pwdlib: pwdlib
@@ -339,6 +339,7 @@ manifest:
     uri_template: uri_template
     urllib3: urllib3
     uvicorn: uvicorn
+    uvicorn_worker: uvicorn_worker
     vine: vine
     wcwidth: wcwidth
     webcolors: webcolors
@@ -354,4 +355,4 @@ manifest:
     zstandard: zstandard
   pip_repository:
     name: pip
-integrity: b1a5d93035c3ebc581439ba0c2825314499bfea003a04b2d0fdda9a921770873
+integrity: 36c9cf16ae3e49164a6db3ca369571c4e8e78419a99347e1dbf8070f54dfb597

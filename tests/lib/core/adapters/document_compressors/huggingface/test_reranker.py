@@ -45,7 +45,8 @@ def test_tei_rerank_reranked_docs_reordered(
     # get the reranked docs ids
     reranked_doc_ids = [r.id for r in rerank_response]
 
-    # check that the reranked docs are a permutation of the original docs but not in the same order
+    # check that the reranked docs are a permutation of the original
+    # docs but not in the same order
     assert (reranked_doc_ids != non_filtered_doc_ids) and (
         Counter(reranked_doc_ids) == Counter(non_filtered_doc_ids)
     )
@@ -92,7 +93,8 @@ async def test_tei_rerank_reranked_docs_reordered_async(
 
     # get the reranked docs ids
     reranked_doc_ids = [r.id for r in async_rerank_response]
-    # check that the reranked docs are a permutation of the original docs but not in the same order
+    # check that the reranked docs are a permutation of the
+    # original docs but not in the same order
     assert (reranked_doc_ids != non_filtered_doc_ids) and (
         Counter(reranked_doc_ids) == Counter(non_filtered_doc_ids)
     )

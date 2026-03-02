@@ -185,7 +185,7 @@ class PipelineConfig:
     config pair:
 
     - ``SIMPLE``          → :class:`SimpleIndexerConfig` + :class:`SimpleUpserterConfig`
-    - ``SEMI_STRUCTURED`` → :class:`SemiStructuredIndexerConfig` + :class:`SemiStructuredUpserterConfig`
+    - ``SEMI_STRUCTURED`` → :class:`SemiStructuredIndexerConfig` + :class:`SemiStructuredUpserterConfig`  # noqa: E501
 
     Using a mismatched pair (e.g. ``SEMI_STRUCTURED`` with
     ``SimpleIndexerConfig``) is not an error; :func:`create_pipeline` will

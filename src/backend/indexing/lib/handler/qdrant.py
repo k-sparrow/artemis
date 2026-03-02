@@ -1,6 +1,6 @@
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
-from qdrant_client import AsyncQdrantClient, QdrantClient, models
+from qdrant_client import QdrantClient, models
 
 from src.backend.indexing.lib.handler.base import BaseVectorHandler
 from src.backend.indexing.lib.vectorstore import AsyncQdrantVectorStore

@@ -60,11 +60,11 @@ def documents() -> Sequence[Document]:
             id=uuid.uuid4().hex,
         ),
         Document(
-            page_content="Documenting is the process of creating a document from information.",
+            page_content="Documenting is the process of creating a document from information.",  # noqa: E501
             id=uuid.uuid4().hex,
         ),
         Document(
-            page_content="Docling serve is a FastAPI application that is about parsing documents highly efficiently using OCR",
+            page_content="Docling serve is a FastAPI application that is about parsing documents highly efficiently using OCR",  # noqa: E501
             id=uuid.uuid4().hex,
         ),
     ]

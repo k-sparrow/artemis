@@ -8,7 +8,7 @@ These tests validate the container's configuration (env vars, ports, image)
 without starting any Docker containers.
 """
 
-import pytest
+import pytest  # noqa: F401
 from testcontainers.core.wait_strategies import HttpWaitStrategy
 
 from tests.lib.testcontainers.kafka.connect import KafkaConnectContainer

@@ -74,7 +74,10 @@ class QdrantHealthcheck(Check):
                 return CheckResult(
                     name=self._name,
                     passed=False,
-                    details="'metadata.namespace' index is not configured as tenant partition",
+                    details=(
+                        "'metadata.namespace' index is not configured "
+                        "as tenant partition"
+                    ),
                 )
 
             return CheckResult(
@@ -113,12 +116,12 @@ class EmbeddingsHealthcheck(Check):
                 return CheckResult(
                     name=self._name,
                     passed=False,
-                    details=f"Received empty embeddings vector",
+                    details="Received empty embeddings vector",
                 )
             return CheckResult(
                 name=self._name,
                 passed=True,
-                details=f"Embeddings ready",
+                details="Embeddings ready",
             )
         except Exception as e:
             return CheckResult(

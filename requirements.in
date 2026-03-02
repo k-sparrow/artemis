@@ -12,8 +12,9 @@ fastapi-users==14.0.1
 fastapi-users-db-sqlalchemy==7.0.0
 fastapi-healthchecks==1.1.0
 python-multipart==0.0.20
-uvicorn==0.30.6
-gunicorn==23.0.0 
+uvicorn==0.41.0
+uvicorn-worker==0.4.0
+gunicorn==25.1.0 
 pydantic-settings==2.6.0
 openapi-python-client==0.24.3
 attrs==25.3.0
@@ -30,7 +31,7 @@ qdrant-client==1.14.1
 # database & ORM
 sqlalchemy==2.0.35
 sqlalchemy-utils==0.41.2
-psycopg2-binary==2.9.9
+psycopg-binary==3.3.3
 aiosqlite==0.21.0
 asyncpg==0.30.0
 alembic==1.13.3

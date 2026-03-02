@@ -12,25 +12,19 @@ load("@pip//:requirements.bzl", "requirement")
 # load("@aspect_bazel_lib//lib:testing.bzl", "assert_archive_contains")
 load("@rules_oci//oci:defs.bzl", oci_load = "oci_tarball")
 load("//tools/oci:py_layer.bzl", "py_oci_image")
-load("//tools/server:uvicorn.bzl", "uvicorn_dev_server")
+load("//tools/backend:uvicorn.bzl", "uvicorn_server")
 # load("//tools/server:celery.bzl", "celery_worker")
 
 package(default_visibility = ["//src/backend/storage/api:__subpackages__"])
 
+STORAGE_SERVICE_PORT = "7000"
+
 # Equivalent to cmdline:
-#  `uvicorn main:app --host localhost --port 9002`
-uvicorn_dev_server(
-    name = "server",
-    args = [
-        "main:app",
-        "--host",
-        "localhost",
-        "--port",
-        "7000",
-        "--reload",
-    ],
-    imports = ["."],
-    visibility = ["//visibility:public"],
+uvicorn_server(
+    name = "artemis-storage",
+    app = "src.backend.storage.api.main:app",
+    host = "0.0.0.0",
+    port = STORAGE_SERVICE_PORT,
     deps = [
         ":pkg",
     ],

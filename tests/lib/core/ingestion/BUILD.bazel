@@ -12,9 +12,9 @@ package(
 
 py_library(
     name = "conftest",
+    testonly = True,
     srcs = ["conftest.py"],
     visibility = ["//tests/lib/core/ingestion:__subpackages__"],
-    testonly = True,
     deps = [
         "//src/lib/core/adapters/embedding:huggingface",
         "//tests/lib/testcontainers/tei:pkg",

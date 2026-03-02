@@ -1,10 +1,9 @@
-import asyncio
 from typing import Annotated
 
 from fastapi import Depends
 from minio import Minio
 
-from src.backend.storage.api.config import storage_settings as settings
+from src.backend.storage.api.config import settings
 
 __all__ = [
     "get_minio_client",

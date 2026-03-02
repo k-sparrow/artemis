@@ -1,6 +1,6 @@
 from src.lib.core.adapters.embedding.huggingface import HuggingFaceEndpointEmbeddings
 
-import pytest
+import pytest  # noqa: F401
 from typing import Tuple
 
 

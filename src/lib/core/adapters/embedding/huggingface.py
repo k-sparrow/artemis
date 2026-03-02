@@ -50,7 +50,7 @@ class HuggingFaceEndpointEmbeddings(BaseModel, Embeddings):
     provider: str | None = None
     """Name of the provider to use for inference with the model specified in
         `repo_id`. e.g. "sambanova". if not specified, defaults to HF Inference API.
-        available providers can be found in the [huggingface_hub documentation](https://huggingface.co/docs/huggingface_hub/guides/inference#supported-providers-and-tasks)."""
+        available providers can be found in the [huggingface_hub documentation](https://huggingface.co/docs/huggingface_hub/guides/inference#supported-providers-and-tasks)."""  # noqa: E501
 
     repo_id: str | None = None
     """Huggingfacehub repository id, for backward compatibility."""
@@ -133,7 +133,8 @@ class HuggingFaceEndpointEmbeddings(BaseModel, Embeddings):
         # replace newlines, which can negatively affect performance.
         texts = [text.replace("\n", " ") for text in texts]
         _model_kwargs = self.model_kwargs or {}
-        #  api doc: https://huggingface.github.io/text-embeddings-inference/#/Text%20Embeddings%20Inference/embed
+        #  api doc:
+        # https://huggingface.github.io/text-embeddings-inference/#/Text%20Embeddings%20Inference/embed  # noqa: E501
         responses = self.client.feature_extraction(text=texts, **_model_kwargs)
         return responses.tolist()
 

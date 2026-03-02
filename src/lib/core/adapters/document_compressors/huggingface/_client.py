@@ -31,7 +31,8 @@ class HFInferenceRerankTask(HFInferenceTask):
     ) -> Optional[dict]:
         if not isinstance(inputs, dict):
             raise ValueError(
-                f"Unexpected input type for task {self.task} (got {type(inputs)}), excepected dict[query, texts]"
+                f"Unexpected input type for task {self.task} (got {type(inputs)}), "
+                "excepected dict[query, texts]"
             )
         if "query" not in inputs or "texts" not in inputs:
             raise ValueError(
@@ -39,7 +40,7 @@ class HFInferenceRerankTask(HFInferenceTask):
             )
 
         # Parameters are sent at root-level for feature-extraction task
-        # See specs: https://github.com/huggingface/huggingface.js/blob/main/packages/tasks/src/tasks/feature-extraction/spec/input.json
+        # See specs: https://github.com/huggingface/huggingface.js/blob/main/packages/tasks/src/tasks/feature-extraction/spec/input.json  # noqa: E501
         return {
             "query": inputs["query"],
             "texts": inputs["texts"],
