@@ -30,6 +30,6 @@ py_library(
         "qdrant.py",
     ],
     deps = [
-        requirement("langchain-qdrant"),
+        "//src/lib/core/adapters/vectorstore:qdrant",
     ],
 )

@@ -1,6 +1,6 @@
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
-from qdrant_client import QdrantClient, models
+from qdrant_client import AsyncQdrantClient, QdrantClient, models
 
 from src.backend.indexing.lib.handler.base import BaseVectorHandler
 from src.backend.indexing.lib.vectorstore import AsyncQdrantVectorStore
@@ -24,10 +24,12 @@ class QdrantVectorStoreHandler(BaseVectorHandler):
         self._collection_name = collection_name
         self._base_url = base_url
         self.client = None
+        self.async_client = None
         super().__init__(embeddings=embeddings, eager=eager, **kwargs)
 
     async def acreate(self) -> VectorStore:
         self.client = QdrantClient(url=self._base_url, prefer_grpc=False)
+        self.async_client = AsyncQdrantClient(url=self._base_url, prefer_grpc=False)
 
         if not self.client.collection_exists(self._collection_name):
             try:
@@ -62,9 +64,12 @@ class QdrantVectorStoreHandler(BaseVectorHandler):
 
         return AsyncQdrantVectorStore(
             client=self.client,
+            async_client=self.async_client,
             collection_name=self._collection_name,
             embedding=self.embeddings,
+            validate_collection_config=False,
         )
 
     async def aclose(self):
         self.client.close()
+        await self.async_client.close()

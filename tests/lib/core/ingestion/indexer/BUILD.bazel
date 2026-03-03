@@ -8,6 +8,7 @@ py_test(
     env = {},
     tags = ["unit"],
     deps = [
+        "//src/lib/core/adapters/vectorstore:qdrant",
         "//src/lib/core/ingestion/indexer:simple",
         "//tests/lib/core/ingestion:conftest",
         requirement("langchain_core"),

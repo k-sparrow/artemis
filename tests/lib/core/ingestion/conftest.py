@@ -13,13 +13,13 @@ from typing import List
 import pytest
 from langchain.indexes import SQLRecordManager
 from langchain_core.documents import Document
-from langchain_qdrant import QdrantVectorStore
 from qdrant_client import AsyncQdrantClient, QdrantClient
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from testcontainers.postgres import PostgresContainer
 from testcontainers.qdrant import QdrantContainer
 
 from src.lib.core.adapters.embedding.huggingface import HuggingFaceEndpointEmbeddings
+from src.lib.core.adapters.vectorstore.qdrant import QdrantVectorStore
 from tests.lib.testcontainers.tei import TEIContainer
 
 _EMBEDDING_MODEL = "sentence-transformers/msmarco-MiniLM-L-12-v3"
@@ -105,22 +105,24 @@ async def vectorstore(
     port = int(qdrant_container.get_exposed_port(6333))
     vector_size = len(embeddings.embed_query("dummy"))
 
-    await qdrant_client.create_collection(
+    sync_client = QdrantClient(host=host, port=port, prefer_grpc=False)
+    sync_client.create_collection(
         collection_name=collection_name,
         vectors_config={"size": vector_size, "distance": "Cosine"},
     )
 
-    def _delete_collection() -> None:
-        c = QdrantClient(host=host, port=port, prefer_grpc=False)
-        c.delete_collection(collection_name)
-        c.close()
+    def _teardown() -> None:
+        sync_client.delete_collection(collection_name)
+        sync_client.close()
 
-    request.addfinalizer(_delete_collection)
+    request.addfinalizer(_teardown)
 
     return QdrantVectorStore(
-        client=qdrant_client,
+        client=sync_client,
+        async_client=qdrant_client,
         collection_name=collection_name,
         embedding=embeddings,
+        validate_collection_config=False,
     )
 
 
