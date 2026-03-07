@@ -13,6 +13,7 @@ from tests.lib.testcontainers.tei import TEIContainer
         ("nomic-ai/nomic-embed-text-v1.5", 768),
         ("BAAI/bge-m3", 1024),
     ],
+    ids=lambda t: t[0],
 )
 def embedding_model_and_size(request: FixtureRequest) -> Tuple[str, int]:
     model_id, model_size = request.param

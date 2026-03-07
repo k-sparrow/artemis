@@ -74,6 +74,7 @@ def pipeline(
         resources = PipelineResources(
             vectorstore=vectorstore,
             normalizer=normalizer,
+            record_manager=record_manager,
         )
     else:
         config = PipelineConfig(
