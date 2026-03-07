@@ -42,6 +42,7 @@ __all__ = [
     "ProcessedT",
     "OutputT",
     "SplitChunks",
+    "UpsertResult",
 ]
 
 from src.lib.core.ingestion.config import (
@@ -71,6 +72,7 @@ from src.lib.core.ingestion.types import (
     OutputT,
     ProcessedT,
     SplitChunks,
+    UpsertResult,
 )
 from src.lib.core.ingestion.upserter import (
     SemiStructuredUpserter,

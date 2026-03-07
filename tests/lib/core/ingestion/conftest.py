@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import List
+from typing import List, Iterator
 
 import pytest
 from langchain.indexes import SQLRecordManager
 from langchain_core.documents import Document
 from qdrant_client import AsyncQdrantClient, QdrantClient
+from sqlalchemy import Engine, create_engine
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from testcontainers.postgres import PostgresContainer
 from testcontainers.qdrant import QdrantContainer
@@ -43,7 +44,7 @@ def tei_container(request: pytest.FixtureRequest) -> TEIContainer:
 
 @pytest.fixture(scope="session")
 def qdrant_container(request: pytest.FixtureRequest) -> QdrantContainer:
-    container = QdrantContainer("qdrant/qdrant:latest")
+    container = QdrantContainer("qdrant/qdrant:v1.17")
     container.start()
     request.addfinalizer(container.stop)
     return container
@@ -69,12 +70,20 @@ def embeddings(tei_container: TEIContainer) -> HuggingFaceEndpointEmbeddings:
 
 @pytest.fixture(scope="session")
 def async_engine(
-    request: pytest.FixtureRequest,
     postgres_container: PostgresContainer,
-) -> AsyncEngine:
+) -> Iterator[AsyncEngine]:
     engine = create_async_engine(postgres_container.get_connection_url())
-    request.addfinalizer(engine.dispose)
-    return engine
+    yield engine
+
+
+@pytest.fixture(scope="session")
+def sync_engine(
+    postgres_container: PostgresContainer,
+) -> Iterator[Engine]:
+    url = postgres_container.get_connection_url().replace("+asyncpg", "+psycopg")
+    engine = create_engine(url)
+    yield engine
+    engine.dispose()
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +92,7 @@ def async_engine(
 
 
 @pytest.fixture
-async def qdrant_client(
+def qdrant_client(
     qdrant_container: QdrantContainer,
 ) -> AsyncQdrantClient:
     host = qdrant_container.get_container_host_ip()
@@ -93,7 +102,7 @@ async def qdrant_client(
 
 
 @pytest.fixture
-async def vectorstore(
+def vectorstore(
     request: pytest.FixtureRequest,
     qdrant_container: QdrantContainer,
     qdrant_client: AsyncQdrantClient,
@@ -128,10 +137,19 @@ async def vectorstore(
 
 @pytest.fixture
 async def record_manager(async_engine: AsyncEngine) -> SQLRecordManager:
-    """Per-test SQLRecordManager with a unique namespace, schema pre-created."""
+    """Per-test async SQLRecordManager — use with aupsert / lc_aindex."""
     namespace = f"qdrant/{uuid.uuid4().hex}"
     rm = SQLRecordManager(namespace=namespace, engine=async_engine, async_mode=True)
     await rm.acreate_schema()
+    return rm
+
+
+@pytest.fixture
+def sync_record_manager(sync_engine: Engine) -> SQLRecordManager:
+    """Per-test sync SQLRecordManager — use with upsert / lc_index."""
+    namespace = f"qdrant/{uuid.uuid4().hex}"
+    rm = SQLRecordManager(namespace=namespace, engine=sync_engine, async_mode=False)
+    rm.create_schema()
     return rm
 
 

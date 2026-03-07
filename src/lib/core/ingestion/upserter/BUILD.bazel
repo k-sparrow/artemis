@@ -37,12 +37,25 @@ py_library(
 )
 
 py_library(
+    name = "_proxy",
+    srcs = [
+        "_proxy.py",
+    ],
+    deps = [
+        requirement("langchain-core"),
+    ],
+)
+
+py_library(
     name = "simple",
     srcs = [
         "simple.py",
     ],
     deps = [
+        ":_proxy",
         ":base",
+        "//src/lib/core/ingestion:types",
+        requirement("langchain"),
         requirement("langchain-core"),
         requirement("typing_extensions"),
     ],
@@ -54,6 +67,7 @@ py_library(
         "semi_structured.py",
     ],
     deps = [
+        ":_proxy",
         ":base",
         "//src/lib/core/ingestion:types",
         requirement("langchain"),

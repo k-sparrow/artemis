@@ -1,3 +1,7 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
 from typing import List, Literal
 
 from typing_extensions import override
@@ -7,7 +11,8 @@ from langchain.indexes import index as lc_index
 from langchain_core.indexing import RecordManager
 from langchain_core.vectorstores import VectorStore
 
-from src.lib.core.ingestion.types import SplitChunks
+from src.lib.core.ingestion.types import SplitChunks, UpsertResult
+from src.lib.core.ingestion.upserter._proxy import _IDCapturingVectorStore
 from src.lib.core.ingestion.upserter.base import Upserter
 
 __all__ = [
@@ -15,17 +20,14 @@ __all__ = [
 ]
 
 
-class SemiStructuredUpserter(Upserter[SplitChunks, List[str]]):
+class SemiStructuredUpserter(Upserter[SplitChunks, UpsertResult]):
     """Upserter for semi-structured RAG pipelines.
 
     Handles pre-split text and table chunks, upserting them to the vectorstore.
-    The separation is already done by the indexer, so no re-classification
-    is needed here.
-
     When a ``record_manager`` is provided, deduplication and cleanup are
-    handled via LangChain's ``index`` / ``aindex`` helpers.  In that case
-    the upserter returns an empty list (``aindex`` does not expose inserted
-    IDs via its ``IndexingResult``).
+    handled via LangChain's ``index`` / ``aindex`` helpers.  IDs written to
+    the vectorstore are captured via :class:`_IDCapturingVectorStore` and
+    returned in :class:`UpsertResult`.
 
     Without a ``record_manager``, chunks are added directly via
     ``add_documents`` / ``aadd_documents`` and their IDs are returned.
@@ -53,69 +55,59 @@ class SemiStructuredUpserter(Upserter[SplitChunks, List[str]]):
         return self._vectorstore
 
     @override
-    def upsert(self, data: SplitChunks) -> List[str]:
-        """Upsert split chunks to the vectorstore synchronously.
-
-        Args:
-            data: SplitChunks containing text and table chunks
-
-        Returns:
-            List of document IDs that were upserted, or an empty list when
-            a record manager is used (deduplication via ``index``).
-        """
+    def upsert(self, data: SplitChunks) -> UpsertResult:
         all_chunks = [*data.text_chunks, *data.table_chunks]
-        if not all_chunks:
-            return []
 
         if self._record_manager is not None:
-            lc_index(
+            proxy = _IDCapturingVectorStore(self._vectorstore)
+            result = lc_index(
                 all_chunks,
                 self._record_manager,
-                self._vectorstore,
+                proxy,
                 cleanup=self._cleanup,
                 source_id_key=self._source_id_key,
                 batch_size=self._batch_size,
             )
-            return []
+            return UpsertResult(
+                num_added=result["num_added"],
+                num_updated=result["num_updated"],
+                num_skipped=result["num_skipped"],
+                num_deleted=result["num_deleted"],
+                ids=proxy.drain(),
+            )
 
         ids: List[str] = []
         if data.text_chunks:
             ids.extend(self._vectorstore.add_documents(data.text_chunks))
         if data.table_chunks:
             ids.extend(self._vectorstore.add_documents(data.table_chunks))
-        return ids
+        return UpsertResult(num_added=len(ids), ids=ids)
 
     @override
-    async def aupsert(self, data: SplitChunks) -> List[str]:
-        """Upsert split chunks to the vectorstore asynchronously.
-
-        Args:
-            data: SplitChunks containing text and table chunks
-
-        Returns:
-            List of document IDs that were upserted, or an empty list when
-            a record manager is used (deduplication via ``aindex``).
-        """
+    async def aupsert(self, data: SplitChunks) -> UpsertResult:
         all_chunks = [*data.text_chunks, *data.table_chunks]
-        if not all_chunks:
-            return []
 
         if self._record_manager is not None:
-            await lc_aindex(
+            proxy = _IDCapturingVectorStore(self._vectorstore)
+            result = await lc_aindex(
                 all_chunks,
                 self._record_manager,
-                self._vectorstore,
+                proxy,
                 cleanup=self._cleanup,
                 source_id_key=self._source_id_key,
                 batch_size=self._batch_size,
             )
-            return []
+            return UpsertResult(
+                num_added=result["num_added"],
+                num_updated=result["num_updated"],
+                num_skipped=result["num_skipped"],
+                num_deleted=result["num_deleted"],
+                ids=proxy.drain(),
+            )
 
         ids: List[str] = []
         if data.text_chunks:
-            text_ids = await self._vectorstore.aadd_documents(data.text_chunks)
-            ids.extend(text_ids)
+            ids.extend(await self._vectorstore.aadd_documents(data.text_chunks))
         if data.table_chunks:
-            table_ids = await self._vectorstore.aadd_documents(data.table_chunks)
-            ids.extend(table_ids)
-        return ids
+            ids.extend(await self._vectorstore.aadd_documents(data.table_chunks))
+        return UpsertResult(num_added=len(ids), ids=ids)

@@ -6,12 +6,13 @@ allowing different concrete implementations.
 
 Type Flow:
     Simple RAG:
-        Sequence[Document] → Indexer → List[Document] → Upserter → List[str]
+        Sequence[Document] → Indexer → List[Document] → Upserter → UpsertResult
 
     Semi-Structured RAG:
-        Sequence[Document] → Indexer → SplitChunks → Upserter → List[str]
+        Sequence[Document] → Indexer → SplitChunks → Upserter → UpsertResult
 """
 
+from dataclasses import dataclass, field
 from typing import List, NamedTuple, Protocol, TypeVar, runtime_checkable
 
 from langchain_core.documents import Document
@@ -24,6 +25,7 @@ __all__ = [
     "PipelineOutput",
     # Concrete types
     "SplitChunks",
+    "UpsertResult",
     # Type variables for generics
     "InputT",
     "ProcessedT",
@@ -70,6 +72,31 @@ class PipelineOutput(Protocol):
 # -----------------------------------------------------------------------------
 # Concrete Types
 # -----------------------------------------------------------------------------
+
+
+@dataclass
+class UpsertResult:
+    """Result of an upserter operation.
+
+    Combines the LangChain ``IndexingResult`` counts with the actual
+    vectorstore IDs of documents that were added in this run.  IDs are
+    captured via :class:`_IDCapturingVectorStore` because LangChain's
+    ``index``/``aindex`` helpers do not surface them in their return value.
+
+    Attributes:
+        num_added: Documents newly written to the vectorstore.
+        num_updated: Documents whose content changed and were re-written.
+        num_skipped: Documents already present and unchanged (no write).
+        num_deleted: Documents removed during cleanup.
+        ids: Vectorstore IDs of the documents written in this run
+            (``num_added + num_updated`` entries).
+    """
+
+    num_added: int = 0
+    num_updated: int = 0
+    num_skipped: int = 0
+    num_deleted: int = 0
+    ids: List[str] = field(default_factory=list)
 
 
 class SplitChunks(NamedTuple):

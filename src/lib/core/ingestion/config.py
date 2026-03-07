@@ -120,9 +120,20 @@ class SemiStructuredIndexerConfig:
 class SimpleUpserterConfig:
     """Configuration for the simple vectorstore upserter.
 
-    The vectorstore itself is a runtime dependency passed via
+    The vectorstore and record_manager are runtime dependencies passed via
     :class:`PipelineResources`, not stored here.
+
+    Attributes:
+        cleanup: Deduplication strategy passed to ``aindex`` when a
+            ``record_manager`` is provided.  Ignored otherwise.
+        source_id_key: Document metadata key used to identify the source
+            document for deduplication.
+        batch_size: Number of documents per indexing batch.
     """
+
+    cleanup: Literal["full", "incremental", "none"] = "incremental"
+    source_id_key: str = "source"
+    batch_size: int = 32
 
 
 @dataclass(frozen=True)
@@ -268,12 +279,23 @@ def create_pipeline(
                 if isinstance(config.indexer, SimpleIndexerConfig)
                 else SimpleIndexerConfig()
             )
+            ucfg = (
+                config.upserter
+                if isinstance(config.upserter, SimpleUpserterConfig)
+                else SimpleUpserterConfig()
+            )
             return Pipeline(
                 indexer=SimpleIndexer(
                     chunk_size=icfg.chunk_size,
                     chunk_overlap=icfg.chunk_overlap,
                 ),
-                upserter=SimpleUpserter(vectorstore=resources.vectorstore),
+                upserter=SimpleUpserter(
+                    vectorstore=resources.vectorstore,
+                    record_manager=resources.record_manager,
+                    cleanup=ucfg.cleanup,
+                    source_id_key=ucfg.source_id_key,
+                    batch_size=ucfg.batch_size,
+                ),
                 normalizer=resources.normalizer,
             )
         case PipelineType.SEMI_STRUCTURED:
