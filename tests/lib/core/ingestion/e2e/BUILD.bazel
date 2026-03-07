@@ -1,0 +1,38 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+
+package(default_visibility = ["//visibility:private"])
+
+py_library(
+    name = "conftest",
+    srcs = [
+        "conftest.py",
+    ],
+)
+
+py_test(
+    name = "test_pipeline",
+    srcs = [
+        "conftest.py",
+        "test_pipeline.py",
+    ],
+    tags = ["e2e"],
+    deps = [
+        "//src/lib/core/adapters/vectorstore:qdrant",
+        "//src/lib/core/ingestion:config",
+        "//src/lib/core/ingestion/normalizer:pkg",
+        "//src/lib/core/ingestion/pipeline:base",
+        "//tests/lib/core/ingestion:conftest",
+        requirement("langchain"),
+        requirement("langchain-core"),
+        requirement("qdrant-client"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+    ],
+)
