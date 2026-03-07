@@ -12,9 +12,16 @@ py_test(
 ```
 """
 
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("@pip//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
 load("@rules_python//python/entry_points:py_console_script_binary.bzl", "py_console_script_binary")
+
+__PYTEST_INI_CONTENT = [
+    "[pytest]",
+    "asyncio_default_fixture_loop_scope = session",
+    "asyncio_default_test_loop_scope = session",
+]
 
 def pytest_test(name, srcs, **kwargs):
     """
@@ -31,6 +38,20 @@ def pytest_test(name, srcs, **kwargs):
     data = kwargs.pop("data", [])
     env = kwargs.pop("env", {})
 
+    args = kwargs.pop("args", []) + [
+        "--capture=no",
+        "-v",
+        "--asyncio-mode=auto",
+    ] + [
+        # Passing of srcs is optional and this is only to show how one
+        # would reimplement what `rules_python_pytest` has done.
+        "$(location :%s)" % x
+        for x in srcs
+    ] + [
+        "-c",  # specify a custom pytest.ini file
+        "$(location //tests:pytest.ini)",  # path to a custon pytest.ini file
+    ]
+
     py_library(
         name = name + ".lib",
         srcs = srcs,
@@ -43,7 +64,7 @@ def pytest_test(name, srcs, **kwargs):
     # main test entry
     py_console_script_binary(
         name = name,
-        pkg = "@pip//pytest:pkg",  # assuming your hub repo name is `pypi`.
+        pkg = "@pip//pytest:pkg",  # assuming your hub repo name is `pip`.
         script = "pytest",
         binary_rule = py_test,
         deps = [
@@ -52,16 +73,11 @@ def pytest_test(name, srcs, **kwargs):
             # Add extra test deps below, e.g. for sharding support, etc.
             requirement("pytest-asyncio"),
         ],
-        data = data + srcs,
+        data = data + srcs + ["//tests:pytest.ini"],
         env = env,
         testonly = True,
         # The following is reusing the ideas defined in
         # https://github.com/caseyduquettesc/rules_python_pytest/blob/main/python_pytest/defs.bzl
-        args = kwargs.get("args", ["--capture=no", "-v", "--asyncio-mode=auto"]) + [
-            # Passing of srcs is optional and this is only to show how one
-            # would reimplement what `rules_python_pytest` has done.
-            "$(location :%s)" % x
-            for x in srcs
-        ],
+        args = args,
         **kwargs
     )
