@@ -210,6 +210,7 @@ manifest:
     propcache: propcache
     proxytypes: jsonref
     psutil: psutil
+    psycopg: psycopg
     psycopg_binary: psycopg_binary
     ptyprocess: ptyprocess
     pure_eval: pure_eval
@@ -355,4 +356,4 @@ manifest:
     zstandard: zstandard
   pip_repository:
     name: pip
-integrity: 36c9cf16ae3e49164a6db3ca369571c4e8e78419a99347e1dbf8070f54dfb597
+integrity: b9d4ee7c913572c420164f79478290ea8885f12563530b8bd3ae6ddff1f4312e

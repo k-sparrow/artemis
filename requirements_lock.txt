@@ -2586,6 +2586,10 @@ psutil==7.2.1 \
     # via
     #   accelerate
     #   ipykernel
+psycopg==3.3.3 \
+    --hash=sha256:5e9a47458b3c1583326513b2556a2a9473a1001a56c9efe9e587245b43148dd9 \
+    --hash=sha256:f96525a72bcfade6584ab17e89de415ff360748c766f0106959144dcbb38c698
+    # via -r requirements.in
 psycopg-binary==3.3.3 \
     --hash=sha256:05f32239aec25c5fb15f7948cffdc2dc0dac098e48b80a140e4ba32b572a2e7d \
     --hash=sha256:07c7211f9327d522c9c47560cae00a4ecf6687f4e02d779d035dd3177b41cb12 \
@@ -3278,9 +3282,9 @@ pyzmq==27.1.0 \
     #   jupyter-client
     #   jupyter-console
     #   jupyter-server
-qdrant-client==1.14.1 \
-    --hash=sha256:1c4d5ed791873698da8b5df68df16bb203ec1b0cd6cec0fd6002572a06291a1b \
-    --hash=sha256:75352057ea59fdd7987313dc9cef4d83953591d083028d94eac99cd0e5e2f607
+qdrant-client==1.17.0 \
+    --hash=sha256:47eb033edb9be33a4babb4d87b0d8d5eaf03d52112dca0218db7f2030bf41ba9 \
+    --hash=sha256:f5b452c68c42b3580d3d266446fb00d3c6e3aae89c916e16585b3c704e108438
     # via
     #   -r requirements.in
     #   langchain-qdrant
@@ -4296,6 +4300,7 @@ typing-extensions==4.15.0 \
     #   minio
     #   openapi-python-client
     #   opentelemetry-api
+    #   psycopg
     #   pydantic
     #   pydantic-core
     #   pytest-asyncio
