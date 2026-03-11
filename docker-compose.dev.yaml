@@ -128,8 +128,6 @@ services:
     container_name: pgadmin
     image: dpage/pgadmin4:8.13.0
     restart: unless-stopped
-    depends_on:
-      - postgres
     ports:
       - 5444:80
     environment:

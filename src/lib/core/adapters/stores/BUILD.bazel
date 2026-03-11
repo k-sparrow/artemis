@@ -1,0 +1,20 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+# Python rules
+load("@rules_python//python:defs.bzl", "py_library")
+
+package(default_visibility = [
+    "//src/lib/core:__subpackages__",
+    "//tests/lib/core:__subpackages__",
+])
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    deps = [
+        "//src/lib/core/adapters/stores/base:pkg",
+        "//src/lib/core/adapters/stores/sql:pkg",
+    ],
+)

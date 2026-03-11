@@ -20,6 +20,7 @@ from testcontainers.postgres import PostgresContainer
 from testcontainers.qdrant import QdrantContainer
 
 from src.lib.core.adapters.embedding.huggingface import HuggingFaceEndpointEmbeddings
+from src.lib.core.adapters.stores.sql.store import SQLDocumentIndex
 from src.lib.core.adapters.vectorstore.qdrant import QdrantVectorStore
 from tests.lib.testcontainers.tei import TEIContainer
 
@@ -142,6 +143,32 @@ async def record_manager(async_engine: AsyncEngine) -> SQLRecordManager:
     rm = SQLRecordManager(namespace=namespace, engine=async_engine, async_mode=True)
     await rm.acreate_schema()
     return rm
+
+
+@pytest.fixture
+async def docstore_record_manager(async_engine: AsyncEngine) -> SQLRecordManager:
+    """
+    Per-test async SQLRecordManager for docstore originals.
+    Use with SemiStructuredResources.
+    """
+    namespace = f"qdrant/{uuid.uuid4().hex}:originals"
+    rm = SQLRecordManager(namespace=namespace, engine=async_engine, async_mode=True)
+    await rm.acreate_schema()
+    return rm
+
+
+@pytest.fixture
+async def document_index(async_engine: AsyncEngine) -> SQLDocumentIndex:
+    """Per-test SQLDocumentIndex backed by the shared async engine.
+
+    Each test gets a fresh namespace so docstores are fully isolated.
+    Schema creation is handled lazily by SQLDocumentIndex itself, but we
+    call it explicitly here so the table exists before the first write.
+    """
+    namespace = f"docstore/{uuid.uuid4().hex}"
+    idx = SQLDocumentIndex.from_engine(namespace=namespace, engine=async_engine)
+    await idx.acreate_schema()
+    return idx
 
 
 @pytest.fixture

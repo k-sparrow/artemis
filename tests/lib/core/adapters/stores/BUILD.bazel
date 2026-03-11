@@ -1,0 +1,38 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@pip//:requirements.bzl", "requirement")
+
+package(default_visibility = ["//visibility:private"])
+
+py_test(
+    name = "test_base",
+    srcs = ["test_base.py"],
+    env = {},
+    tags = ["unit"],
+    deps = [
+        "//src/lib/core/adapters/stores/base:pkg",
+        requirement("langchain-core"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+    ],
+)
+
+py_test(
+    name = "test_sql",
+    srcs = ["test_sql.py"],
+    env = {},
+    tags = ["unit"],
+    deps = [
+        "//src/lib/core/adapters/stores/sql:pkg",
+        requirement("asyncpg"),
+        requirement("langchain-core"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+        requirement("sqlalchemy"),
+        requirement("testcontainers"),
+    ],
+)

@@ -248,7 +248,9 @@ class QdrantVectorStore(VectorStore):
 
     CONTENT_KEY: str = "page_content"
     METADATA_KEY: str = "metadata"
-    VECTOR_NAME: str = ""  # The default/unnamed vector - https://qdrant.tech/documentation/concepts/collections/#create-a-collection
+    # The default/unnamed vector:
+    # https://qdrant.tech/documentation/concepts/collections/#create-a-collection
+    VECTOR_NAME: str = ""
     SPARSE_VECTOR_NAME: str = "langchain-sparse"
 
     def __init__(
@@ -1625,7 +1627,7 @@ class QdrantVectorStore(VectorStore):
         else:
             vectors_config, sparse_vectors_config = {}, {}
             if retrieval_mode == RetrievalMode.DENSE:
-                partial_embeddings = embedding.embed_documents(["dummy_text"])  # type: ignore[union-attr]
+                partial_embeddings = embedding.embed_documents(["dummy_text"])
 
                 vector_params["size"] = len(partial_embeddings[0])
                 vector_params["distance"] = distance
@@ -1644,7 +1646,7 @@ class QdrantVectorStore(VectorStore):
                 }
 
             elif retrieval_mode == RetrievalMode.HYBRID:
-                partial_embeddings = embedding.embed_documents(["dummy_text"])  # type: ignore[union-attr]
+                partial_embeddings = embedding.embed_documents(["dummy_text"])
 
                 vector_params["size"] = len(partial_embeddings[0])
                 vector_params["distance"] = distance
@@ -1983,7 +1985,7 @@ class QdrantVectorStore(VectorStore):
                     f"Existing Qdrant collection {collection_name} does not "
                     f"contain dense vector named {vector_name}. "
                     "Did you mean one of the "
-                    f"existing vectors: {', '.join(vector_config.keys())}? "  # type: ignore[union-attr]
+                    f"existing vectors: {', '.join(vector_config.keys())}? "
                     f"If you want to recreate the collection, set `force_recreate` "
                     f"parameter to `True`."
                 )

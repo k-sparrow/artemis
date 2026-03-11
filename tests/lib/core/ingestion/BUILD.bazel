@@ -17,6 +17,7 @@ py_library(
     visibility = ["//tests/lib/core/ingestion:__subpackages__"],
     deps = [
         "//src/lib/core/adapters/embedding:huggingface",
+        "//src/lib/core/adapters/stores/sql:pkg",
         "//src/lib/core/adapters/vectorstore:qdrant",
         "//tests/lib/testcontainers/tei:pkg",
         requirement("asyncpg"),

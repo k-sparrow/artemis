@@ -22,6 +22,7 @@ from src.lib.core.ingestion.config import (
     PipelineResources,
     PipelineType,
     SemiStructuredIndexerConfig,
+    SemiStructuredResources,
     SemiStructuredUpserterConfig,
     create_pipeline,
 )
@@ -59,6 +60,7 @@ def pipeline(
     request: pytest.FixtureRequest,
     vectorstore: QdrantVectorStore,
     record_manager: SQLRecordManager,
+    docstore_record_manager: SQLRecordManager,
     normalizer: MetadataFieldNormalizer,
 ) -> BasePipeline:
     """A fully wired pipeline, parametrized over all pipeline types.
@@ -82,9 +84,10 @@ def pipeline(
             indexer=SemiStructuredIndexerConfig(),
             upserter=SemiStructuredUpserterConfig(),
         )
-        resources = PipelineResources(
+        resources = SemiStructuredResources(
             vectorstore=vectorstore,
             record_manager=record_manager,
+            docstore_record_manager=docstore_record_manager,
             normalizer=normalizer,
         )
 

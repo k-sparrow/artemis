@@ -102,13 +102,13 @@ class UpsertResult:
 class SplitChunks(NamedTuple):
     """Intermediate type for semi-structured RAG pipelines.
 
-    Separates text chunks from table chunks to optimize upserting.
-    Both fields contain Document objects, but the separation prevents
-    the upserter from having to re-classify or re-split a combined list.
+    Separates text chunks from table chunks so the upserter can apply
+    different summarization strategies per content type without re-classifying
+    a combined list.
 
     Attributes:
-        text_chunks: Document chunks from text content
-        table_chunks: Document chunks from tables/structured content
+        text_chunks: Text chunks produced by the indexer.
+        table_chunks: Table chunks produced by the indexer.
     """
 
     text_chunks: List[Document]

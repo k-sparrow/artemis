@@ -1,7 +1,6 @@
 """Tests for SimpleUpserter."""
 
 import pytest
-from langchain.indexes import SQLRecordManager
 from langchain_core.documents import Document
 
 from src.lib.core.ingestion.types import UpsertResult

@@ -104,7 +104,7 @@ class TestSemiStructuredIndexer:
             chunk_size=30,
             chunk_overlap=0,
             table_chunk_size=200,
-            table_overlap=0,
+            table_chunk_overlap=0,
         )
         result = indexer.process(sample_documents)
 

@@ -47,13 +47,22 @@ from dataclasses import dataclass, field, asdict
 from enum import StrEnum
 from typing import Any, Literal
 
+from langchain.retrievers.multi_vector import SearchType
 from langchain_core.indexing import RecordManager
+from langchain_core.indexing.base import DocumentIndex
+from langchain_core.retrievers import BaseRetriever
+from langchain_core.runnables import Runnable
+from langchain_core.stores import BaseStore
 from langchain_core.vectorstores import VectorStore
 
 from src.lib.core.ingestion.indexer import SimpleIndexer, SemiStructuredIndexer
 from src.lib.core.ingestion.normalizer import DocumentNormalizer
 from src.lib.core.ingestion.upserter import SimpleUpserter, SemiStructuredUpserter
 from src.lib.core.ingestion.pipeline import BasePipeline, Pipeline
+from src.lib.core.retrieval.adapters.semi_structured import (
+    SemiStructuredRAGRetrievalAdapter,
+)
+from src.lib.core.retrieval.adapters.simple import SimpleVectorStoreRetrieverAdapter
 
 
 __all__ = [
@@ -63,9 +72,11 @@ __all__ = [
     "SimpleUpserterConfig",
     "SemiStructuredUpserterConfig",
     "PipelineResources",
+    "SemiStructuredResources",
     "PipelineConfig",
     "PIPELINE_TYPES",
     "create_pipeline",
+    "create_retriever",
 ]
 
 
@@ -102,13 +113,20 @@ class SemiStructuredIndexerConfig:
         chunk_size: Maximum characters per text chunk.
         chunk_overlap: Overlap between consecutive text chunks.
         table_chunk_size: Maximum characters per table chunk.
+            Only used when ``split_tables=True``.
         table_chunk_overlap: Overlap between consecutive table chunks.
+            Only used when ``split_tables=True``.
+        split_tables: When ``False`` (default), table documents pass through
+            as single units — correct for multi-vector RAG where each table
+            is summarized whole.  Set to ``True`` to chunk large tables
+            when using the direct (no-docstore) mode.
     """
 
     chunk_size: int = 1024
     chunk_overlap: int = 100
     table_chunk_size: int = 2048
     table_chunk_overlap: int = 0
+    split_tables: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +174,7 @@ class SemiStructuredUpserterConfig:
     cleanup: Literal["full", "incremental", "none"] = "incremental"
     source_id_key: str = "source"
     batch_size: int = 32
+    id_key: str = "doc_id"
 
 
 # ---------------------------------------------------------------------------
@@ -165,21 +184,56 @@ class SemiStructuredUpserterConfig:
 
 @dataclass
 class PipelineResources:
-    """Runtime dependencies for a pipeline.
+    """Runtime dependencies shared by all pipeline algorithms.
 
     These are live connection objects and are intentionally *not* part of
-    the serialisable :class:`PipelineConfig`.
+    the serialisable :class:`PipelineConfig`.  Only LangChain abstractions
+    are referenced here — concrete implementations (Qdrant, SQLAlchemy, …)
+    are an infrastructure concern and live in the FastAPI service layer and
+    test conftest files.
 
     Attributes:
         vectorstore: Initialised vector store for embedding storage.
         record_manager: Optional record manager for deduplication via
-            ``aindex``.  Required when using
-            :class:`SemiStructuredUpserterConfig` with cleanup enabled.
+            ``aindex``.
+        normalizer: Optional pre-processing step applied to documents before
+            indexing (e.g. stamps namespace metadata onto every document).
     """
 
     vectorstore: VectorStore
     record_manager: RecordManager | None = None
     normalizer: DocumentNormalizer | None = None
+
+
+@dataclass
+class SemiStructuredResources(PipelineResources):
+    """Runtime dependencies for the semi-structured (multi-vector) pipeline.
+
+    Extends :class:`PipelineResources` with the docstore and optional LLM
+    summarizer chains needed for the multi-vector RAG pattern.
+
+    Attributes:
+        document_index: Docstore for the multi-vector RAG pattern.  When
+            provided, original chunks are stored here keyed by UUID and their
+            summaries are embedded in the vectorstore.
+        docstore_record_manager: Optional record manager for the docstore.
+            When provided alongside ``document_index``, originals are written
+            via ``lc_aindex`` — giving the docstore the same deduplication and
+            cleanup guarantees as the vectorstore.  Should use the same engine
+            as ``record_manager`` but a distinct namespace (e.g. append
+            ``":originals"``).
+        table_summarizer: ``Runnable[str, str]`` that produces a concise text
+            summary of a table chunk.  Required when ``document_index`` is
+            provided — passed to :class:`SemiStructuredUpserter` which runs it
+            after writing originals to the docstore.
+        text_summarizer: Optional ``Runnable[str, str]`` for text chunks.
+            When absent, text chunks are embedded as-is.
+    """
+
+    document_index: DocumentIndex | None = None
+    docstore_record_manager: RecordManager | None = None
+    table_summarizer: Runnable | None = None
+    text_summarizer: Runnable | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -309,21 +363,97 @@ def create_pipeline(
                 if isinstance(config.upserter, SemiStructuredUpserterConfig)
                 else SemiStructuredUpserterConfig()
             )
+            sr = resources if isinstance(resources, SemiStructuredResources) else None
             return Pipeline(
                 indexer=SemiStructuredIndexer(
                     chunk_size=icfg.chunk_size,
                     chunk_overlap=icfg.chunk_overlap,
                     table_chunk_size=icfg.table_chunk_size,
                     table_chunk_overlap=icfg.table_chunk_overlap,
+                    split_tables=icfg.split_tables,
                 ),
                 upserter=SemiStructuredUpserter(
                     vectorstore=resources.vectorstore,
+                    document_index=sr.document_index if sr else None,
+                    docstore_record_manager=sr.docstore_record_manager if sr else None,
                     record_manager=resources.record_manager,
+                    id_key=ucfg.id_key,
                     cleanup=ucfg.cleanup,
                     source_id_key=ucfg.source_id_key,
                     batch_size=ucfg.batch_size,
+                    table_summarizer=sr.table_summarizer if sr else None,
+                    text_summarizer=sr.text_summarizer if sr else None,
                 ),
                 normalizer=resources.normalizer,
+            )
+        case _:
+            raise ValueError(f"Unknown pipeline type: {config.pipeline_type!r}")
+
+
+def create_retriever(
+    config: PipelineConfig,
+    resources: PipelineResources,
+    search_type: SearchType = SearchType.similarity,
+    search_kwargs: dict[str, Any] | None = None,
+) -> BaseRetriever:
+    """Construct a retriever wired to the same config as the pipeline.
+
+    Branches on ``config.pipeline_type``:
+
+    - ``SIMPLE`` → :class:`SimpleVectorStoreRetrieverAdapter`
+    - ``SEMI_STRUCTURED`` with a ``document_index`` →
+      :class:`SemiStructuredRAGRetrievalAdapter` (multi-vector retrieval)
+    - ``SEMI_STRUCTURED`` without a ``document_index`` →
+      :class:`SimpleVectorStoreRetrieverAdapter` (direct mode)
+
+    The ``id_key`` is read from ``config.upserter`` so it is guaranteed to
+    match what :func:`create_pipeline` used during ingestion — this is the
+    single source of truth that links summary embeddings back to originals.
+
+    Args:
+        config: The same :class:`PipelineConfig` used when building the pipeline.
+        resources: Runtime dependencies.  Pass :class:`SemiStructuredResources`
+            for multi-vector retrieval.
+        search_type: Similarity search mode forwarded to the retriever.
+        search_kwargs: Extra search kwargs, e.g. ``{"k": 4}``.
+
+    Raises:
+        ValueError: If *config.pipeline_type* is not a recognised value.
+    """
+    match config.pipeline_type:
+        case PipelineType.SIMPLE:
+            return SimpleVectorStoreRetrieverAdapter(
+                vectorstore=resources.vectorstore,
+            ).get_retriever(
+                search_type=search_type,
+                search_kwargs=search_kwargs or {},
+            )
+        case PipelineType.SEMI_STRUCTURED:
+            sr = resources if isinstance(resources, SemiStructuredResources) else None
+            if sr is None or sr.document_index is None:
+                # Direct mode — no docstore, fall back to simple vector retrieval
+                return SimpleVectorStoreRetrieverAdapter(
+                    vectorstore=resources.vectorstore,
+                ).get_retriever(
+                    search_type=search_type,
+                    search_kwargs=search_kwargs or {},
+                )
+            ucfg = (
+                config.upserter
+                if isinstance(config.upserter, SemiStructuredUpserterConfig)
+                else SemiStructuredUpserterConfig()
+            )
+            # StoreDocumentIndex (and all DocumentIndex impls in this project)
+            # expose the underlying ByteStore via .store.  We use getattr to
+            # avoid importing the concrete adapter type here.
+            byte_store: BaseStore = getattr(sr.document_index, "store")
+            return SemiStructuredRAGRetrievalAdapter(
+                vectorstore=resources.vectorstore,
+                byte_store=byte_store,
+                id_key=ucfg.id_key,
+            ).get_retriever(
+                search_type=search_type,
+                search_kwargs=search_kwargs or {},
             )
         case _:
             raise ValueError(f"Unknown pipeline type: {config.pipeline_type!r}")

@@ -41,6 +41,8 @@ py_library(
         "//src/lib/core/ingestion/normalizer:pkg",
         "//src/lib/core/ingestion/pipeline:pkg",
         "//src/lib/core/ingestion/upserter:pkg",
+        "//src/lib/core/retrieval/adapters:pkg",
+        requirement("langchain"),
         requirement("langchain-core"),
     ],
 )

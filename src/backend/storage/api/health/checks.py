@@ -24,5 +24,6 @@ class MinioHealthcheck(Check):
                 passed=False,
                 details=(
                     f"Bucket {self._bucket_name} does not exist in S3 storage "
-                    f"at '{self._client._base_url}'"),
+                    f"at '{self._client._base_url}'"
+                ),
             )

@@ -1,0 +1,42 @@
+# -----------------------------------------------------------------------------
+# (c) Copyright Nuvoton Technology Corporation, 2023-2025
+# -----------------------------------------------------------------------------
+# Nuvoton Technology Confidential. All Rights Reserved.
+#
+
+"""
+A package for document index storage
+"""
+
+load("@pip//:requirements.bzl", "requirement")
+
+# Python rules
+load("@rules_python//python:defs.bzl", "py_library")
+
+package(default_visibility = [
+    "//src/lib/core:__subpackages__",
+    "//tests/lib/core:__subpackages__",
+])
+
+py_library(
+    name = "pkg",
+    srcs = [
+        "__init__.py",
+    ],
+    deps = [
+        ":store",
+    ],
+)
+
+py_library(
+    name = "store",
+    srcs = [
+        "store.py",
+    ],
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/lib/core/adapters/stores/base:pkg",
+        requirement("langchain-community"),
+        requirement("sqlalchemy"),
+    ],
+)

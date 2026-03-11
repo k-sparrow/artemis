@@ -5,7 +5,7 @@ from typing_extensions import override
 from langchain.retrievers.multi_vector import SearchType
 from langchain_core.vectorstores import VectorStore, VectorStoreRetriever
 
-from src.lib.core.retrieval.adapters.base import BaseRertievalAdapter
+from src.lib.core.retrieval.adapters.base import BaseRetrievalAdapter
 
 
 __all__ = [
@@ -13,7 +13,7 @@ __all__ = [
 ]
 
 
-class SimpleVectorStoreRetrieverAdapter(BaseRertievalAdapter):
+class SimpleVectorStoreRetrieverAdapter(BaseRetrievalAdapter):
     def __init__(self, vectorstore: VectorStore, *args, **kwargs):
         super().__init__(*args, **kwargs)
 

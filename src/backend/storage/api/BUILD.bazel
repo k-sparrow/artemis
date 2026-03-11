@@ -11,9 +11,10 @@ load("@pip//:requirements.bzl", "requirement")
 # load("@aspect_bazel_lib//lib:tar.bzl", "tar", "mtree_spec", "mtree_mutate")
 # load("@aspect_bazel_lib//lib:testing.bzl", "assert_archive_contains")
 load("@rules_oci//oci:defs.bzl", oci_load = "oci_tarball")
-load("//tools/oci:py_layer.bzl", "py_oci_image")
 load("//tools/backend:uvicorn.bzl", "uvicorn_server")
 # load("//tools/server:celery.bzl", "celery_worker")
+
+load("//tools/oci:py_layer.bzl", "py_oci_image")
 
 package(default_visibility = ["//src/backend/storage/api:__subpackages__"])
 
