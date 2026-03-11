@@ -9,7 +9,7 @@ module(
     compatibility_level = 1,
 )
 
-PY_RULES_VERSION = "0.36.0"
+PY_RULES_VERSION = "1.0.0"
 
 PY_VERSION = "3.11"
 
@@ -35,15 +35,18 @@ bazel_dep(name = "gazelle", version = "0.39.1", repo_name = "bazel_gazelle")
 # -------------------------------------------------------------------------------
 
 # ------------------ Containerization -------------------------------------------
-bazel_dep(name = "aspect_bazel_lib", version = "2.16.0")
+bazel_dep(name = "aspect_bazel_lib", version = "2.19.3")
 bazel_dep(name = "container_structure_test", version = "1.16.0")
 bazel_dep(name = "aspect_rules_py", version = "1.8.4")
 bazel_dep(name = "rules_oci", version = "1.8.0")
-bazel_dep(name = "platforms", version = "0.0.10")
+bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "rules_multirun", version = "0.9.0")
-bazel_dep(name = "bazel_skylib", version = "1.7.1")
-bazel_dep(name = "rules_distroless", version = "0.5.1")
+bazel_dep(name = "bazel_skylib", version = "1.8.2")
+bazel_dep(name = "rules_distroless", version = "0.6.2")
+bazel_dep(name = "tar.bzl", version = "0.9.0")
 # -------------------------------------------------------------------------------
+
+
 
 # Next, initialize the hermetic Python toolchain using this extension.
 # This will allow running Python separated from the system interpreter

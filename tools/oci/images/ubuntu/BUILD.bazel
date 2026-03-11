@@ -5,7 +5,7 @@ Based on:
 https://github.com/GoogleContainerTools/rules_distroless/blob/main/examples/ubuntu_snapshot/BUILD.bazel
 """
 
-load("@aspect_bazel_lib//lib:tar.bzl", "tar")
+load("@tar.bzl", "tar")
 load("@container_structure_test//:defs.bzl", "container_structure_test")  # @unused
 load("@rules_distroless//distroless:defs.bzl", "group", "passwd")
 load("@rules_oci//oci:defs.bzl", "oci_image", oci_load = "oci_tarball")
