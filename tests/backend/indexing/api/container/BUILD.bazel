@@ -1,0 +1,28 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "conftest",
+    srcs = ["conftest.py"],
+    testonly = True,
+    deps = [
+        "//tests/lib/testcontainers/tei:pkg",
+        requirement("asyncpg"),
+        requirement("httpx"),
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_smoke",
+    srcs = ["test_smoke.py"],
+    deps = [
+        ":conftest",
+        requirement("httpx"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+    ],
+    env = {"TC_MAX_TRIES": "1000000000"}
+)
