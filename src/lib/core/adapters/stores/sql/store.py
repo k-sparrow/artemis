@@ -38,8 +38,6 @@ class SQLDocumentIndex(StoreDocumentIndex):
 
     Attributes:
         store: The underlying ``SQLStore`` (narrows ``StoreDocumentIndex.store``).
-        id_kwd: Metadata key used to resolve document IDs.  Defaults to
-            ``"doc_id"``.
     """
 
     store: SQLStore  # type: ignore[assignment]  # narrows ByteStore → SQLStore
@@ -79,21 +77,19 @@ class SQLDocumentIndex(StoreDocumentIndex):
         cls: type[IDX],
         namespace: str,
         engine: Engine | AsyncEngine,
-        id_kwd: str = "doc_id",
     ) -> IDX:
         """Construct from an existing SQLAlchemy engine.
 
         Args:
             namespace: Table namespace passed to :class:`SQLStore`.
             engine: Sync or async SQLAlchemy engine.
-            id_kwd: Metadata key used to resolve document IDs.
         """
         store = SQLStore(
             namespace=namespace,
             engine=engine,
             async_mode=isinstance(engine, AsyncEngine),
         )
-        return cls(store=store, id_kwd=id_kwd)
+        return cls(store=store)
 
     @classmethod
     def from_db_uri(
@@ -102,7 +98,6 @@ class SQLDocumentIndex(StoreDocumentIndex):
         db_url: Optional[Union[str, Path]],
         engine_kwargs: Optional[Dict[str, Any]] = None,
         async_mode: Optional[bool] = None,
-        id_kwd: str = "doc_id",
     ) -> IDX:
         """Construct from a database URL string.
 
@@ -112,7 +107,6 @@ class SQLDocumentIndex(StoreDocumentIndex):
             engine_kwargs: Extra kwargs forwarded to the engine constructor.
             async_mode: Force sync or async mode.  Inferred from the URL
                 driver when ``None``.
-            id_kwd: Metadata key used to resolve document IDs.
         """
         store = SQLStore(
             namespace=namespace,
@@ -120,4 +114,4 @@ class SQLDocumentIndex(StoreDocumentIndex):
             engine_kwargs=engine_kwargs,
             async_mode=async_mode,
         )
-        return cls(store=store, id_kwd=id_kwd)
+        return cls(store=store)

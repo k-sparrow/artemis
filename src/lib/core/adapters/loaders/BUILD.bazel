@@ -4,10 +4,13 @@
 #
 # gazelle:python_root
 
-load("@aspect_rules_py//py:defs.bzl", "py_library")
 load("@pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
 
-package(default_visibility = ["//src:__subpackages__"])
+package(default_visibility = [
+    "//:__subpackages__",
+    "//src:__subpackages__",
+])
 
 py_library(
     name = "pkg",
@@ -15,7 +18,21 @@ py_library(
         "__init__.py",
     ],
     deps = [
+        ":config",
         ":docling",
+        ":pymupdf4llm",
+    ],
+)
+
+py_library(
+    name = "config",
+    srcs = [
+        "config.py",
+    ],
+    deps = [
+        ":docling",
+        ":pymupdf4llm",
+        requirement("langchain-core"),
     ],
 )
 
@@ -28,6 +45,18 @@ py_library(
         requirement("docling"),
         requirement("httpx"),
         requirement("langchain-core"),
-        requirement("langchain-text-splitters"),
+    ],
+)
+
+py_library(
+    name = "pymupdf4llm",
+    srcs = [
+        "pymupdf4llm_.py",
+    ],
+    deps = [
+        requirement("langchain-core"),
+        # requirement("pymupdf"),
+        # requirement("pymupdf-layout"),
+        # requirement("pymupdf4llm"),
     ],
 )

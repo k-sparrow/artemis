@@ -11,6 +11,7 @@ package(
     default_visibility = [
         "//src/backend/indexing:__subpackages__",
         "//src/lib/core/ingestion:__subpackages__",
+        "//tests/backend/indexing:__subpackages__",
         "//tests/lib/core/ingestion:__subpackages__",
     ],
 )

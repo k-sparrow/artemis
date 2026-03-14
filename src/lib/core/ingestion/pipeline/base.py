@@ -2,12 +2,11 @@ from abc import ABC, abstractmethod
 from typing import Generic
 
 from src.lib.core.ingestion.indexer import Indexer
-from src.lib.core.ingestion.normalizer import DocumentNormalizer
 from src.lib.core.ingestion.upserter import Upserter
 from src.lib.core.ingestion.types import (
     InputT,
-    OutputT,
     ProcessedT,
+    UpsertResult,
 )
 
 
@@ -17,16 +16,15 @@ __all__ = [
 ]
 
 
-class BasePipeline(ABC, Generic[InputT, OutputT]):
+class BasePipeline(ABC, Generic[InputT]):
     """Abstract base class defining the pipeline interface.
 
     Type Parameters:
         InputT: The type of input data fed into the pipeline
-        OutputT: The type of output result from the pipeline
     """
 
     @abstractmethod
-    def process(self, data: InputT) -> OutputT:
+    def process(self, data: InputT) -> UpsertResult:
         """Process and upsert data synchronously.
 
         Args:
@@ -37,7 +35,7 @@ class BasePipeline(ABC, Generic[InputT, OutputT]):
         """
 
     @abstractmethod
-    async def aprocess(self, data: InputT) -> OutputT:
+    async def aprocess(self, data: InputT) -> UpsertResult:
         """Process and upsert data asynchronously.
 
         Args:
@@ -48,7 +46,7 @@ class BasePipeline(ABC, Generic[InputT, OutputT]):
         """
 
 
-class Pipeline(BasePipeline[InputT, OutputT], Generic[InputT, ProcessedT, OutputT]):
+class Pipeline(BasePipeline[InputT], Generic[InputT, ProcessedT]):
     """Composable indexing pipeline.
 
     A Pipeline orchestrates the document ingestion flow by combining
@@ -57,7 +55,6 @@ class Pipeline(BasePipeline[InputT, OutputT], Generic[InputT, ProcessedT, Output
     Type Parameters:
         InputT: The type of input data (e.g., Sequence[Document])
         ProcessedT: The intermediate type between indexer and upserter
-        OutputT: The type of output result (e.g., List[str] IDs)
 
     The pipeline is composable - it receives an Indexer and Upserter
     instance at initialization time.
@@ -67,43 +64,29 @@ class Pipeline(BasePipeline[InputT, OutputT], Generic[InputT, ProcessedT, Output
         self,
         *,
         indexer: Indexer[InputT, ProcessedT],
-        upserter: Upserter[ProcessedT, OutputT],
-        normalizer: DocumentNormalizer | None = None,
+        upserter: Upserter[ProcessedT],
     ):
         """Initialize the pipeline.
 
         Args:
             indexer: Indexer instance for data processing
             upserter: Upserter instance for data storage
-            normalizer: Optional normalizer applied to documents before the
-                indexer runs.  Use this to stamp metadata fields (e.g.
-                namespace, source_type) onto every document without coupling
-                that logic to the indexer or the caller.
         """
         self._indexer = indexer
         self._upserter = upserter
-        self._normalizer = normalizer
 
     @property
     def indexer(self) -> Indexer[InputT, ProcessedT]:
         return self._indexer
 
     @property
-    def upserter(self) -> Upserter[ProcessedT, OutputT]:
+    def upserter(self) -> Upserter[ProcessedT]:
         return self._upserter
 
-    @property
-    def normalizer(self) -> DocumentNormalizer | None:
-        return self._normalizer
-
-    def process(self, data: InputT) -> OutputT:
-        if self._normalizer is not None:
-            data = self._normalizer.normalize(data)  # type: ignore[assignment]
+    def process(self, data: InputT) -> UpsertResult:
         processed = self._indexer.process(data)
         return self._upserter.upsert(processed)
 
-    async def aprocess(self, data: InputT) -> OutputT:
-        if self._normalizer is not None:
-            data = await self._normalizer.anormalize(data)  # type: ignore[assignment]
+    async def aprocess(self, data: InputT) -> UpsertResult:
         processed = await self._indexer.aprocess(data)
         return await self._upserter.aupsert(processed)

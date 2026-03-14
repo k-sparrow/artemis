@@ -14,6 +14,7 @@ belong in dedicated test modules.
 
 from __future__ import annotations
 
+import uuid
 from typing import List
 
 import pytest
@@ -52,10 +53,12 @@ class TestGenericPipelineContract:
         vectorstore: QdrantVectorStore,
         qdrant_client: AsyncQdrantClient,
         sample_documents: List[Document],
+        normalizer: MetadataFieldNormalizer,
     ) -> None:
         """After ingestion, the vectorstore must hold at least one chunk per
         source document — nothing is silently dropped."""
-        await pipeline.aprocess(sample_documents)
+        docs = await normalizer.anormalize(sample_documents)
+        await pipeline.aprocess(docs)
 
         result = await qdrant_client.count(vectorstore.collection_name)
 
@@ -68,11 +71,13 @@ class TestGenericPipelineContract:
         vectorstore: QdrantVectorStore,
         qdrant_client: AsyncQdrantClient,
         sample_documents: List[Document],
-        namespace: str,
+        normalizer: MetadataFieldNormalizer,
+        namespace: uuid.UUID,
     ) -> None:
-        """Every stored chunk must carry the namespace injected by the
-        normalizer — the field must survive chunking and storage intact."""
-        await pipeline.aprocess(sample_documents)
+        """Every stored chunk must carry the namespace stamped by the service
+        layer — the field must survive chunking and storage intact."""
+        docs = await normalizer.anormalize(sample_documents)
+        await pipeline.aprocess(docs)
 
         records, _ = await qdrant_client.scroll(
             collection_name=vectorstore.collection_name,
@@ -82,7 +87,8 @@ class TestGenericPipelineContract:
 
         assert len(records) > 0
         assert all(
-            r.payload.get("metadata", {}).get("namespace") == namespace for r in records
+            r.payload.get("metadata", {}).get("namespace") == str(namespace)
+            for r in records
         )
 
     @pytest.mark.asyncio
@@ -92,10 +98,12 @@ class TestGenericPipelineContract:
         vectorstore: QdrantVectorStore,
         qdrant_client: AsyncQdrantClient,
         sample_documents: List[Document],
+        normalizer: MetadataFieldNormalizer,
     ) -> None:
         """The ``source`` key from each original document must appear on at
         least one stored chunk — metadata must not be stripped during chunking."""
-        await pipeline.aprocess(sample_documents)
+        docs = await normalizer.anormalize(sample_documents)
+        await pipeline.aprocess(docs)
 
         records, _ = await qdrant_client.scroll(
             collection_name=vectorstore.collection_name,
@@ -109,6 +117,46 @@ class TestGenericPipelineContract:
         assert expected_sources.issubset(stored_sources)
 
     @pytest.mark.asyncio
+    async def test_input_metadata_preserved_as_subset_on_chunks(
+        self,
+        pipeline: BasePipeline,
+        vectorstore: QdrantVectorStore,
+        qdrant_client: AsyncQdrantClient,
+        sample_documents: List[Document],
+        normalizer: MetadataFieldNormalizer,
+    ) -> None:
+        """Every stored chunk must contain all metadata keys from its parent
+        document — the pipeline must not drop any field during chunking or storage."""
+        docs = await normalizer.anormalize(sample_documents)
+        # Union of keys per source: multiple parent docs may share a source
+        # (e.g. different pages of the same file) so we collect all keys together.
+        parent_keys_by_source: dict[str, set[str]] = {}
+        for doc in docs:
+            source = doc.metadata["source"]
+            parent_keys_by_source.setdefault(source, set()).update(doc.metadata.keys())
+        await pipeline.aprocess(docs)
+
+        records, _ = await qdrant_client.scroll(
+            collection_name=vectorstore.collection_name,
+            with_payload=True,
+            limit=1000,
+        )
+
+        assert len(records) > 0
+        for r in records:
+            chunk_meta = r.payload.get("metadata", {})
+            source = chunk_meta.get("source")
+            assert source in parent_keys_by_source.keys(), (
+                f"Pipeline mutated one of the chunks, '{source}' does not exist "
+                f"in the original set of documents: [{list(parent_keys_by_source.keys())}]"
+            )
+            for key in parent_keys_by_source[source]:
+                assert key in chunk_meta, (
+                    f"metadata field '{key}' from parent doc '{source}' "
+                    f"was lost in stored chunk"
+                )
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "pipeline_type",
         [PipelineType.SIMPLE, PipelineType.SEMI_STRUCTURED],
@@ -119,9 +167,9 @@ class TestGenericPipelineContract:
         pipeline_type: PipelineType,
         vectorstore: QdrantVectorStore,
         record_manager: SQLRecordManager,
-        normalizer: MetadataFieldNormalizer,
         qdrant_client: AsyncQdrantClient,
         sample_documents: List[Document],
+        normalizer: MetadataFieldNormalizer,
     ) -> None:
         """Upserting an empty list with cleanup='full' must delete all previously
         ingested chunks from both the vectorstore and the record manager.
@@ -140,7 +188,6 @@ class TestGenericPipelineContract:
             resources: PipelineResources = PipelineResources(
                 vectorstore=vectorstore,
                 record_manager=record_manager,
-                normalizer=normalizer,
             )
         else:
             config = PipelineConfig(
@@ -151,12 +198,13 @@ class TestGenericPipelineContract:
             resources = SemiStructuredResources(
                 vectorstore=vectorstore,
                 record_manager=record_manager,
-                normalizer=normalizer,
             )
         pipeline = create_pipeline(config=config, resources=resources)
 
+        docs = await normalizer.anormalize(sample_documents)
+
         # 1. Ingest — vectorstore must be non-empty
-        await pipeline.aprocess(sample_documents)
+        await pipeline.aprocess(docs)
         count_before = (await qdrant_client.count(vectorstore.collection_name)).count
         assert count_before > 0
 
@@ -166,7 +214,7 @@ class TestGenericPipelineContract:
         assert count_after == 0
 
         # 3. Re-ingest — record manager must treat all docs as new again
-        result = await pipeline.aprocess(sample_documents)
+        result = await pipeline.aprocess(docs)
         assert result.num_added > 0
         assert result.num_skipped == 0
 
@@ -177,9 +225,9 @@ class TestGenericPipelineContract:
         record_manager: SQLRecordManager,
         docstore_record_manager: SQLRecordManager,
         document_index: SQLDocumentIndex,
-        normalizer: MetadataFieldNormalizer,
         qdrant_client: AsyncQdrantClient,
         sample_documents: List[Document],
+        normalizer: MetadataFieldNormalizer,
     ) -> None:
         """Full cleanup must remove originals from the docstore, not just the
         vectorstore.
@@ -204,12 +252,13 @@ class TestGenericPipelineContract:
             docstore_record_manager=docstore_record_manager,
             document_index=document_index,
             table_summarizer=_IDENTITY_SUMMARIZER,
-            normalizer=normalizer,
         )
         pipeline = create_pipeline(config=config, resources=resources)
 
+        docs = await normalizer.anormalize(sample_documents)
+
         # 1. Ingest — docstore must hold originals for every vectorstore point
-        await pipeline.aprocess(sample_documents)
+        await pipeline.aprocess(docs)
 
         points, _ = await qdrant_client.scroll(
             collection_name=vectorstore.collection_name,

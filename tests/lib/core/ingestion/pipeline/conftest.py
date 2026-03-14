@@ -36,15 +36,15 @@ from src.lib.core.ingestion.pipeline import BasePipeline
 
 
 @pytest.fixture
-def namespace() -> str:
-    """A fresh UUID hex string used as the namespace for each test."""
-    return uuid.uuid4().hex
+def namespace() -> uuid.UUID:
+    """A fresh UUID used as the namespace for each test."""
+    return uuid.uuid4()
 
 
 @pytest.fixture
-def normalizer(namespace: str) -> MetadataFieldNormalizer:
+def normalizer(namespace: uuid.UUID) -> MetadataFieldNormalizer:
     """MetadataFieldNormalizer that stamps ``namespace`` onto every document."""
-    return MetadataFieldNormalizer(fields={"namespace": namespace})
+    return MetadataFieldNormalizer(fields={"namespace": str(namespace)})
 
 
 # ---------------------------------------------------------------------------
@@ -61,13 +61,11 @@ def pipeline(
     vectorstore: QdrantVectorStore,
     record_manager: SQLRecordManager,
     docstore_record_manager: SQLRecordManager,
-    normalizer: MetadataFieldNormalizer,
 ) -> BasePipeline:
     """A fully wired pipeline, parametrized over all pipeline types.
 
     SIMPLE uses the vectorstore only.
     SEMI_STRUCTURED additionally receives the record_manager for deduplication.
-    Both receive the namespace normalizer.
     """
     pipeline_type: PipelineType = request.param
 
@@ -75,7 +73,6 @@ def pipeline(
         config = PipelineConfig(pipeline_type=pipeline_type)
         resources = PipelineResources(
             vectorstore=vectorstore,
-            normalizer=normalizer,
             record_manager=record_manager,
         )
     else:
@@ -88,7 +85,6 @@ def pipeline(
             vectorstore=vectorstore,
             record_manager=record_manager,
             docstore_record_manager=docstore_record_manager,
-            normalizer=normalizer,
         )
 
     return create_pipeline(config=config, resources=resources)

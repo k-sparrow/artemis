@@ -29,7 +29,7 @@ __all__ = [
 ]
 
 
-class SemiStructuredUpserter(Upserter[SplitChunks, UpsertResult]):
+class SemiStructuredUpserter(Upserter[SplitChunks]):
     """Upserter for semi-structured RAG pipelines.
 
     Operates in one of two modes depending on whether a ``document_index``

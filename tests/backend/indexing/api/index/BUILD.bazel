@@ -7,21 +7,22 @@ py_library(
     srcs = ["conftest.py"],
     visibility = ["//visibility:public"],
     deps = [
+        "//src/backend/indexing/api:utils",
         requirement("pytest"),
-        requirement("qdrant-client"),
-        requirement("testcontainers"),
     ],
 )
 
 py_test(
-    name = "test_checks",
-    srcs = ["test_checks.py"],
+    name = "test_ingest",
+    srcs = ["test_ingest.py"],
     deps = [
         ":conftest",
-        "//src/backend/indexing/api/health:checks",
-        requirement("aiohttp"),
+        "//src/backend/indexing/api:dependencies",
+        "//src/backend/indexing/api:main",
+        "//src/lib/core/ingestion:exceptions",
+        "//src/lib/core/ingestion:types",
+        requirement("httpx"),
+        requirement("langchain-core"),
         requirement("pytest"),
-        requirement("pytest-asyncio"),
-        requirement("qdrant-client"),
     ],
 )

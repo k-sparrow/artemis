@@ -10,6 +10,7 @@ Type Flow:
 
     Semi-Structured RAG:
         Sequence[Document] → Indexer → SplitChunks → Upserter → UpsertResult
+
 """
 
 from dataclasses import dataclass, field
@@ -29,7 +30,6 @@ __all__ = [
     # Type variables for generics
     "InputT",
     "ProcessedT",
-    "OutputT",
 ]
 
 
@@ -125,6 +125,3 @@ InputT = TypeVar("InputT")
 
 ProcessedT = TypeVar("ProcessedT")
 """Type variable for intermediate processed data."""
-
-OutputT = TypeVar("OutputT")
-"""Type variable for pipeline output."""

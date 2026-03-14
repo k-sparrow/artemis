@@ -7,10 +7,10 @@ This module provides the building blocks for document ingestion pipelines:
 
 Type Flow:
     Simple RAG:
-        Sequence[Document] → Indexer → List[Document] → Upserter → List[str]
+        Sequence[Document] → Indexer → List[Document] → Upserter → UpsertResult
 
     Semi-Structured RAG:
-        Sequence[Document] → Indexer → SplitChunks → Upserter → List[str]
+        Sequence[Document] → Indexer → SplitChunks → Upserter → UpsertResult
 """
 
 __all__ = [
@@ -23,9 +23,6 @@ __all__ = [
     "SemiStructuredIndexer",
     "SimpleUpserter",
     "SemiStructuredUpserter",
-    # Normalizers
-    "DocumentNormalizer",
-    "MetadataFieldNormalizer",
     # Configuration & factory
     "PipelineType",
     "SimpleIndexerConfig",
@@ -33,6 +30,7 @@ __all__ = [
     "SimpleUpserterConfig",
     "SemiStructuredUpserterConfig",
     "PipelineResources",
+    "SemiStructuredResources",
     "PipelineConfig",
     "PIPELINE_TYPES",
     "create_pipeline",
@@ -40,7 +38,6 @@ __all__ = [
     "DocumentProcessingException",
     "InputT",
     "ProcessedT",
-    "OutputT",
     "SplitChunks",
     "UpsertResult",
 ]
@@ -49,6 +46,7 @@ from src.lib.core.ingestion.config import (
     PIPELINE_TYPES,
     PipelineConfig,
     PipelineResources,
+    SemiStructuredResources,
     PipelineType,
     SemiStructuredIndexerConfig,
     SemiStructuredUpserterConfig,
@@ -57,10 +55,6 @@ from src.lib.core.ingestion.config import (
     create_pipeline,
 )
 from src.lib.core.ingestion.exceptions import DocumentProcessingException
-from src.lib.core.ingestion.normalizer import (
-    DocumentNormalizer,
-    MetadataFieldNormalizer,
-)
 from src.lib.core.ingestion.indexer import (
     Indexer,
     SemiStructuredIndexer,
@@ -69,7 +63,6 @@ from src.lib.core.ingestion.indexer import (
 from src.lib.core.ingestion.pipeline import BasePipeline, Pipeline
 from src.lib.core.ingestion.types import (
     InputT,
-    OutputT,
     ProcessedT,
     SplitChunks,
     UpsertResult,

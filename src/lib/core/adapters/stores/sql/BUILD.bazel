@@ -14,6 +14,7 @@ load("@pip//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", "py_library")
 
 package(default_visibility = [
+    "//src/backend:__subpackages__",
     "//src/lib/core:__subpackages__",
     "//tests/lib/core:__subpackages__",
 ])

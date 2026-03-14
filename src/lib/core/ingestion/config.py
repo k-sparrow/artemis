@@ -56,7 +56,6 @@ from langchain_core.stores import BaseStore
 from langchain_core.vectorstores import VectorStore
 
 from src.lib.core.ingestion.indexer import SimpleIndexer, SemiStructuredIndexer
-from src.lib.core.ingestion.normalizer import DocumentNormalizer
 from src.lib.core.ingestion.upserter import SimpleUpserter, SemiStructuredUpserter
 from src.lib.core.ingestion.pipeline import BasePipeline, Pipeline
 from src.lib.core.retrieval.adapters.semi_structured import (
@@ -196,13 +195,10 @@ class PipelineResources:
         vectorstore: Initialised vector store for embedding storage.
         record_manager: Optional record manager for deduplication via
             ``aindex``.
-        normalizer: Optional pre-processing step applied to documents before
-            indexing (e.g. stamps namespace metadata onto every document).
     """
 
     vectorstore: VectorStore
     record_manager: RecordManager | None = None
-    normalizer: DocumentNormalizer | None = None
 
 
 @dataclass
@@ -350,7 +346,6 @@ def create_pipeline(
                     source_id_key=ucfg.source_id_key,
                     batch_size=ucfg.batch_size,
                 ),
-                normalizer=resources.normalizer,
             )
         case PipelineType.SEMI_STRUCTURED:
             icfg = (
@@ -384,7 +379,6 @@ def create_pipeline(
                     table_summarizer=sr.table_summarizer if sr else None,
                     text_summarizer=sr.text_summarizer if sr else None,
                 ),
-                normalizer=resources.normalizer,
             )
         case _:
             raise ValueError(f"Unknown pipeline type: {config.pipeline_type!r}")

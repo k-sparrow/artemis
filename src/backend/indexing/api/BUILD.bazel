@@ -4,7 +4,6 @@
 #
 # gazelle:python_root
 
-load("@aspect_bazel_lib//lib:tar.bzl", "mtree_spec", "tar")
 load("@aspect_rules_py//py:defs.bzl", "py_library")
 load("@pip//:requirements.bzl", "requirement")
 load("@rules_oci//oci:defs.bzl", "oci_push", oci_load = "oci_tarball")
@@ -45,10 +44,14 @@ py_library(
         "//src/backend/indexing/lib/handler:pkg",
         "//src/lib/core/adapters/embedding:pkg",
         "//src/lib/core/adapters/loaders:pkg",
+        "//src/lib/core/adapters/stores/sql:pkg",
         "//src/lib/core/ingestion:pkg",
+        requirement("asyncpg"),
         requirement("fastapi"),
+        requirement("langchain"),
         requirement("langchain-core"),
         requirement("qdrant-client"),
+        requirement("sqlalchemy"),
     ],
 )
 
@@ -59,6 +62,7 @@ py_library(
     ],
     visibility = ["//src/backend/indexing/api:__subpackages__"],
     deps = [
+        "//src/lib/core/ingestion:config",
         requirement("pydantic"),
         requirement("pydantic-settings"),
     ],

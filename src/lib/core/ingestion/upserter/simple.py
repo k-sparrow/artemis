@@ -22,7 +22,7 @@ __all__ = [
 ]
 
 
-class SimpleUpserter(Upserter[List[Document], UpsertResult]):
+class SimpleUpserter(Upserter[List[Document]]):
     """Simple upserter for standard RAG pipelines.
 
     Uses LangChain's ``index`` / ``aindex`` for deduplication and cleanup.

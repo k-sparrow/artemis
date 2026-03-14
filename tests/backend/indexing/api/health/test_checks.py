@@ -1,4 +1,5 @@
 import pytest
+from qdrant_client import QdrantClient
 
 from src.backend.indexing.api.health.checks import LivenessCheck, QdrantHealthcheck
 from tests.backend.indexing.api.health.conftest import COLLECTION_NAME
@@ -30,7 +31,7 @@ class TestQdrantHealthcheck:
         result = await check()
 
         assert result.passed is False
-        assert result.name == "Qdrant"
+        assert result.name == "Readiness/Qdrant"
         assert "does not exist" in result.details
 
     @pytest.mark.asyncio
@@ -45,7 +46,7 @@ class TestQdrantHealthcheck:
         result = await check()
 
         assert result.passed is False
-        assert result.name == "Qdrant"
+        assert result.name == "Readiness/Qdrant"
         assert "Missing 'metadata.namespace' index" in result.details
 
     @pytest.mark.asyncio
@@ -58,8 +59,8 @@ class TestQdrantHealthcheck:
         result = await check()
 
         assert result.passed is False
-        assert result.name == "Qdrant"
-        assert "not configured as tenant" in result.details
+        assert result.name == "Readiness/Qdrant"
+        assert "index has no params configured" in result.details
 
     @pytest.mark.asyncio
     async def test_proper_tenant_index_passes(self, qdrant_client_with_tenant_index):
@@ -71,24 +72,20 @@ class TestQdrantHealthcheck:
         result = await check()
 
         assert result.passed is True
-        assert result.name == "Qdrant"
-
+        assert result.name == "Readiness/Qdrant"
+    
     @pytest.mark.asyncio
-    async def test_connection_error_fails_gracefully(self):
+    async def test_connection_error_fails_gracefully(self, closed_client: QdrantClient):
         """Should fail gracefully when Qdrant connection fails."""
         # Create a client pointing to non-existent server
         # Using a closed client to simulate connection error
-        from qdrant_client import QdrantClient
-
-        client = QdrantClient(":memory:")
-        client.close()
 
         check = QdrantHealthcheck(
-            client=client,
+            client=closed_client,
             collection_name=COLLECTION_NAME,
         )
         result = await check()
 
         assert result.passed is False
-        assert result.name == "Qdrant"
+        assert result.name == "Readiness/Qdrant"
         assert "connection error" in result.details.lower()

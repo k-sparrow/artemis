@@ -46,8 +46,6 @@ bazel_dep(name = "rules_distroless", version = "0.6.2")
 bazel_dep(name = "tar.bzl", version = "0.9.0")
 # -------------------------------------------------------------------------------
 
-
-
 # Next, initialize the hermetic Python toolchain using this extension.
 # This will allow running Python separated from the system interpreter
 # and without manually creating a virtual environment

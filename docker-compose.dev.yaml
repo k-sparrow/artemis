@@ -51,7 +51,7 @@ services:
   # artemis's vectorstore database
   vectorstore:
     profiles: [infra]
-    image: qdrant/qdrant:v1.12.5-unprivileged
+    image: qdrant/qdrant:v1.17-unprivileged
     healthcheck:
       # taken from here:
       # https://github.com/qdrant/qdrant/issues/4250#issuecomment-3145007055
@@ -337,12 +337,12 @@ services:
       QDRANT_COLLECTION_NAME: "artemis"
       TEI_HOST_URL: "http://host.docker.internal:11435"
       DOCLING_SERVE_URI: "http://docling-serve:5001"
-      # SQL_DB_USER: "postgres"
-      # SQL_DB_PASSWORD: "testpass"
-      # SQL_DB_HOST: "postgres"
-      # SQL_DB_PORT: "5432"
-      # SQL_DB_DATABASE: "documents"
-      # SQL_DRIVER: "postgresql+asyncpg"
+      SQL_DB_USER: "postgres"
+      SQL_DB_PASSWORD: "testpass"
+      SQL_DB_HOST: "postgres"
+      SQL_DB_PORT: "5432"
+      SQL_DB_DATABASE: "documents"
+      SQL_DRIVER: "postgresql+asyncpg"
       DEBUG: true
     extra_hosts:
       - "host.docker.internal:host-gateway"

@@ -76,6 +76,7 @@ manifest:
     filetype: filetype
     fitz: pymupdf
     flake8: flake8
+    flatbuffers: flatbuffers
     flower: flower
     fqdn: fqdn
     frozenlist: frozenlist
@@ -177,6 +178,7 @@ manifest:
     nvidia.cusolver: nvidia_cusolver_cu12
     nvidia.cusparse: nvidia_cusparse_cu12
     nvidia.nvjitlink: nvidia_nvjitlink_cu12
+    onnxruntime: onnxruntime
     openapi_python_client: openapi_python_client
     opencv_python_headless.libs.libopenblasp-r0-59ffcd50: opencv_python_headless
     openpyxl: openpyxl
@@ -225,6 +227,9 @@ manifest:
     pyflakes: pyflakes
     pygments: pygments
     pymupdf: pymupdf
+    pymupdf.features: pymupdf_layout
+    pymupdf.layout: pymupdf_layout
+    pymupdf4llm: pymupdf4llm
     pypdfium2: pypdfium2
     pypdfium2_raw: pypdfium2
     pytest: pytest
@@ -356,4 +361,4 @@ manifest:
     zstandard: zstandard
   pip_repository:
     name: pip
-integrity: b9d4ee7c913572c420164f79478290ea8885f12563530b8bd3ae6ddff1f4312e
+integrity: fb7065ec74d3459053c924b9b4edfaee152cc2dc442683ed59ccbe311e9ab40a
