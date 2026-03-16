@@ -13,7 +13,10 @@ class DocumentProcessingException(Exception):
 
 
 class UpstreamServiceException(Exception):
-    """Raised when a required upstream service (loader, embeddings, vectorstore) is unavailable."""
+    """
+    Raised when a required upstream service
+    (loader, embeddings, vectorstore) is unavailable.
+    """
 
     def __init__(self, service: str, message: str):
         self.service = service

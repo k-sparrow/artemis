@@ -43,7 +43,6 @@ py_library(
         ":config",
         "//src/backend/indexing/lib/handler:pkg",
         "//src/lib/core/adapters/embedding:pkg",
-        "//src/lib/core/adapters/loaders:pkg",
         "//src/lib/core/adapters/stores/sql:pkg",
         "//src/lib/core/ingestion:pkg",
         requirement("asyncpg"),
@@ -93,7 +92,6 @@ py_library(
         ":utils",
         "//src/lib/backend/api:pkg",
         requirement("fastapi"),
-        requirement("python-multipart"),
     ] + API_ROUTERS,
 )
 

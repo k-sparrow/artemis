@@ -108,6 +108,7 @@ def qdrant_client_with_tenant_index(
     request.addfinalizer(_teardown)
     return AsyncQdrantClient(host=host, port=port, prefer_grpc=False)
 
+
 @pytest.fixture()
 def closed_client() -> QdrantClient:
     client = QdrantClient(":memory:")

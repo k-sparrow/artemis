@@ -1,0 +1,40 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+package(
+    default_visibility = [
+        "//src/backend/parsing/api:__subpackages__",
+        "//tests/backend/parsing/api:__subpackages__",
+    ],
+)
+
+py_library(
+    name = "service",
+    srcs = ["service.py"],
+    deps = [
+        "//src/lib/core/adapters/loaders:pkg",
+        "//src/lib/core/ingestion:exceptions",
+        "//src/lib/core/ingestion:types",
+        requirement("fastapi"),
+        requirement("httpx"),
+        requirement("langchain-core"),
+    ],
+)
+
+py_library(
+    name = "router",
+    srcs = ["router.py"],
+    deps = [
+        ":service",
+        "//src/backend/parsing/api:dependencies",
+        "//src/lib/backend/logging:pkg",
+        "//src/lib/core/ingestion:types",
+        requirement("fastapi"),
+    ],
+)
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    deps = [":router"],
+)

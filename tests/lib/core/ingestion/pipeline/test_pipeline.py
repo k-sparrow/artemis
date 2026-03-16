@@ -148,7 +148,8 @@ class TestGenericPipelineContract:
             source = chunk_meta.get("source")
             assert source in parent_keys_by_source.keys(), (
                 f"Pipeline mutated one of the chunks, '{source}' does not exist "
-                f"in the original set of documents: [{list(parent_keys_by_source.keys())}]"
+                f"in the original set of documents: "
+                f"[{list(parent_keys_by_source.keys())}]"
             )
             for key in parent_keys_by_source[source]:
                 assert key in chunk_meta, (

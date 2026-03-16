@@ -1,0 +1,29 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "conftest",
+    srcs = ["conftest.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        requirement("aiohttp"),
+        requirement("pytest"),
+    ],
+)
+
+py_test(
+    name = "test_parse",
+    srcs = ["test_parse.py"],
+    deps = [
+        ":conftest",
+        "//src/backend/parsing/api:dependencies",
+        "//src/backend/parsing/api:main",
+        "//src/backend/parsing/api/parse:service",
+        "//src/lib/core/ingestion:exceptions",
+        "//src/lib/core/ingestion:types",
+        requirement("httpx"),
+        requirement("langchain-core"),
+        requirement("pytest"),
+    ],
+)

@@ -8,15 +8,13 @@ import httpx
 import pytest
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
-from testcontainers.core.wait_strategies import HttpWaitStrategy
+
 from testcontainers.postgres import PostgresContainer
 from testcontainers.qdrant import QdrantContainer
 
 from tests.lib.testcontainers.tei import TEIContainer
 
 _EMBEDDING_MODEL = "sentence-transformers/msmarco-MiniLM-L-12-v3"
-_DOCLING_IMAGE = "quay.io/docling-project/docling-serve-cu128:latest"
-_DOCLING_PORT = 5001
 _APP_IMAGE = "artemis/backend-indexing:dev"
 _APP_PORT = 10000
 
@@ -82,24 +80,6 @@ def postgres_container(
     return container
 
 
-@pytest.fixture(scope="session")
-def docling_container(
-    docker_network: Network, request: pytest.FixtureRequest
-) -> DockerContainer:
-    container = (
-        DockerContainer(_DOCLING_IMAGE)
-        .with_network(docker_network)
-        .with_network_aliases("docling-serve")
-        .with_exposed_ports(_DOCLING_PORT)
-        .waiting_for(
-            HttpWaitStrategy(_DOCLING_PORT, "/health").for_status_code(200)
-        )
-    )
-    container.start()
-    request.addfinalizer(container.stop)
-    return container
-
-
 # ---------------------------------------------------------------------------
 # App container
 # ---------------------------------------------------------------------------
@@ -115,7 +95,9 @@ def _wait_for_liveness(url: str, timeout: int = 120000, interval: float = 2.0) -
         except Exception:
             pass
         time.sleep(interval)
-    raise TimeoutError(f"Indexing service did not become ready at {url} within {timeout}s")
+    raise TimeoutError(
+        f"Indexing service did not become ready at {url} within {timeout}s"
+    )
 
 
 @pytest.fixture(scope="session")
@@ -124,7 +106,6 @@ def app_container(
     qdrant_container: QdrantContainer,
     tei_container: TEIContainer,
     postgres_container: PostgresContainer,
-    docling_container: DockerContainer,
     request: pytest.FixtureRequest,
 ) -> DockerContainer:
     """The real indexing service image, wired to testcontainer dependencies."""
@@ -134,7 +115,6 @@ def app_container(
         .with_env("QDRANT_HOST_URL", "http://vectorstore:6333")
         .with_env("QDRANT_COLLECTION_NAME", "test_collection")
         .with_env("TEI_HOST_URL", "http://tei:80")
-        .with_env("DOCLING_SERVE_URI", f"http://docling-serve:{_DOCLING_PORT}")
         .with_env("SQL_DB_USER", postgres_container.username)
         .with_env("SQL_DB_PASSWORD", postgres_container.password)
         .with_env("SQL_DB_HOST", "postgres")

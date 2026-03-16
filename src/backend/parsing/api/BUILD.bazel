@@ -1,0 +1,118 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+# gazelle:python_root
+
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+load("@rules_oci//oci:defs.bzl", "oci_push", oci_load = "oci_tarball")
+load("//tools/backend:uvicorn.bzl", "uvicorn_server")
+load("//tools/oci:py_layer.bzl", "py_oci_image")
+
+package(default_visibility = [
+    "//src/backend:__subpackages__",
+    "//src/backend/parsing/api:__subpackages__",
+    "//tests:__subpackages__",
+])
+
+PARSING_SERVICE_PORT = "10001"
+
+API_ROUTERS = [
+    "//src/backend/parsing/api/health:pkg",
+    "//src/backend/parsing/api/parse:pkg",
+]
+
+py_library(
+    name = "config",
+    srcs = ["config.py"],
+    visibility = ["//src/backend/parsing/api:__subpackages__"],
+    deps = [
+        "//src/lib/core/adapters/loaders:config",
+        requirement("pydantic"),
+        requirement("pydantic-settings"),
+    ],
+)
+
+py_library(
+    name = "exceptions",
+    srcs = ["exceptions.py"],
+    deps = [
+        "//src/lib/core/ingestion:exceptions",
+        requirement("fastapi"),
+    ],
+)
+
+py_library(
+    name = "dependencies",
+    srcs = ["dependencies.py"],
+    deps = [
+        ":config",
+        "//src/lib/core/adapters/loaders:pkg",
+        requirement("fastapi"),
+    ],
+)
+
+py_library(
+    name = "utils",
+    srcs = ["utils.py"],
+    deps = [
+        ":config",
+        "//src/lib/backend/logging:pkg",
+        requirement("fastapi"),
+    ],
+)
+
+py_library(
+    name = "main",
+    srcs = [
+        "__init__.py",
+        "main.py",
+    ],
+    imports = ["."],
+    deps = [
+        ":exceptions",
+        ":utils",
+        "//src/lib/backend/api:pkg",
+        requirement("fastapi"),
+        requirement("python-multipart"),
+    ] + API_ROUTERS,
+)
+
+uvicorn_server(
+    name = "artemis-parsing",
+    app = "src.backend.parsing.api.main:app",
+    host = "0.0.0.0",
+    port = PARSING_SERVICE_PORT,
+    deps = [":main"],
+)
+
+py_oci_image(
+    name = "image.dev",
+    base = "//tools/oci/images/ubuntu:noble",
+    binary = ":artemis-parsing.dev",
+    entrypoint = [
+        "/src/backend/parsing/api/artemis-parsing.dev",
+        "src.backend.parsing.api.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        PARSING_SERVICE_PORT,
+        "--reload",
+    ],
+    exposed_ports = [PARSING_SERVICE_PORT],
+    visibility = ["//src/backend:__pkg__"],
+)
+
+oci_load(
+    name = "tarball.dev",
+    image = ":image.dev",
+    repo_tags = ["artemis/backend-parsing:dev"],
+)
+
+oci_push(
+    name = "push.dev",
+    image = ":image.dev",
+    remote_tags = ["dev"],
+    repository = "localhost:5000/artemis-backend-parsing",
+)

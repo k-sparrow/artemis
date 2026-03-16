@@ -21,8 +21,6 @@ py_test(
         "//src/backend/indexing/api:main",
         "//src/lib/core/ingestion:exceptions",
         "//src/lib/core/ingestion:types",
-        requirement("httpx"),
-        requirement("langchain-core"),
         requirement("pytest"),
     ],
 )

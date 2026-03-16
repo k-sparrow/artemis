@@ -7,7 +7,6 @@ from typing import Any, Dict, Iterator, AsyncIterator, Optional, Tuple, cast
 # third party
 from docling.chunking import BaseChunk, BaseChunker, HybridChunker
 from docling.datamodel.document import DoclingDocument
-from docling_core.types.doc.document import TableItem
 from docling_core.types.doc.labels import DocItemLabel
 from docling_core.transforms.chunker.doc_chunk import DocMeta
 import httpx
@@ -70,10 +69,17 @@ class MetaExtractor(BaseMetaExtractor):
 
     def extract_chunk_meta(self, file_path: str, chunk: BaseChunk) -> dict[str, Any]:
         doc_meta = cast(DocMeta, chunk.meta)
-        is_table = any(item.label == DocItemLabel.TABLE for item in doc_meta.doc_items)
+        labels = [item.label for item in doc_meta.doc_items]
+        # TABLE takes priority for mixed chunks; otherwise use the first item's label.
+        if DocItemLabel.TABLE in labels:
+            primary_label = DocItemLabel.TABLE
+        elif labels:
+            primary_label = labels[0]
+        else:
+            primary_label = DocItemLabel.TEXT
         return {
             "source": file_path,
-            "type": "table" if is_table else "text",
+            "type": primary_label.value,
             "dl_meta": chunk.meta.export_json_dict(),
         }
 

@@ -1,0 +1,28 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "conftest",
+    testonly = True,
+    srcs = ["conftest.py"],
+    deps = [
+        requirement("httpx"),
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_smoke",
+    srcs = ["test_smoke.py"],
+    data = ["complex-tables.pdf"],
+    env = {"TC_MAX_TRIES": "1000000000"},
+    deps = [
+        ":conftest",
+        "//src/lib/core/ingestion:types",
+        requirement("httpx"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+    ],
+)

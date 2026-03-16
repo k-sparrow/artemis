@@ -4,8 +4,8 @@ load("@pip//:requirements.bzl", "requirement")
 
 py_library(
     name = "conftest",
-    srcs = ["conftest.py"],
     testonly = True,
+    srcs = ["conftest.py"],
     deps = [
         "//tests/lib/testcontainers/tei:pkg",
         requirement("asyncpg"),
@@ -18,11 +18,11 @@ py_library(
 py_test(
     name = "test_smoke",
     srcs = ["test_smoke.py"],
+    env = {"TC_MAX_TRIES": "1000000000"},
     deps = [
         ":conftest",
         requirement("httpx"),
         requirement("pytest"),
         requirement("pytest-asyncio"),
     ],
-    env = {"TC_MAX_TRIES": "1000000000"}
 )

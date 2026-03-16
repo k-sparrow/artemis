@@ -14,9 +14,11 @@ Type Flow:
 """
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import List, NamedTuple, Protocol, TypeVar, runtime_checkable
 
 from langchain_core.documents import Document
+from pydantic import BaseModel
 
 
 __all__ = [
@@ -25,6 +27,8 @@ __all__ = [
     "ProcessedData",
     "PipelineOutput",
     # Concrete types
+    "ChunkType",
+    "ParsedChunk",
     "SplitChunks",
     "UpsertResult",
     # Type variables for generics
@@ -72,6 +76,59 @@ class PipelineOutput(Protocol):
 # -----------------------------------------------------------------------------
 # Concrete Types
 # -----------------------------------------------------------------------------
+
+
+class ChunkType(StrEnum):
+    """Content type of a parsed document chunk.
+
+    Values are aligned 1-to-1 with ``DocItemLabel`` from ``docling_core`` so
+    that the full semantic signal from Docling is preserved through the HTTP
+    boundary.  ``UNKNOWN`` is a catch-all for any label not yet modelled here,
+    ensuring the parsing service never crashes on a future Docling update.
+    """
+
+    # Structural / layout
+    TITLE = "title"
+    SECTION_HEADER = "section_header"
+    PAGE_HEADER = "page_header"
+    PAGE_FOOTER = "page_footer"
+    DOCUMENT_INDEX = "document_index"
+    # Body content
+    TEXT = "text"
+    PARAGRAPH = "paragraph"
+    TABLE = "table"
+    PICTURE = "picture"
+    CHART = "chart"
+    CAPTION = "caption"
+    FOOTNOTE = "footnote"
+    LIST_ITEM = "list_item"
+    CODE = "code"
+    FORMULA = "formula"
+    REFERENCE = "reference"
+    # Form / interactive
+    FORM = "form"
+    KEY_VALUE_REGION = "key_value_region"
+    CHECKBOX_SELECTED = "checkbox_selected"
+    CHECKBOX_UNSELECTED = "checkbox_unselected"
+    # Misc
+    GRADING_SCALE = "grading_scale"
+    HANDWRITTEN_TEXT = "handwritten_text"
+    EMPTY_VALUE = "empty_value"
+    # Fallback for any label not yet modelled above
+    UNKNOWN = "unknown"
+
+
+class ParsedChunk(BaseModel):
+    """Schema contract between the parsing service and the indexing service.
+
+    All three fields are required.  ``namespace`` is intentionally absent —
+    it is stamped by the indexing service, not by the parser.  ``dl_meta``
+    and other loader-internal fields are dropped at this boundary.
+    """
+
+    page_content: str
+    source: str
+    type: ChunkType
 
 
 @dataclass

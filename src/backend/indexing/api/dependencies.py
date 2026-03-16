@@ -12,12 +12,6 @@ from qdrant_client import AsyncQdrantClient
 
 from src.backend.indexing.api.config import settings
 from src.lib.core.adapters.embedding.huggingface import HuggingFaceEndpointEmbeddings
-from src.lib.core.adapters.loaders import (
-    LoaderConfig,
-    LoaderFactory,
-    LoaderType,
-    create_loader_factory,
-)
 from src.lib.core.adapters.stores.sql.store import SQLDocumentIndex
 from src.backend.indexing.lib.handler import (
     QdrantVectorStoreHandler,
@@ -35,8 +29,6 @@ from src.lib.core.ingestion import (
 )
 
 __all__ = [
-    "LoaderFactory",
-    "loader_factory_dependency",
     "pipeline_dependency",
     "vectorstore_dependency",
     "get_vectorstore_handler_solved",
@@ -46,8 +38,6 @@ __all__ = [
 # Pipeline helpers
 # ---------------------------------------------------------------------------
 
-# Maps each pipeline type to its indexer config class.
-# Both share chunk_size / chunk_overlap, so construction is uniform.
 _INDEXER_CONFIG_CLS: dict[
     PipelineType,
     Type[Union[SimpleIndexerConfig, SemiStructuredIndexerConfig]],
@@ -59,15 +49,7 @@ _INDEXER_CONFIG_CLS: dict[
 
 @dataclass(frozen=True)
 class ResourceConfig:
-    """Derives all storage namespace strings from a single *namespace* token.
-
-    The *namespace* value is supplied per-request (e.g. a chat-id or project
-    slug) and drives every storage key so that documents from different tenants
-    remain fully isolated.
-
-    Attributes:
-        namespace: Tenant-level namespace token supplied by the caller.
-    """
+    """Derives all storage namespace strings from a single *namespace* token."""
 
     namespace: UUID
 
@@ -234,24 +216,4 @@ async def get_pipeline(
 pipeline_dependency = Annotated[
     BasePipeline,
     Depends(get_pipeline),
-]
-
-# ---------------------------------------------------------------------------
-# Loader
-# ---------------------------------------------------------------------------
-
-
-def get_loader_factory(
-    loader_type: LoaderType = LoaderType.DOCLING,
-) -> LoaderFactory:
-    config = LoaderConfig(
-        loader_type=loader_type,
-        docling_base_url=settings.DOCLING_SERVE_URI,
-    )
-    return create_loader_factory(config)
-
-
-loader_factory_dependency = Annotated[
-    LoaderFactory,
-    Depends(get_loader_factory),
 ]

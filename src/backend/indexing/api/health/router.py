@@ -6,10 +6,9 @@ from src.backend.indexing.api.dependencies import (
     get_embeddings_sync,
 )
 from src.backend.indexing.api.health.checks import (
+    EmbeddingsHealthcheck,
     LivenessCheck,
     QdrantHealthcheck,
-    EmbeddingsHealthcheck,
-    DoclingServeHealthcheck,
 )
 
 
@@ -30,9 +29,6 @@ router = HealthcheckRouter(
         checks=[
             EmbeddingsHealthcheck(
                 embeddings=get_embeddings_sync(),
-            ),
-            DoclingServeHealthcheck(
-                url=settings.DOCLING_SERVE_HEALTHCHECL_URL,
             ),
             QdrantHealthcheck(
                 client=get_async_qdrant_client(),

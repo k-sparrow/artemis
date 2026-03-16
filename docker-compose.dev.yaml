@@ -316,6 +316,27 @@ services:
       PRIVATE_INGESTION_SERVICE_URL: http://backend-indexing-ingestion-private:10000/index/upload
     networks:
       - default
+  backend-parsing:
+    profiles: [backend]
+    image: artemis/backend-parsing:dev
+    depends_on:
+      docling-serve:
+        condition: service_healthy
+    healthcheck:
+      test: wget http://localhost:10001/health/readiness || exit 1
+      interval: 20s
+      timeout: 30s
+      retries: 5
+      start_period: 30s
+    environment:
+      DOCLING_SERVE_URI: "http://docling-serve:5001"
+      LOADER_TYPE: "docling"
+    expose:
+      - "10001"
+    ports:
+      - "10003:10001"
+    networks:
+      - default
   backend-indexing-ingestion:
     profiles: [backend]
     image: artemis/backend-indexing:dev
@@ -323,8 +344,6 @@ services:
       vectorstore:
         condition: service_healthy
       postgres:
-        condition: service_healthy
-      docling-serve:
         condition: service_healthy
     healthcheck:
       test: wget http://localhost:10000/health/readiness || exit 1
@@ -336,7 +355,6 @@ services:
       QDRANT_HOST_URL: "http://vectorstore:6333"
       QDRANT_COLLECTION_NAME: "artemis"
       TEI_HOST_URL: "http://host.docker.internal:11435"
-      DOCLING_SERVE_URI: "http://docling-serve:5001"
       SQL_DB_USER: "postgres"
       SQL_DB_PASSWORD: "testpass"
       SQL_DB_HOST: "postgres"

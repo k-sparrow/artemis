@@ -1,0 +1,24 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "conftest",
+    srcs = ["conftest.py"],
+    deps = [
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_checks",
+    srcs = ["test_checks.py"],
+    deps = [
+        ":conftest",
+        "//src/backend/parsing/api/health:checks",
+        requirement("aiohttp"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+    ],
+)

@@ -1,0 +1,135 @@
+"""
+Storage service definition for Apollo's Indexing pipeline
+"""
+
+load("@aspect_bazel_lib//lib:tar.bzl", "tar")
+load("@aspect_rules_py//py:defs.bzl", "py_binary", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+load("@rules_oci//oci:defs.bzl", "oci_image", oci_load = "oci_tarball")  #@unused
+load("@rules_python//python/entry_points:py_console_script_binary.bzl", "py_console_script_binary")  #@unused
+load("//tools/oci:py_layer.bzl", "py_oci_image")
+
+package(default_visibility = ["//visibility:private"])
+
+# Main FastAPI entrypoint
+#
+# Creates two targets:
+# 1. apollo-backend-storage.dev: Development server (Uvicorn)
+# 2. apollo-backend-storage:     Deployment server (Gunicorn)
+
+tar(
+    name = "srcs",
+    srcs = [
+        "celery.py",
+        "config.py",
+        "dependencies.py",
+        "tasks.py",
+    ],
+)
+
+py_library(
+    name = "pkg",
+    srcs = [
+        "__init__.py",
+    ],
+    visibility = ["//src/backend/controller:__subpackages__"],
+    deps = [
+        ":celery",
+        ":config",
+        ":dependencies",
+        ":tasks",
+    ],
+)
+
+py_library(
+    name = "utils",
+    srcs = ["utils.py"],
+    deps = [
+        ":dependencies",
+        "//src/backend/controller/lib:schemas",
+        requirement("httpx"),
+        requirement("pydantic"),
+    ],
+)
+
+py_library(
+    name = "tasks",
+    srcs = ["tasks.py"],
+    deps = [
+        ":celery",
+        ":config",
+        ":utils",
+        "//src/backend/controller/lib:schemas",
+        "//src/backend/controller/worker/backend:pkg",
+        requirement("celery"),
+    ],
+)
+
+py_library(
+    name = "celery",
+    srcs = ["celery.py"],
+    deps = [
+        ":config",
+        requirement("celery"),
+        requirement("psycopg-binary"),
+        requirement("sqlalchemy"),
+    ],
+)
+
+py_library(
+    name = "dependencies",
+    srcs = ["dependencies.py"],
+    deps = [
+        ":config",
+        requirement("fastapi"),
+        requirement("minio"),
+    ],
+)
+
+py_library(
+    name = "config",
+    srcs = ["config.py"],
+    deps = [
+        requirement("pydantic-settings"),
+    ],
+)
+
+py_console_script_binary(
+    name = "main",
+    binary_rule = py_binary,
+    pkg = requirement("celery"),
+    script = "celery",
+    visibility = ["//src:__subpackages__"],
+    deps = [
+        ":celery",
+        ":tasks",
+        requirement("redis"),
+    ],
+)
+
+# OCI images
+# ----------------------- Development Image -----------------------------
+py_oci_image(
+    name = "image",
+    base = "@ubuntu",
+    binary = ":main",
+    entrypoint = [
+        "//src/backend/controller/worker/main",
+        "-A",
+        "src.backend.indexing.controller.worker.tasks",
+        "worker",
+        "--loglevel",
+        "INFO",
+    ],
+    tars = [
+        ":srcs",
+    ],
+    visibility = ["//src:__subpackages__"],
+)
+
+oci_load(
+    name = "image.tarball",
+    image = ":image",
+    repo_tags = ["apollo/backend-controller-worker:latest"],
+    visibility = ["//visibility:public"],
+)

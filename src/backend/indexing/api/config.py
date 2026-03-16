@@ -24,7 +24,6 @@ class IndexingSettings(BaseSettings):
     DEFAULT_CHUNK_SIZE: int = 1024
     DEFAULT_CHUNK_OVERLAP: int = 100
     # External service URLs
-    DOCLING_SERVE_URI: str
     QDRANT_HOST_URL: str
     QDRANT_COLLECTION_NAME: str
     TEI_HOST_URL: str
@@ -39,17 +38,12 @@ class IndexingSettings(BaseSettings):
     @computed_field
     @property
     def SQL_DB_URL(self) -> str:
-        return f"{self.SQL_DRIVER}://{self.SQL_DB_USER}:{self.SQL_DB_PASSWORD}@{self.SQL_DB_HOST}:{self.SQL_DB_PORT}/{self.SQL_DB_DATABASE}"
+        return f"{self.SQL_DRIVER}://{self.SQL_DB_USER}:{self.SQL_DB_PASSWORD}@{self.SQL_DB_HOST}:{self.SQL_DB_PORT}/{self.SQL_DB_DATABASE}"  # noqa: E501
 
     @computed_field
     @property
     def QDRANT_HOST_URI(self) -> str:
         return f"{self.QDRANT_HOST_URL}"
-
-    @computed_field
-    @property
-    def DOCLING_SERVE_HEALTHCHECL_URL(self) -> str:
-        return f"{self.DOCLING_SERVE_URI.rstrip('/')}/health"
 
 
 settings = IndexingSettings()

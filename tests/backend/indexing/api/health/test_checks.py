@@ -73,7 +73,7 @@ class TestQdrantHealthcheck:
 
         assert result.passed is True
         assert result.name == "Readiness/Qdrant"
-    
+
     @pytest.mark.asyncio
     async def test_connection_error_fails_gracefully(self, closed_client: QdrantClient):
         """Should fail gracefully when Qdrant connection fails."""
