@@ -1,5 +1,17 @@
 load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
 load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "conftest",
+    srcs = ["conftest.py"],
+    testonly = True,
+    deps = [
+        requirement("minio"),
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)
 
 py_test(
     name = "test_parsed_chunks",
@@ -9,5 +21,19 @@ py_test(
         "//src/lib/core/adapters/stores/minio:parsed_chunks",
         "//src/lib/core/ingestion:types",
         requirement("pytest"),
+    ],
+)
+
+py_test(
+    name = "test_parsed_chunks_integration",
+    srcs = ["test_parsed_chunks_integration.py"],
+    tags = ["integration"],
+    deps = [
+        ":conftest",
+        "//src/lib/core/adapters/stores/minio:parsed_chunks",
+        "//src/lib/core/ingestion:types",
+        requirement("minio"),
+        requirement("pytest"),
+        requirement("testcontainers"),
     ],
 )
