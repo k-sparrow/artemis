@@ -1,0 +1,12 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "conftest",
+    srcs = ["conftest.py"],
+    visibility = ["//tests/backend/controller:__subpackages__"],
+    deps = [
+        "//src/backend/controller/worker:celery",
+        requirement("pytest"),
+    ],
+)

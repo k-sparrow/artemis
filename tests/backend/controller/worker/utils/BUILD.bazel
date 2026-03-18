@@ -1,0 +1,16 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@pip//:requirements.bzl", "requirement")
+
+py_test(
+    name = "test_utils",
+    srcs = ["test_utils.py"],
+    deps = [
+        "//src/backend/controller/lib:schemas",
+        "//src/backend/controller/worker:utils",
+        "//src/lib/core/ingestion:types",
+        "//tests/backend/controller/worker:conftest",
+        requirement("httpx"),
+        requirement("pytest"),
+        requirement("respx"),
+    ],
+)

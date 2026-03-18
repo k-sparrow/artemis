@@ -1,0 +1,13 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@pip//:requirements.bzl", "requirement")
+
+py_test(
+    name = "test_tasks",
+    srcs = ["test_tasks.py"],
+    deps = [
+        "//src/backend/controller/worker:tasks",
+        "//src/lib/core/ingestion:types",
+        "//tests/backend/controller/worker:conftest",
+        requirement("pytest"),
+    ],
+)

@@ -1,4 +1,3 @@
-# third party
 from pydantic import computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -9,28 +8,24 @@ __all__ = [
 
 
 class WorkerSettings(BaseSettings):
-    """
-    Configuration settings for the Apollo Backend Ingestion Controller API.
-    """
+    """Configuration settings for the Artemis ingestion controller worker."""
 
     model_config = SettingsConfigDict(extra="ignore")
 
     # MinIO S3 client configuration
-    # Note: These values can be overridden by environment variables.
-    # DO NOT use these hard coded values in production
     S3_ENDPOINT: str
     S3_ACCESS_KEY: str
     S3_SECRET_KEY: str
     S3_SECURE: bool
 
-    # credentials
+    # RabbitMQ broker
     RABBITMQ_USER: str
     RABBITMQ_PASSWORD: str
     RABBITMQ_HOST: str
     RABBITMQ_PORT: int
     RABBITMQ_VHOST: str
 
-    # Result backend URL
+    # Postgres result backend
     SQL_DB_HOST: str
     SQL_DB_PORT: int
     SQL_DB_USER: str
@@ -40,20 +35,24 @@ class WorkerSettings(BaseSettings):
 
     @computed_field
     def MESSAGE_BROKER_URL(self) -> str:
-        """Construct the RabbitMQ message broker URL."""
         return f"amqp://{self.RABBITMQ_USER}:{self.RABBITMQ_PASSWORD}@{self.RABBITMQ_HOST}:{self.RABBITMQ_PORT}/{self.RABBITMQ_VHOST}"  # noqa: E501
 
     @computed_field
     def BACKEND_RESULT_URL(self) -> str:
-        """Construct the SQL backend result URL."""
         return f"{self.SQL_DRIVER}://{self.SQL_DB_USER}:{self.SQL_DB_PASSWORD}@{self.SQL_DB_HOST}:{self.SQL_DB_PORT}/{self.SQL_DB_DATABASE}"  # noqa: E501
 
-    # Task settings
-    EXCHANGE_NAME: str
+    # Upstream service URLs
+    PARSING_SERVICE_URL: str  # e.g. http://backend-parsing:10001
+    INGESTION_SERVICE_URL: str  # e.g. http://backend-indexing:10000
 
-    # Ingestion service URLs
-    INGESTION_SERVICE_URL: str
-    INGESTION_SERVICE_URL: str
+    # MinIO bucket for parsed-chunk intermediate objects
+    PARSED_CHUNKS_BUCKET: str = "parsed-chunks"
+
+    # httpx timeout (seconds) for calls to parsing and indexing services
+    HTTPX_TIMEOUT: float = 300.0
+
+    # Celery exchange name
+    EXCHANGE_NAME: str
 
 
 settings = WorkerSettings()  # type: ignore

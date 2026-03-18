@@ -1,168 +1,89 @@
-import json
+"""Utility functions for the ingestion worker tasks.
+
+Each function corresponds to one logical step in the ingestion chain and is
+deliberately kept small so it can be unit-tested without spinning up Celery.
+"""
+
+from __future__ import annotations
+
+import uuid
 from logging import Logger
-from typing import Dict
+from typing import List
 
 import httpx
-from httpx import QueryParams
-from pydantic import ValidationError
+from minio import Minio
+from pydantic import TypeAdapter
 
-# our code
-from src.backend.controller.lib.schemas import (
-    S3Details,
-    SourceDetails,
-    PrivateIngestionInfo,
-    LibraryIngestionInfo,
-    UploadAction,
-    UpsertionMetaInfoType,
-)
-from src.backend.controller.worker.dependencies import get_s3_client
-
+from src.backend.controller.lib.schemas import S3Details, SourceDetails
+from src.lib.core.ingestion.types import ParsedChunk
 
 __all__ = [
-    "metadata_prep",
-    "upload_prep",
-    "source_prep",
-    "s3_to_ingestion",
+    "fetch_from_s3",
+    "call_parsing_service",
+    "call_indexing_service",
 ]
 
-
-def metadata_prep(
-    upload_type: str,
-    object_name: str,
-    info: Dict[str, str],
-) -> Dict[str, str]:
-    match upload_type:
-        case UpsertionMetaInfoType.LIBRARY:
-            return {
-                "namespace": f'library/{info["namespace"]}/{object_name}',
-                "metadata": json.dumps(info),
-            }
-        case UpsertionMetaInfoType.PRIVATE:
-            try:
-                return {
-                    "namespace": f'private/{info["chat_id"]}/{info["doc_id"]}',
-                    "metadata": json.dumps(info),
-                }
-            except KeyError as e:
-                raise ValidationError(
-                    f"Missing required field in private metadata: {e}"
-                )
-        case _:
-            raise ValueError(f"Unknown upload type: {upload_type}")
+_chunks_adapter: TypeAdapter[List[ParsedChunk]] = TypeAdapter(List[ParsedChunk])
 
 
-def upload_prep(
-    upload_action: UploadAction,
-    metadata: Dict[str, str],
-) -> Dict[str, str]:
-    """
-    Prepares metadata for the upload request based on the upload type.
-    """
-    match upload_action:
-        case UploadAction.CREATE | UploadAction.UPDATE:
-            return {
-                "namespace": metadata["namespace"],
-                "metadata": metadata["metadata"],
-            }
-        case UploadAction.DELETE | UploadAction.AUTO_DELETE:
-            return {
-                "namespace": metadata["namespace"],
-            }
-        case _:
-            raise ValueError(f"Unknown upload action: {upload_action}")
-
-
-def source_prep(info: Dict[str, str]) -> str:
-    """
-    Prepares the source string for the upload request based on the info dictionary.
-    """
-    if "source" in info.keys():
-        return info["source"]
-    else:
-        raise ValueError("Source information is missing in the provided info.")
-
-
-# Utility function for ingestion tasks (must be after all imports and logger definition)
-# Use string type annotations to avoid unbound errors
-def s3_to_ingestion(
+def fetch_from_s3(
+    client: Minio,
     s3: S3Details,
-    source: SourceDetails,
-    upload_action: UploadAction,
-    info: PrivateIngestionInfo | LibraryIngestionInfo,
-    ingestion_url: str,
-    upsertion_type: UpsertionMetaInfoType,
     logger: Logger,
-    logger_prefix: str = "",
-) -> Dict[str, str]:
-    """
-    Loads an object from S3 and sends its bytes to the ingestion service.
-    """
-    minio_client = get_s3_client()
-    try:
-        response = minio_client.get_object(s3.bucket, s3.object)
-        data = response.read()
-    except Exception as e:
-        logger.exception(f"{logger_prefix} Failed to load S3 object: {e}")
-        raise e
+) -> bytes:
+    """Download an object from MinIO and return its raw bytes."""
+    logger.info("s3=fetch bucket=%s object=%s", s3.bucket, s3.object)
+    response = client.get_object(s3.bucket, s3.object)
+    data = response.read()
+    logger.info("s3=fetched bytes=%d", len(data))
+    return data
 
-    url = ingestion_url
+
+def call_parsing_service(
+    file_bytes: bytes,
+    source: SourceDetails,
+    parsing_url: str,
+    timeout: float,
+    logger: Logger,
+) -> List[ParsedChunk]:
+    """POST *file_bytes* to the parsing service and return the parsed chunks."""
+    url = f"{parsing_url.rstrip('/')}/v1/parse"
+    filename = source.path or "document"
+    logger.info("parsing=request url=%s filename=%s", url, filename)
+
+    with httpx.Client(timeout=timeout) as client:
+        response = client.post(
+            url,
+            files={"file": (filename, file_bytes, source.content_type)},
+        )
+        response.raise_for_status()
+
+    chunks = _chunks_adapter.validate_python(response.json())
+    logger.info("parsing=done chunks=%d", len(chunks))
+    return chunks
+
+
+def call_indexing_service(
+    chunks: List[ParsedChunk],
+    namespace_id: uuid.UUID,
+    ingestion_url: str,
+    timeout: float,
+    logger: Logger,
+) -> dict:
+    """POST *chunks* to the indexing service and return the UpsertResult dict."""
+    url = f"{ingestion_url.rstrip('/')}/ingest"
     logger.info(
-        f"{logger_prefix} Sending data to {url} with metadata: {info}, "
-        f"operation is '{str(upload_action)}'"
+        "indexing=request url=%s namespace=%s chunks=%d", url, namespace_id, len(chunks)
     )
 
-    metadata = metadata_prep(
-        upload_type=upsertion_type,
-        object_name=s3.object,
-        info=info.model_dump(mode="json"),
-    )
-
-    logger.info(f"{logger_prefix} Metadata prepared: {metadata}")
-
-    params = upload_prep(upload_action=upload_action, metadata=metadata)
-    logger.info(
-        f"{logger_prefix} Upload parameters for action '{str(upload_action)}' "
-        f"prepared: {params}"
-    )
-
-    try:
-        with httpx.Client() as client:
-            match upload_action:
-                case UploadAction.CREATE | UploadAction.UPDATE:
-                    logger.info(f"{logger_prefix} Creating document {source}")
-                    resp = client.post(
-                        url,
-                        files={"file": (source.path, data, source.content_type)},
-                        data=params,
-                        timeout=100000000,
-                    )
-                case UploadAction.DELETE | UploadAction.AUTO_DELETE:
-                    logger.info(f"{logger_prefix} Deleting document {source}")
-                    resp = client.delete(
-                        url,
-                        params=QueryParams(**params),
-                    )
-            resp.raise_for_status()
-
-        logger.info(
-            f"{logger_prefix} Finished, cleaning object {s3.object} "
-            f"from bucket: {s3.bucket}"
+    with httpx.Client(timeout=timeout) as client:
+        response = client.post(
+            url,
+            params={"namespace": str(namespace_id)},
+            json=[c.model_dump() for c in chunks],
         )
-        minio_client.remove_object(s3.bucket, s3.object)
+        response.raise_for_status()
 
-        logger.info(
-            f"{logger_prefix} Response from {url}: {resp.text} "
-            f"for action '{str(upload_action)}'"
-            f"on object '{s3.object}' of file {source.path}"
-        )
-
-        return {"result": resp.text}
-    except httpx.HTTPStatusError as e:
-        logger.exception(
-            f"{logger_prefix} HTTP error occurred: "
-            f"{e.response.status_code} - {e.response.text}"
-        )
-        raise e
-    except Exception as e:
-        logger.exception(f"{logger_prefix} Failed to send data: {e}")
-        raise e
+    result = response.json()
+    logger.info("indexing=done result=%s", result)
+    return result

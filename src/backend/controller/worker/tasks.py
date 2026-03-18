@@ -1,78 +1,199 @@
-import logging
-from typing import Dict
+"""Celery tasks for the Artemis ingestion pipeline.
 
+Chain structure
+---------------
+The Kafka HTTP Sink calls ``tasks.ingest``, which resolves the namespace UUID
+and dispatches the two-task chain:
+
+    fetch_and_parse  →  index
+
+``fetch_and_parse`` (gpu_bound queue)
+    1. Downloads file bytes from MinIO (in-memory — never touches result backend)
+    2. POSTs bytes to the parsing service → receives List[ParsedChunk]
+    3. Saves chunks to MinIO via ParsedChunkStore → returns the object key
+
+``index`` (io_bound queue)
+    1. Receives the MinIO object key from the previous task
+    2. Loads List[ParsedChunk] from MinIO
+    3. POSTs to the indexing service
+    4. Deletes the MinIO object on success (leaves it on failure for replay)
+    5. Returns the UpsertResult dict
+
+The raw file bytes and chunk lists never cross a task boundary — only the
+short MinIO object key is passed between tasks, keeping the Postgres result
+backend lean.
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+
+from celery import chain
 from celery.utils.log import get_task_logger
 
 from src.backend.controller.lib.schemas import (
+    IngestionInfo,
     S3Details,
     SourceDetails,
-    PrivateIngestionInfo,
-    LibraryIngestionInfo,
     UploadAction,
-    UpsertionMetaInfoType,
 )
+from src.backend.controller.worker.backend.database import DatabaseBackend
 from src.backend.controller.worker.celery import app
 from src.backend.controller.worker.config import settings
-from src.backend.controller.worker.utils import s3_to_ingestion
-from src.backend.controller.worker.backend.database import DatabaseBackend
+from src.backend.controller.worker.dependencies import get_s3_client
+from src.backend.controller.worker.utils import (
+    call_indexing_service,
+    call_parsing_service,
+    fetch_from_s3,
+)
+from src.lib.core.adapters.stores.minio.parsed_chunks import ParsedChunkStore
 
 logger = get_task_logger(__name__)
 logger.setLevel(logging.DEBUG)
 
-
-@app.task(
-    name="tasks.ingestion.private",
-    pydantic=True,
-    backend=DatabaseBackend(
-        app=app,
-        dburi=settings.BACKEND_RESULT_URL,
-        engine_options={"echo": True},
-        serializer="json",
-    ),
-    result_serializer="json",
+# Single shared result-backend instance — avoids recreating the SQLAlchemy
+# engine for every task invocation.
+_db_backend = DatabaseBackend(
+    app=app,
+    dburi=settings.BACKEND_RESULT_URL,
+    engine_options={"echo": False},
+    serializer="json",
 )
-def ingest_private(
-    s3: S3Details,
-    source: SourceDetails,
-    upload_action: UploadAction,
-    info: PrivateIngestionInfo,
-) -> Dict[str, str]:
-    return s3_to_ingestion(
-        s3=s3,
-        source=source,
-        upload_action=upload_action,
-        info=info,
-        ingestion_url=settings.PRIVATE_INGESTION_SERVICE_URL,
-        upsertion_type=UpsertionMetaInfoType.PRIVATE,
-        logger=logger,
-        logger_prefix="[PRIVATE]",
-    )
+
+
+# ---------------------------------------------------------------------------
+# Entry point — called by the Kafka HTTP Sink
+# ---------------------------------------------------------------------------
 
 
 @app.task(
-    name="tasks.ingestion.library",
+    name="tasks.ingest",
     pydantic=True,
-    backend=DatabaseBackend(
-        app=app,
-        dburi=settings.BACKEND_RESULT_URL,
-        engine_options={"echo": True},
-        serializer="json",
-    ),
+    backend=_db_backend,
     result_serializer="json",
 )
-def ingest_library(
+def ingest(
     s3: S3Details,
     source: SourceDetails,
     upload_action: UploadAction,
-    info: LibraryIngestionInfo,
-) -> Dict[str, str]:
-    return s3_to_ingestion(
-        s3=s3,
-        source=source,
-        upload_action=upload_action,
-        info=info,
-        ingestion_url=settings.LIBRARY_INGESTION_SERVICE_URL,
-        upsertion_type=UpsertionMetaInfoType.LIBRARY,
-        logger=logger,
-        logger_prefix="[LIBRARY]",
+    info: IngestionInfo,
+) -> dict:
+    """Dispatch the fetch_and_parse → index chain for a single document."""
+    namespace_id = info.namespace_id
+    logger.info(
+        "ingest=dispatch action=%s namespace=%s object=%s",
+        upload_action,
+        namespace_id,
+        s3.object,
     )
+
+    match upload_action:
+        case UploadAction.CREATE | UploadAction.UPDATE:
+            result = chain(
+                fetch_and_parse.s(
+                    s3.model_dump(),
+                    source.model_dump(),
+                    str(namespace_id),
+                ),
+                index.s(str(namespace_id)),
+            ).apply_async()
+            return {"chain_id": str(result.id)}
+
+        case UploadAction.DELETE | UploadAction.AUTO_DELETE:
+            # TODO: implement deletion through the indexing service
+            logger.warning(
+                "ingest=delete_not_implemented namespace=%s object=%s",
+                namespace_id,
+                s3.object,
+            )
+            return {"status": "delete_skipped"}
+
+
+# ---------------------------------------------------------------------------
+# Task 1 — fetch from S3 + call parsing service + save chunks to MinIO
+# ---------------------------------------------------------------------------
+
+
+@app.task(
+    name="tasks.fetch_and_parse",
+    pydantic=False,
+    backend=_db_backend,
+    result_serializer="json",
+    autoretry_for=(Exception,),
+    retry_kwargs={"max_retries": 5},
+    retry_backoff=True,
+    retry_backoff_max=120,
+)
+def fetch_and_parse(
+    s3_dict: dict,
+    source_dict: dict,
+    namespace_id_str: str,
+) -> str:
+    """Download the document from S3, parse it, persist chunks to MinIO.
+
+    Returns the MinIO object key to be consumed by :func:`index`.
+    """
+    s3 = S3Details.model_validate(s3_dict)
+    source = SourceDetails.model_validate(source_dict)
+    task_id = fetch_and_parse.request.id or str(uuid.uuid4())
+
+    minio_client = get_s3_client()
+
+    file_bytes = fetch_from_s3(minio_client, s3, logger)
+
+    chunks = call_parsing_service(
+        file_bytes=file_bytes,
+        source=source,
+        parsing_url=settings.PARSING_SERVICE_URL,
+        timeout=settings.HTTPX_TIMEOUT,
+        logger=logger,
+    )
+
+    store = ParsedChunkStore(client=minio_client, bucket=settings.PARSED_CHUNKS_BUCKET)
+    key = store.save(chunks, task_id)
+    logger.info("fetch_and_parse=saved key=%s chunks=%d", key, len(chunks))
+    return key
+
+
+# ---------------------------------------------------------------------------
+# Task 2 — load chunks from MinIO + call indexing service + cleanup
+# ---------------------------------------------------------------------------
+
+
+@app.task(
+    name="tasks.index",
+    pydantic=False,
+    backend=_db_backend,
+    result_serializer="json",
+    autoretry_for=(Exception,),
+    retry_kwargs={"max_retries": 5},
+    retry_backoff=True,
+    retry_backoff_max=120,
+)
+def index(chunks_key: str, namespace_id_str: str) -> dict:
+    """Load parsed chunks from MinIO, index them, delete the MinIO object.
+
+    *chunks_key* is the MinIO object key returned by :func:`fetch_and_parse`.
+    On success the object is removed; on failure it is left for manual
+    inspection or dead-letter replay.
+    """
+    namespace_id = uuid.UUID(namespace_id_str)
+    minio_client = get_s3_client()
+    store = ParsedChunkStore(client=minio_client, bucket=settings.PARSED_CHUNKS_BUCKET)
+
+    chunks = store.load(chunks_key)
+    logger.info("index=loaded key=%s chunks=%d", chunks_key, len(chunks))
+
+    result = call_indexing_service(
+        chunks=chunks,
+        namespace_id=namespace_id,
+        ingestion_url=settings.INGESTION_SERVICE_URL,
+        timeout=settings.HTTPX_TIMEOUT,
+        logger=logger,
+    )
+
+    store.delete(chunks_key)
+    logger.info("index=cleanup key=%s", chunks_key)
+
+    return result

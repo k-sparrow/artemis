@@ -5,22 +5,22 @@ package(
     default_visibility = [
         "//src/backend/controller:__subpackages__",
         "//tests/backend/controller:__subpackages__",
-    ],
+        "//tests/lib/core/adapters/stores:__subpackages__",
+    ]
 )
 
 py_library(
     name = "pkg",
-    srcs = [
-        "__init__.py",
-    ],
-    deps = [":schemas"],
+    srcs = ["__init__.py"],
+    deps = [":parsed_chunks"],
 )
 
 py_library(
-    name = "schemas",
-    srcs = ["schemas.py"],
+    name = "parsed_chunks",
+    srcs = ["parsed_chunks.py"],
     deps = [
+        "//src/lib/core/ingestion:types",
+        requirement("minio"),
         requirement("pydantic"),
-        requirement("typing-extensions"),
     ],
 )

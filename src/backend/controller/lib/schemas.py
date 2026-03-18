@@ -10,11 +10,6 @@ from pydantic import (
 )
 
 
-class UpsertionMetaInfoType(str, Enum):
-    LIBRARY = "library"
-    PRIVATE = "private"
-
-
 class UploadAction(str, Enum):
     CREATE = "CREATE"
     UPDATE = "MODIFY"
@@ -87,7 +82,6 @@ class IngestRequest(BaseModel):
     object_: str = Field(alias="object")
 
     # upload type specific information
-    upload_type: UpsertionMetaInfoType
     info: InfoJson
 
 
@@ -104,11 +98,18 @@ class SourceDetails(BaseModel):
     content_type: str
 
 
-class PrivateIngestionInfo(BaseModel):
-    user_id: UUID
-    chat_id: UUID
-    doc_id: UUID
+class IngestionInfo(BaseModel):
+    """Unified ingestion task parameter.
 
+    The ``namespace_id`` is the single axis of data separation across the
+    entire system.  Callers (Kafka HTTP Sink, tests, manual triggers) are
+    responsible for resolving the correct UUID before dispatching the task —
+    the worker no longer needs to know whether a document is "private" or
+    "library".
 
-class LibraryIngestionInfo(BaseModel):
-    namespace: str
+    Migration note: replaces the old ``PrivateIngestionInfo`` /
+    ``LibraryIngestionInfo`` split.  The Kafka Connect HTTP Sink config must be
+    updated to send ``{"namespace_id": "<uuid>"}`` instead of the old payloads.
+    """
+
+    namespace_id: UUID
