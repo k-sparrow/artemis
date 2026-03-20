@@ -7,6 +7,7 @@ load("//tools/oci:py_layer.bzl", "py_oci_image")
 
 package(
     default_visibility = [
+        "//src:__subpackages__",
         "//src/backend/controller:__subpackages__",
         "//tests/backend/controller:__subpackages__",
     ],
@@ -57,6 +58,8 @@ py_library(
         "//src/backend/controller/lib:schemas",
         "//src/backend/controller/worker/backend:pkg",
         "//src/lib/core/adapters/stores/minio:parsed_chunks",
+        requirement("psycopg"),
+        requirement("psycopg-binary"),
         requirement("celery"),
     ],
 )
@@ -95,7 +98,6 @@ py_console_script_binary(
     binary_rule = py_binary,
     pkg = requirement("celery"),
     script = "celery",
-    visibility = ["//src:__subpackages__"],
     deps = [
         ":celery",
         ":tasks",

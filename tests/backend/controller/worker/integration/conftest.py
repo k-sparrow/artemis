@@ -1,0 +1,396 @@
+"""Tier 3 integration test fixtures.
+
+Infrastructure (session-scoped):
+  - RabbitMQ testcontainer   — broker
+  - Postgres testcontainer   — result backend
+  - MinIO testcontainer      — S3 source + ParsedChunkStore intermediate
+
+Stub HTTP servers (session-scoped, in-process threads):
+  - parsing_stub   — minimal server that returns List[ParsedChunk] on POST /v1/parse
+  - indexing_stub  — minimal server that returns UpsertResult on POST /ingest
+
+Worker container (session-scoped):
+  - Real Celery worker running inside the pre-built Docker image with host
+    networking so it can reach all testcontainer ports and in-process stubs.
+  - Requires the image to be loaded before the test run:
+      bazel run //src/backend/controller/worker:image.tarball
+
+Per-test helpers:
+  - reset_stubs (autouse)        — clears stub request log and response queue between tests
+  - s3_source_bucket (autouse)   — ensures "ingest-source" bucket exists; cleans up objects after
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import os
+import threading
+import time
+import uuid
+from collections import deque
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any
+
+import pytest
+from minio import Minio
+from testcontainers.core.container import DockerContainer
+from testcontainers.minio import MinioContainer
+from testcontainers.postgres import PostgresContainer
+from testcontainers.rabbitmq import RabbitMqContainer
+
+_IMAGE_TAG = "artemis/backend-controller-worker:latest"
+
+# ---------------------------------------------------------------------------
+# Configurable stub HTTP server
+# ---------------------------------------------------------------------------
+
+_SAMPLE_CHUNKS = [
+    {"page_content": "hello world", "source": "test.md", "type": "text"},
+    {"page_content": "| a | b |", "source": "test.md", "type": "table"},
+]
+_UPSERT_RESULT = {
+    "num_added": 2,
+    "num_updated": 0,
+    "num_skipped": 0,
+    "num_deleted": 0,
+    "ids": ["vec-id-1", "vec-id-2"],
+}
+
+
+class _StubHandler(BaseHTTPRequestHandler):
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length)
+
+        with self.server._lock:
+            self.server._requests.append(
+                {
+                    "path": self.path,
+                    "headers": dict(self.headers),
+                    "body": body,
+                }
+            )
+            if self.server._responses:
+                status, resp_body = self.server._responses.popleft()
+            else:
+                status, resp_body = self.server._default
+
+        encoded = json.dumps(resp_body).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def log_message(self, *args) -> None:
+        pass
+
+
+class StubServer:
+    def __init__(self, default_status: int, default_body: Any) -> None:
+        self._server = HTTPServer(("127.0.0.1", 0), _StubHandler)
+        self._server._lock = threading.Lock()
+        self._server._requests: list = []
+        self._server._responses: deque = deque()
+        self._server._default = (default_status, default_body)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+
+    @property
+    def url(self) -> str:
+        port = self._server.server_address[1]
+        return f"http://127.0.0.1:{port}"
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._server.shutdown()
+
+    def push_response(self, status: int, body: Any) -> None:
+        with self._server._lock:
+            self._server._responses.append((status, body))
+
+    @property
+    def requests(self) -> list:
+        with self._server._lock:
+            return list(self._server._requests)
+
+    def clear(self) -> None:
+        with self._server._lock:
+            self._server._requests.clear()
+            self._server._responses.clear()
+
+
+# ---------------------------------------------------------------------------
+# Infrastructure containers
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def rabbitmq_container(request: pytest.FixtureRequest) -> RabbitMqContainer:
+    container = RabbitMqContainer(image="rabbitmq:4.1.2-management-alpine")
+    container.start()
+    request.addfinalizer(container.stop)
+    container.get_connection_params
+    return container
+
+
+@pytest.fixture(scope="session")
+def postgres_container(request: pytest.FixtureRequest) -> PostgresContainer:
+    container = PostgresContainer(
+        image="postgres:16-alpine",
+        username="celery",
+        password="celery",
+        dbname="celery_results",
+    )
+    container.start()
+    request.addfinalizer(container.stop)
+    return container
+
+
+@pytest.fixture(scope="session")
+def minio_container(request: pytest.FixtureRequest) -> MinioContainer:
+    container = MinioContainer()
+    container.start()
+    request.addfinalizer(container.stop)
+    return container
+
+
+# ---------------------------------------------------------------------------
+# Stub servers
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def parsing_stub(request: pytest.FixtureRequest) -> StubServer:
+    stub = StubServer(default_status=200, default_body=_SAMPLE_CHUNKS)
+    stub.start()
+    request.addfinalizer(stub.stop)
+    return stub
+
+
+@pytest.fixture(scope="session")
+def indexing_stub(request: pytest.FixtureRequest) -> StubServer:
+    stub = StubServer(default_status=200, default_body=_UPSERT_RESULT)
+    stub.start()
+    request.addfinalizer(stub.stop)
+    return stub
+
+
+# ---------------------------------------------------------------------------
+# Worker subprocess
+# ---------------------------------------------------------------------------
+
+
+def _worker_env(
+    rabbitmq_container: RabbitMqContainer,
+    postgres_container: PostgresContainer,
+    minio_container: MinioContainer,
+    parsing_stub: StubServer,
+    indexing_stub: StubServer,
+) -> dict:
+    minio_host = minio_container.get_container_host_ip()
+    minio_port = minio_container.get_exposed_port(9000)
+    rabbit_host = rabbitmq_container.get_container_host_ip()
+    rabbit_port = rabbitmq_container.get_exposed_port(5672)
+    pg_host = postgres_container.get_container_host_ip()
+    pg_port = postgres_container.get_exposed_port(5432)
+
+    return {
+        **os.environ,
+        "S3_ENDPOINT": f"{minio_host}:{minio_port}",
+        "S3_ACCESS_KEY": "minioadmin",
+        "S3_SECRET_KEY": "minioadmin",
+        "S3_SECURE": "false",
+        "RABBITMQ_USER": "guest",
+        "RABBITMQ_PASSWORD": "guest",
+        "RABBITMQ_HOST": rabbit_host,
+        "RABBITMQ_PORT": str(rabbit_port),
+        "RABBITMQ_VHOST": "",
+        "SQL_DB_HOST": pg_host,
+        "SQL_DB_PORT": str(pg_port),
+        "SQL_DB_USER": "celery",
+        "SQL_DB_PASSWORD": "celery",
+        "SQL_DB_DATABASE": "celery_results",
+        "SQL_DRIVER": "postgresql+psycopg",
+        "PARSING_SERVICE_URL": parsing_stub.url,
+        "INGESTION_SERVICE_URL": indexing_stub.url,
+        "EXCHANGE_NAME": "artemis",
+        "PARSED_CHUNKS_BUCKET": "parsed-chunks",
+        "HTTPX_TIMEOUT": "30.0",
+    }
+
+
+def _wait_for_worker(broker_url: str, timeout: int = 60) -> None:
+    from celery import Celery as _Celery
+
+    check = _Celery(broker=broker_url)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            active = check.control.inspect(timeout=2).active_queues()
+            if active:
+                return
+        except Exception:
+            pass
+        time.sleep(2)
+    raise TimeoutError("Celery worker did not become ready within timeout")
+
+
+@pytest.fixture(scope="session")
+def worker_container(
+    rabbitmq_container: RabbitMqContainer,
+    postgres_container: PostgresContainer,
+    minio_container: MinioContainer,
+    parsing_stub: StubServer,
+    indexing_stub: StubServer,
+    request: pytest.FixtureRequest,
+) -> DockerContainer:
+    env = _worker_env(
+        rabbitmq_container,
+        postgres_container,
+        minio_container,
+        parsing_stub,
+        indexing_stub,
+    )
+    rabbit_host = rabbitmq_container.get_container_host_ip()
+    rabbit_port = rabbitmq_container.get_exposed_port(5672)
+    broker_url = f"amqp://guest:guest@{rabbit_host}:{rabbit_port}/"
+
+    container = DockerContainer(_IMAGE_TAG)
+    container.with_kwargs(network_mode="host")
+    for key, value in env.items():
+        container.with_env(key, value)
+    container.start()
+
+    try:
+        _wait_for_worker(broker_url, timeout=60)
+    except TimeoutError:
+        logs = container.get_logs()
+        container.stop()
+        raise TimeoutError(
+            f"Celery worker container did not become ready within timeout\n"
+            f"broker_url = {broker_url!r}\n"
+            f"Worker logs:\n{logs}"
+        ) from None
+
+    request.addfinalizer(container.stop)
+    return container
+
+
+# ---------------------------------------------------------------------------
+# Dispatch client (test-side Celery app — does NOT import tasks.py)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def dispatch_app(
+    rabbitmq_container: RabbitMqContainer,
+    worker_container: DockerContainer,
+):
+    from celery import Celery
+    from kombu import Exchange, Queue
+
+    rabbit_host = rabbitmq_container.get_container_host_ip()
+    rabbit_port = rabbitmq_container.get_exposed_port(5672)
+    broker_url = f"amqp://guest:guest@{rabbit_host}:{rabbit_port}/"
+
+    _exchange = Exchange("artemis", type="direct")
+    app = Celery(broker=broker_url)
+    app.conf.task_serializer = "json"
+    app.conf.accept_content = ["json"]
+    app.conf.task_queues = [
+        Queue(
+            name="artemis.ingestion.fetch-and-parse",
+            exchange=_exchange,
+            routing_key="fetch-and-parse",
+            durable=True,
+        ),
+        Queue(
+            name="artemis.ingestion.index",
+            exchange=_exchange,
+            routing_key="index",
+            durable=True,
+        ),
+    ]
+    return app
+
+
+# ---------------------------------------------------------------------------
+# MinIO client (test-side)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def minio_client(minio_container: MinioContainer) -> Minio:
+    return minio_container.get_client()
+
+
+# ---------------------------------------------------------------------------
+# Per-test helpers
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def reset_stubs(parsing_stub: StubServer, indexing_stub: StubServer):
+    parsing_stub.clear()
+    indexing_stub.clear()
+    yield
+    parsing_stub.clear()
+    indexing_stub.clear()
+
+
+@pytest.fixture(autouse=True)
+def s3_source_bucket(minio_client: Minio):
+    bucket = "ingest-source"
+    if not minio_client.bucket_exists(bucket):
+        minio_client.make_bucket(bucket)
+    yield bucket
+    for obj in minio_client.list_objects(bucket, recursive=True):
+        minio_client.remove_object(bucket, obj.object_name)
+
+
+@pytest.fixture
+def namespace_id() -> uuid.UUID:
+    return uuid.uuid4()
+
+
+# ---------------------------------------------------------------------------
+# Helpers for tests
+# ---------------------------------------------------------------------------
+
+
+def upload_file(
+    minio_client: Minio,
+    bucket: str,
+    key: str,
+    content: bytes = b"# Hello World\n\nSome content.\n",
+) -> None:
+    minio_client.put_object(
+        bucket, key, io.BytesIO(content), len(content), content_type="text/markdown"
+    )
+
+
+def wait_until_stub_called(stub: StubServer, timeout: int = 60) -> None:
+    """Block until the stub receives at least one request, or raise TimeoutError."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if stub.requests:
+            return
+        time.sleep(0.5)
+    raise TimeoutError(f"Stub at {stub.url} received no requests within {timeout}s")
+
+
+def wait_until_minio_empty(minio_client: Minio, bucket: str, timeout: int = 30) -> None:
+    """Block until the bucket has no objects (cleanup complete)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            objects = list(minio_client.list_objects(bucket, recursive=True))
+            if not objects:
+                return
+        except Exception:
+            pass
+        time.sleep(0.5)
+    raise AssertionError(f"MinIO bucket '{bucket}' still has objects after {timeout}s")

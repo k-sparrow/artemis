@@ -18,7 +18,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.lib.core.ingestion.types import ChunkType, ParsedChunk
-from src.backend.controller.lib.schemas import IngestionInfo, SourceDetails, S3Details, UploadAction
+from src.backend.controller.lib.schemas import (
+    IngestionInfo,
+    SourceDetails,
+    S3Details,
+    UploadAction,
+)
 
 # ----- module under test (imported after conftest patches the app) ----------
 from src.backend.controller.worker.tasks import fetch_and_parse, index, ingest

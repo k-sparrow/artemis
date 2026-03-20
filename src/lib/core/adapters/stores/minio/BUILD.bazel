@@ -6,7 +6,7 @@ package(
         "//src/backend/controller:__subpackages__",
         "//tests/backend/controller:__subpackages__",
         "//tests/lib/core/adapters/stores:__subpackages__",
-    ]
+    ],
 )
 
 py_library(

@@ -1,4 +1,5 @@
 """Session-scoped MinIO testcontainer for Tier 2 integration tests."""
+
 import pytest
 from minio import Minio
 from testcontainers.minio import MinioContainer

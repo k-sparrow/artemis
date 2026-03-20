@@ -269,7 +269,7 @@ services:
   # artemis's indexing task queue controller worker (Celery)
   backend-indexing-controller-celery-worker:
     profiles: [backend]
-    image: artemis/backend-indexing-controller-worker:latest
+    image: artemis/backend-controller-worker:latest
     restart: unless-stopped
     healthcheck:
       test: //src/backend/indexing/controller/worker/main -A src.backend.indexing.controller.worker.celery.app status || exit 1
@@ -288,8 +288,8 @@ services:
       minio:
         condition: service_healthy
       # ingestion endpoint (private file uploads)
-      backend-indexing-ingestion:
-        condition: service_healthy
+      # backend-indexing-ingestion:
+      #   condition: service_healthy
     environment:
       # Message broker connection settings
       RABBITMQ_HOST: rabbitmq
@@ -312,8 +312,8 @@ services:
       # Task settings
       EXCHANGE_NAME: ingestion_test0
       # Ingestion service URLs
-      LIBRARY_INGESTION_SERVICE_URL: http://backend-indexing-ingestion-library:10000/index/upload
-      PRIVATE_INGESTION_SERVICE_URL: http://backend-indexing-ingestion-private:10000/index/upload
+      INGESTION_SERVICE_URL: http://backend-indexing-ingestion:10000
+      PARSING_SERVICE_URL: http://backend-parsing:10001
     networks:
       - default
   backend-parsing:

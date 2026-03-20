@@ -29,6 +29,7 @@ pytest==9.0.2
 pytest-asyncio==1.3.0
 testcontainers==4.14.1
 respx==0.22.0
+pika==1.3.2
 
 
 # database & ORM
@@ -61,7 +62,7 @@ docling==2.26.0
 pymupdf4llm==1.27.2.1
 
 # backend
-celery==5.4.0
+celery[pydantic]==5.6.2
 flower==2.0.1
 redis==5.2.1
 

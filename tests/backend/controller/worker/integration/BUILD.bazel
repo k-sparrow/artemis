@@ -7,31 +7,21 @@ py_library(
     testonly = True,
     srcs = ["conftest.py"],
     deps = [
+        requirement("celery"),
         requirement("minio"),
+        requirement("pika"),
         requirement("pytest"),
         requirement("testcontainers"),
     ],
 )
 
 py_test(
-    name = "test_parsed_chunks",
-    srcs = ["test_parsed_chunks.py"],
-    tags = ["unit"],
-    deps = [
-        "//src/lib/core/adapters/stores/minio:parsed_chunks",
-        "//src/lib/core/ingestion:types",
-        requirement("pytest"),
-    ],
-)
-
-py_test(
-    name = "test_parsed_chunks_integration",
-    srcs = ["test_parsed_chunks_integration.py"],
+    name = "test_chain",
+    srcs = ["test_chain.py"],
     tags = ["integration"],
     deps = [
         ":conftest",
-        "//src/lib/core/adapters/stores/minio:parsed_chunks",
-        "//src/lib/core/ingestion:types",
+        requirement("celery"),
         requirement("minio"),
         requirement("pytest"),
         requirement("testcontainers"),
