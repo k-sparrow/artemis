@@ -10,6 +10,7 @@ py_test(
         "//src/lib/core/ingestion:types",
         "//tests/backend/controller/worker:conftest",
         requirement("httpx"),
+        requirement("pybreaker"),
         requirement("pytest"),
         requirement("respx"),
     ],

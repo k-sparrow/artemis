@@ -44,6 +44,7 @@ py_library(
         requirement("httpx"),
         requirement("minio"),
         requirement("pydantic"),
+        requirement("pybreaker"),
     ],
 )
 

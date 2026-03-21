@@ -63,6 +63,7 @@ pymupdf4llm==1.27.2.1
 
 # backend
 celery[pydantic]==5.6.2
+pybreaker
 flower==2.0.1
 redis==5.2.1
 

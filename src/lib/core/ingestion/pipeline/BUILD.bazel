@@ -30,8 +30,8 @@ py_library(
     ],
     deps = [
         "//src/lib/core/ingestion:types",
-        "//src/lib/core/ingestion/indexer:base",
-        "//src/lib/core/ingestion/normalizer:base",
-        "//src/lib/core/ingestion/upserter:base",
+        "//src/lib/core/ingestion/indexer:pkg",
+        "//src/lib/core/ingestion/normalizer:pkg",
+        "//src/lib/core/ingestion/upserter:pkg",
     ],
 )

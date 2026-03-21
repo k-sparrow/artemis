@@ -39,3 +39,22 @@ app.conf.update(
     task_eager_propagates=True,
     database_create_tables_at_setup=False,
 )
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def reset_circuit_breakers():
+    """Reset both circuit breakers to CLOSED before and after every test.
+
+    The breakers are module-level singletons — without this fixture a test
+    that trips a breaker would leave it OPEN, causing the next unrelated test
+    to fail with CircuitBreakerError instead of its own assertion error.
+    """
+    from src.backend.controller.worker.utils import indexing_breaker, parsing_breaker
+
+    parsing_breaker.close()
+    indexing_breaker.close()
+    yield
+    parsing_breaker.close()
+    indexing_breaker.close()

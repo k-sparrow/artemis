@@ -15,10 +15,13 @@ import respx
 from httpx import Response
 
 from src.backend.controller.lib.schemas import S3Details, SourceDetails
+import pybreaker
+
 from src.backend.controller.worker.utils import (
     call_indexing_service,
     call_parsing_service,
     fetch_from_s3,
+    parsing_breaker,
 )
 from src.lib.core.ingestion.types import ChunkType, ParsedChunk
 
@@ -240,3 +243,100 @@ class TestCallIndexingService:
                 timeout=5.0,
                 logger=_logger,
             )
+
+
+# ---------------------------------------------------------------------------
+# Circuit breakers
+# ---------------------------------------------------------------------------
+
+
+def _parse(url: str = _PARSING_URL) -> None:
+    call_parsing_service(
+        file_bytes=b"x",
+        source=SourceDetails(path="f.md", content_type="text/markdown"),
+        parsing_url=url,
+        timeout=5.0,
+        logger=_logger,
+    )
+
+
+def _index(url: str = _INDEXING_URL) -> None:
+    call_indexing_service(
+        chunks=_SAMPLE_CHUNKS,
+        namespace_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        ingestion_url=url,
+        timeout=5.0,
+        logger=_logger,
+    )
+
+
+class TestCircuitBreakers:
+    @pytest.fixture(autouse=True)
+    def reset_breakers(self):
+        from src.backend.controller.worker.utils import indexing_breaker, parsing_breaker
+
+        parsing_breaker.close()
+        indexing_breaker.close()
+        yield
+        parsing_breaker.close()
+        indexing_breaker.close()
+
+    def test_parsing_breaker_opens_after_fail_max_failures(self) -> None:
+        """After fail_max=3 failures the breaker opens and rejects without an HTTP call."""
+        with respx.mock:
+            route = respx.post(f"{_PARSING_URL}/v1/parse").mock(return_value=Response(503))
+            for _ in range(3):
+                with pytest.raises(Exception):
+                    _parse()
+            assert route.call_count == 3
+
+            # 4th call — breaker OPEN: raises immediately, no HTTP request
+            with pytest.raises(pybreaker.CircuitBreakerError):
+                _parse()
+            assert route.call_count == 3
+
+    def test_indexing_breaker_opens_after_fail_max_failures(self) -> None:
+        """Indexing breaker mirrors parsing breaker behaviour."""
+        with respx.mock:
+            route = respx.post(f"{_INDEXING_URL}/ingest").mock(return_value=Response(503))
+            for _ in range(3):
+                with pytest.raises(Exception):
+                    _index()
+            assert route.call_count == 3
+
+            with pytest.raises(pybreaker.CircuitBreakerError):
+                _index()
+            assert route.call_count == 3
+
+    def test_success_resets_failure_count(self) -> None:
+        """Two failures then a success resets the counter; breaker stays CLOSED."""
+        with respx.mock:
+            respx.post(f"{_PARSING_URL}/v1/parse").mock(
+                side_effect=[
+                    Response(503),
+                    Response(503),
+                    Response(200, json=_SAMPLE_CHUNKS_JSON),
+                    Response(503),
+                ]
+            )
+            for _ in range(2):
+                with pytest.raises(Exception):
+                    _parse()
+
+            _parse()  # success — counter resets to 0
+
+            with pytest.raises(Exception):  # 1 failure, not 3 → still CLOSED
+                _parse()
+
+            assert parsing_breaker.current_state == "closed"
+
+    def test_state_transition_logged_on_open(self, caplog) -> None:
+        """Opening the circuit must emit a WARNING log with the state transition."""
+        with caplog.at_level(logging.WARNING, logger="src.backend.controller.worker.utils"):
+            with respx.mock:
+                respx.post(f"{_PARSING_URL}/v1/parse").mock(return_value=Response(503))
+                for _ in range(3):
+                    with pytest.raises(Exception):
+                        _parse()
+
+        assert any("closed->open" in record.message for record in caplog.records)
