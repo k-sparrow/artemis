@@ -29,15 +29,10 @@ from src.backend.controller.lib.schemas import (
 from src.backend.controller.worker.tasks import fetch_and_parse, index, ingest
 
 _NAMESPACE_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
-_NAMESPACE_STR = str(_NAMESPACE_ID)
 
 _S3 = S3Details(bucket="docs", object="files/test.md")
 _SOURCE = SourceDetails(path="test.md", content_type="text/markdown")
 _INFO = IngestionInfo(namespace_id=_NAMESPACE_ID)
-
-# dict forms used for asserting what the task passes through to sub-tasks
-_S3_DICT = _S3.model_dump()
-_SOURCE_DICT = _SOURCE.model_dump()
 
 _CHUNKS: List[ParsedChunk] = [
     ParsedChunk(page_content="hello", source="test.md", type=ChunkType.TEXT),
@@ -69,9 +64,13 @@ class TestIngest:
 
         assert "chain_id" in result
         mock_chain.assert_called_once()
-        # First task in the chain must be fetch_and_parse with the right args
+        # First task in the chain must be fetch_and_parse with serialisable args
         first_sig = mock_chain.call_args[0][0]
-        assert first_sig.args == (_S3_DICT, _SOURCE_DICT, _NAMESPACE_STR)
+        assert first_sig.args == (
+            _S3.model_dump(),
+            _SOURCE.model_dump(),
+            str(_NAMESPACE_ID),
+        )
 
     def test_update_dispatches_chain(self) -> None:
         mock_chain_result = MagicMock()
@@ -141,7 +140,7 @@ class TestFetchAndParse:
                 return_value=MagicMock(),
             ),
         ):
-            return fetch_and_parse.run(_S3_DICT, _SOURCE_DICT, _NAMESPACE_STR)
+            return fetch_and_parse.run(_S3, _SOURCE, _NAMESPACE_ID)
 
     def test_returns_minio_key(self) -> None:
         result = self._run(MagicMock(), MagicMock(), MagicMock())
@@ -164,7 +163,7 @@ class TestFetchAndParse:
                 return_value=MagicMock(),
             ),
         ):
-            fetch_and_parse.run(_S3_DICT, _SOURCE_DICT, _NAMESPACE_STR)
+            fetch_and_parse.run(_S3, _SOURCE, _NAMESPACE_ID)
 
         s3_arg = mock_fetch.call_args[0][1]
         assert s3_arg.bucket == "docs"
@@ -187,7 +186,7 @@ class TestFetchAndParse:
                 return_value=MagicMock(),
             ),
         ):
-            fetch_and_parse.run(_S3_DICT, _SOURCE_DICT, _NAMESPACE_STR)
+            fetch_and_parse.run(_S3, _SOURCE, _NAMESPACE_ID)
 
         assert mock_parse.call_args[1]["file_bytes"] == b"file bytes"
         assert mock_parse.call_args[1]["source"].path == "test.md"
@@ -210,7 +209,7 @@ class TestFetchAndParse:
                 return_value=MagicMock(),
             ),
         ):
-            fetch_and_parse.run(_S3_DICT, _SOURCE_DICT, _NAMESPACE_STR)
+            fetch_and_parse.run(_S3, _SOURCE, _NAMESPACE_ID)
 
         saved_chunks = mock_store_instance.save.call_args[0][0]
         assert saved_chunks == _CHUNKS
@@ -246,7 +245,7 @@ class TestIndex:
                 return_value=MagicMock(),
             ),
         ):
-            return index.run(self._KEY, _NAMESPACE_STR)
+            return index.run(self._KEY, _NAMESPACE_ID)
 
     def test_returns_upsert_result(self) -> None:
         result = self._run(MagicMock(), MagicMock())
@@ -269,7 +268,7 @@ class TestIndex:
                 return_value=MagicMock(),
             ),
         ):
-            index.run(self._KEY, _NAMESPACE_STR)
+            index.run(self._KEY, _NAMESPACE_ID)
 
         mock_store_instance.load.assert_called_once_with(self._KEY)
 
@@ -289,7 +288,7 @@ class TestIndex:
                 return_value=MagicMock(),
             ),
         ):
-            index.run(self._KEY, _NAMESPACE_STR)
+            index.run(self._KEY, _NAMESPACE_ID)
 
         assert mock_index_svc.call_args[1]["namespace_id"] == _NAMESPACE_ID
 
@@ -310,7 +309,7 @@ class TestIndex:
                 return_value=MagicMock(),
             ),
         ):
-            index.run(self._KEY, _NAMESPACE_STR)
+            index.run(self._KEY, _NAMESPACE_ID)
 
         mock_store_instance.delete.assert_called_once_with(self._KEY)
 
@@ -333,6 +332,6 @@ class TestIndex:
             ),
         ):
             with pytest.raises(RuntimeError):
-                index.run(self._KEY, _NAMESPACE_STR)
+                index.run(self._KEY, _NAMESPACE_ID)
 
         mock_store_instance.delete.assert_not_called()

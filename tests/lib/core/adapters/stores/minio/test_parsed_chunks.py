@@ -7,9 +7,8 @@ real I/O; these tests focus on serialisation correctness and call contracts.
 
 from __future__ import annotations
 
-import io
 import json
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -109,7 +108,8 @@ class TestSave:
     ) -> None:
         store.save(_CHUNKS, "task-123")
         args = mock_client.put_object.call_args[0]
-        data_bytes = args[2].read()  # BytesIO — already read once, need a fresh one
+        # BytesIO — already read once, need a fresh one
+        data_bytes = args[2].read()  # noqa: F841
         # Rebuild to check length
         expected = json.dumps(_CHUNKS_JSON).encode()
         assert mock_client.put_object.call_args[1].get("length") == len(expected)
@@ -171,7 +171,10 @@ class TestLoad:
     def test_valid_json_wrong_schema_raises(
         self, store: ParsedChunkStore, mock_client: MagicMock
     ) -> None:
-        """A JSON list of objects missing required fields must fail Pydantic validation."""
+        """
+        A JSON list of objects missing required fields
+        must fail Pydantic validation.
+        """
         mock_response = MagicMock()
         mock_response.read.return_value = json.dumps([{"wrong": "fields"}]).encode()
         mock_client.get_object.return_value = mock_response

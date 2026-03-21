@@ -273,7 +273,10 @@ def _index(url: str = _INDEXING_URL) -> None:
 class TestCircuitBreakers:
     @pytest.fixture(autouse=True)
     def reset_breakers(self):
-        from src.backend.controller.worker.utils import indexing_breaker, parsing_breaker
+        from src.backend.controller.worker.utils import (
+            indexing_breaker,
+            parsing_breaker,
+        )
 
         parsing_breaker.close()
         indexing_breaker.close()
@@ -282,9 +285,14 @@ class TestCircuitBreakers:
         indexing_breaker.close()
 
     def test_parsing_breaker_opens_after_fail_max_failures(self) -> None:
-        """After fail_max=3 failures the breaker opens and rejects without an HTTP call."""
+        """
+        After fail_max=3 failures the breaker opens
+        and rejects without an HTTP call.
+        """
         with respx.mock:
-            route = respx.post(f"{_PARSING_URL}/v1/parse").mock(return_value=Response(503))
+            route = respx.post(f"{_PARSING_URL}/v1/parse").mock(
+                return_value=Response(503)
+            )
             for _ in range(3):
                 with pytest.raises(Exception):
                     _parse()
@@ -298,7 +306,9 @@ class TestCircuitBreakers:
     def test_indexing_breaker_opens_after_fail_max_failures(self) -> None:
         """Indexing breaker mirrors parsing breaker behaviour."""
         with respx.mock:
-            route = respx.post(f"{_INDEXING_URL}/ingest").mock(return_value=Response(503))
+            route = respx.post(f"{_INDEXING_URL}/ingest").mock(
+                return_value=Response(503)
+            )
             for _ in range(3):
                 with pytest.raises(Exception):
                     _index()
@@ -332,7 +342,9 @@ class TestCircuitBreakers:
 
     def test_state_transition_logged_on_open(self, caplog) -> None:
         """Opening the circuit must emit a WARNING log with the state transition."""
-        with caplog.at_level(logging.WARNING, logger="src.backend.controller.worker.utils"):
+        with caplog.at_level(
+            logging.WARNING, logger="src.backend.controller.worker.utils"
+        ):
             with respx.mock:
                 respx.post(f"{_PARSING_URL}/v1/parse").mock(return_value=Response(503))
                 for _ in range(3):

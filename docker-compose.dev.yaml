@@ -287,9 +287,9 @@ services:
       # Storage service from which we read the object to send for ingestion
       minio:
         condition: service_healthy
-      # ingestion endpoint (private file uploads)
-      # backend-indexing-ingestion:
-      #   condition: service_healthy
+        # ingestion endpoint (private file uploads)
+        # backend-indexing-ingestion:
+        #   condition: service_healthy
     environment:
       # Message broker connection settings
       RABBITMQ_HOST: rabbitmq

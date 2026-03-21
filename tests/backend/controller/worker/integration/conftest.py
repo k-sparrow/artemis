@@ -16,15 +16,16 @@ Worker container (session-scoped):
       bazel run //src/backend/controller/worker:image.tarball
 
 Per-test helpers:
-  - reset_stubs (autouse)        — clears stub request log and response queue between tests
-  - s3_source_bucket (autouse)   — ensures "ingest-source" bucket exists; cleans up objects after
+  - reset_stubs (autouse)        - clears stub request log and response queue
+                                   between tests
+  - s3_source_bucket (autouse)   - ensures "ingest-source" bucket exists;
+                                   cleans up objects after
 """
 
 from __future__ import annotations
 
 import io
 import json
-import os
 import threading
 import time
 import uuid
@@ -198,7 +199,6 @@ def _worker_env(
     pg_port = postgres_container.get_exposed_port(5432)
 
     return {
-        **os.environ,
         "S3_ENDPOINT": f"{minio_host}:{minio_port}",
         "S3_ACCESS_KEY": "minioadmin",
         "S3_SECRET_KEY": "minioadmin",
@@ -275,7 +275,18 @@ def worker_container(
             f"Worker logs:\n{logs}"
         ) from None
 
-    request.addfinalizer(container.stop)
+    def _stop_and_dump():
+        stdout, stderr = container.get_logs()
+        print(  # always visible in pytest -s / in the log file
+            "\n=== Worker container stdout ===\n"
+            + stdout.decode(errors="replace")
+            + "\n=== Worker container stderr ===\n"
+            + stderr.decode(errors="replace"),
+            flush=True,
+        )
+        container.stop()
+
+    request.addfinalizer(_stop_and_dump)
     return container
 
 

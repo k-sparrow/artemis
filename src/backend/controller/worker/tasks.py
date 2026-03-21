@@ -92,9 +92,7 @@ def ingest(
         case UploadAction.CREATE | UploadAction.UPDATE:
             result = chain(
                 fetch_and_parse.s(
-                    s3.model_dump(),
-                    source.model_dump(),
-                    str(namespace_id),
+                    s3.model_dump(), source.model_dump(), str(namespace_id)
                 ),
                 index.s(str(namespace_id)),
             ).apply_async()
@@ -117,7 +115,7 @@ def ingest(
 
 @app.task(
     name="tasks.fetch_and_parse",
-    pydantic=False,
+    pydantic=True,
     backend=_db_backend,
     result_serializer="json",
     autoretry_for=(Exception,),
@@ -126,16 +124,14 @@ def ingest(
     retry_backoff_max=120,
 )
 def fetch_and_parse(
-    s3_dict: dict,
-    source_dict: dict,
-    namespace_id_str: str,
+    s3: S3Details,
+    source: SourceDetails,
+    namespace_id: uuid.UUID,
 ) -> str:
     """Download the document from S3, parse it, persist chunks to MinIO.
 
     Returns the MinIO object key to be consumed by :func:`index`.
     """
-    s3 = S3Details.model_validate(s3_dict)
-    source = SourceDetails.model_validate(source_dict)
     task_id = fetch_and_parse.request.id or str(uuid.uuid4())
 
     minio_client = get_s3_client()
@@ -163,7 +159,7 @@ def fetch_and_parse(
 
 @app.task(
     name="tasks.index",
-    pydantic=False,
+    pydantic=True,
     backend=_db_backend,
     result_serializer="json",
     autoretry_for=(Exception,),
@@ -171,14 +167,13 @@ def fetch_and_parse(
     retry_backoff=True,
     retry_backoff_max=120,
 )
-def index(chunks_key: str, namespace_id_str: str) -> dict:
+def index(chunks_key: str, namespace_id: uuid.UUID) -> dict:
     """Load parsed chunks from MinIO, index them, delete the MinIO object.
 
     *chunks_key* is the MinIO object key returned by :func:`fetch_and_parse`.
     On success the object is removed; on failure it is left for manual
     inspection or dead-letter replay.
     """
-    namespace_id = uuid.UUID(namespace_id_str)
     minio_client = get_s3_client()
     store = ParsedChunkStore(client=minio_client, bucket=settings.PARSED_CHUNKS_BUCKET)
 

@@ -90,7 +90,10 @@ class TestFetchAndParseIndexChain:
         namespace_id: uuid.UUID,
         worker_container: DockerContainer,
     ) -> None:
-        """The namespace UUID must be forwarded as a query param to the indexing service."""
+        """
+        The namespace UUID must be forwarded as
+        a query param to the indexing service.
+        """
         upload_file(minio_client, s3_source_bucket, "test.md")
         _dispatch_ingest(dispatch_app, s3_source_bucket, namespace_id)
         wait_until_stub_called(indexing_stub, timeout=60)

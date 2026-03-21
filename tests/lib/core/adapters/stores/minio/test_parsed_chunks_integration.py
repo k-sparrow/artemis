@@ -62,7 +62,7 @@ class TestParsedChunkStoreIntegration:
         new_bucket = "auto-created-bucket"
         assert not minio_client.bucket_exists(new_bucket)
 
-        store = ParsedChunkStore(client=minio_client, bucket=new_bucket)
+        store = ParsedChunkStore(client=minio_client, bucket=new_bucket)  # noqa: F841
         assert minio_client.bucket_exists(new_bucket)
 
         # cleanup
