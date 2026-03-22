@@ -158,6 +158,63 @@ class TestGenericPipelineContract:
                 )
 
     @pytest.mark.asyncio
+    async def test_delete_source_removes_only_target_source(
+        self,
+        pipeline: BasePipeline,
+        vectorstore: QdrantVectorStore,
+        record_manager: SQLRecordManager,
+        qdrant_client: AsyncQdrantClient,
+        sample_documents: List[Document],
+        normalizer: MetadataFieldNormalizer,
+    ) -> None:
+        """adelete_source must remove all chunks for the target source from both
+        the vectorstore and the record manager, while leaving chunks from every
+        other source completely untouched.
+
+        Uses the two-source ``sample_documents`` fixture (test1.pdf / test2.pdf)
+        and deletes only test1.pdf, then asserts:
+        1. No vectorstore points carry source=test1.pdf.
+        2. At least one vectorstore point still carries source=test2.pdf.
+        3. The record manager holds no keys for test1.pdf.
+        4. The record manager still holds keys for test2.pdf.
+        """
+        docs = await normalizer.anormalize(sample_documents)
+        await pipeline.aprocess(docs)
+
+        # Baseline: both sources are present
+        records_before, _ = await qdrant_client.scroll(
+            collection_name=vectorstore.collection_name,
+            with_payload=True,
+            limit=1000,
+        )
+        sources_before = {
+            r.payload.get("metadata", {}).get("source") for r in records_before
+        }
+        assert "test1.pdf" in sources_before
+        assert "test2.pdf" in sources_before
+
+        await pipeline.adelete_source("test1.pdf")
+
+        # Vectorstore: test1.pdf gone, test2.pdf intact
+        records_after, _ = await qdrant_client.scroll(
+            collection_name=vectorstore.collection_name,
+            with_payload=True,
+            limit=1000,
+        )
+        sources_after = {
+            r.payload.get("metadata", {}).get("source") for r in records_after
+        }
+        assert "test1.pdf" not in sources_after
+        assert "test2.pdf" in sources_after
+
+        # Record manager: keys for test1.pdf wiped, test2.pdf keys survive
+        keys_test1 = await record_manager.alist_keys(group_ids=["test1.pdf"])
+        assert keys_test1 == []
+
+        keys_test2 = await record_manager.alist_keys(group_ids=["test2.pdf"])
+        assert len(keys_test2) > 0
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "pipeline_type",
         [PipelineType.SIMPLE, PipelineType.SEMI_STRUCTURED],

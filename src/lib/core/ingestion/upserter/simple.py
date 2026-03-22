@@ -34,14 +34,14 @@ class SimpleUpserter(Upserter[List[Document]]):
         self,
         vectorstore: VectorStore,
         record_manager: RecordManager,
-        cleanup: Literal["full", "incremental", "none"] = "incremental",
+        cleanup: Literal["full", "incremental", "scoped_full", "none"] = "scoped_full",
         source_id_key: str = "source",
         batch_size: int = 32,
     ):
         self._vectorstore = vectorstore
         self._record_manager = record_manager
         # lc_index / lc_aindex expect None (no cleanup), not the string "none"
-        self._cleanup: Literal["full", "incremental"] | None = (
+        self._cleanup: Literal["full", "incremental", "scoped_full"] | None = (
             None if cleanup == "none" else cleanup
         )
         self._source_id_key = source_id_key
@@ -69,6 +69,20 @@ class SimpleUpserter(Upserter[List[Document]]):
             num_deleted=result["num_deleted"],
             ids=proxy.drain(),
         )
+
+    @override
+    def delete_source(self, source: str) -> None:
+        keys = self._record_manager.list_keys(group_ids=[source])
+        if keys:
+            self._vectorstore.delete(keys)
+            self._record_manager.delete_keys(keys)
+
+    @override
+    async def adelete_source(self, source: str) -> None:
+        keys = await self._record_manager.alist_keys(group_ids=[source])
+        if keys:
+            await self._vectorstore.adelete(keys)
+            await self._record_manager.adelete_keys(keys)
 
     @override
     async def aupsert(self, data: List[Document]) -> UpsertResult:

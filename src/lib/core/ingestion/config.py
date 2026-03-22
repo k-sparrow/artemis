@@ -148,7 +148,7 @@ class SimpleUpserterConfig:
         batch_size: Number of documents per indexing batch.
     """
 
-    cleanup: Literal["full", "incremental", "none"] = "incremental"
+    cleanup: Literal["full", "incremental", "scoped_full", "none"] = "scoped_full"
     source_id_key: str = "source"
     batch_size: int = 32
 
@@ -162,7 +162,10 @@ class SemiStructuredUpserterConfig:
 
     Attributes:
         cleanup: Deduplication strategy passed to ``aindex``.
-            ``"incremental"`` removes old embeddings for changed sources;
+            ``"scoped_full"`` removes all old embeddings for sources present in
+            the current batch (other sources are untouched) — the recommended
+            default for incremental per-file ingestion.
+            ``"incremental"`` removes old embeddings for changed sources only;
             ``"full"`` removes *all* embeddings not seen in the current run;
             ``"none"`` disables cleanup (equivalent to ``cleanup=None`` in
             LangChain's ``aindex``).
@@ -170,7 +173,7 @@ class SemiStructuredUpserterConfig:
             document for deduplication.
     """
 
-    cleanup: Literal["full", "incremental", "none"] = "incremental"
+    cleanup: Literal["full", "incremental", "scoped_full", "none"] = "scoped_full"
     source_id_key: str = "source"
     batch_size: int = 32
     id_key: str = "doc_id"

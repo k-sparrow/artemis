@@ -45,6 +45,14 @@ class BasePipeline(ABC, Generic[InputT]):
             Result of the pipeline processing
         """
 
+    @abstractmethod
+    def delete_source(self, source: str) -> None:
+        """Delete all chunks for *source* from the vectorstore and record manager."""
+
+    @abstractmethod
+    async def adelete_source(self, source: str) -> None:
+        """Async version of :meth:`delete_source`."""
+
 
 class Pipeline(BasePipeline[InputT], Generic[InputT, ProcessedT]):
     """Composable indexing pipeline.
@@ -90,3 +98,9 @@ class Pipeline(BasePipeline[InputT], Generic[InputT, ProcessedT]):
     async def aprocess(self, data: InputT) -> UpsertResult:
         processed = await self._indexer.aprocess(data)
         return await self._upserter.aupsert(processed)
+
+    def delete_source(self, source: str) -> None:
+        self._upserter.delete_source(source)
+
+    async def adelete_source(self, source: str) -> None:
+        await self._upserter.adelete_source(source)

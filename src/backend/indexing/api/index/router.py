@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter
@@ -17,6 +17,21 @@ __all__ = [
 logger = get_logger("indexing.router")
 
 router = APIRouter(tags=["Ingestion"])
+
+
+@router.delete("/ingest", status_code=204)
+async def delete_endpoint(
+    pipeline: pipeline_dependency,
+    namespace: UUID,
+    source: Optional[str] = None,
+) -> None:
+    logger.info("delete_started", namespace=str(namespace), source=source)
+    try:
+        await service.a_delete(namespace, pipeline, source)
+        logger.info("delete_completed", namespace=str(namespace), source=source)
+    except Exception as e:
+        logger.error("delete_failed", error=str(e))
+        raise
 
 
 @router.post("/ingest", response_model=UpsertResult)

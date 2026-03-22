@@ -116,12 +116,16 @@ class TestSimpleUpserterConfig:
 class TestSemiStructuredUpserterConfig:
     def test_defaults(self):
         cfg = SemiStructuredUpserterConfig()
-        assert cfg.cleanup == "incremental"
+        assert cfg.cleanup == "scoped_full"
         assert cfg.source_id_key == "source"
 
     def test_cleanup_full(self):
         cfg = SemiStructuredUpserterConfig(cleanup="full")
         assert cfg.cleanup == "full"
+    
+    def test_cleanup_incremental(self):
+        cfg = SemiStructuredUpserterConfig(cleanup="incremental")
+        assert cfg.cleanup == "incremental"
 
     def test_cleanup_none_string(self):
         cfg = SemiStructuredUpserterConfig(cleanup="none")

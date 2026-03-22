@@ -47,3 +47,15 @@ class Upserter(ABC, Generic[ProcessedT]):
         Returns:
             Result of the upsert operation
         """
+
+    @abstractmethod
+    def delete_source(self, source: str) -> None:
+        """Delete all chunks for *source* from the vectorstore and record manager.
+
+        Args:
+            source: The ``source`` metadata value that identifies the file.
+        """
+
+    @abstractmethod
+    async def adelete_source(self, source: str) -> None:
+        """Async version of :meth:`delete_source`."""

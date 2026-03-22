@@ -152,6 +152,12 @@ def get_async_qdrant_client() -> AsyncQdrantClient:
     return AsyncQdrantClient(url=settings.QDRANT_HOST_URI, prefer_grpc=False)
 
 
+qdrant_client_dependency = Annotated[
+    AsyncQdrantClient,
+    Depends(get_async_qdrant_client),
+]
+
+
 # an ugly patch for lifespan
 async def get_vectorstore_handler_solved() -> VectorStoreHandler:
     return await get_vectorstore_handler(embeddings=await get_embeddings())
