@@ -43,6 +43,7 @@ from src.backend.controller.worker.celery import app
 from src.backend.controller.worker.config import settings
 from src.backend.controller.worker.dependencies import get_s3_client
 from src.backend.controller.worker.utils import (
+    call_delete_service,
     call_indexing_service,
     call_parsing_service,
     fetch_from_s3,
@@ -99,13 +100,13 @@ def ingest(
             return {"chain_id": str(result.id)}
 
         case UploadAction.DELETE | UploadAction.AUTO_DELETE:
-            # TODO: implement deletion through the indexing service
-            logger.warning(
-                "ingest=delete_not_implemented namespace=%s object=%s",
-                namespace_id,
-                s3.object,
+            result = delete_document.apply_async(
+                kwargs={
+                    "source": source.model_dump(),
+                    "namespace_id": str(namespace_id),
+                }
             )
-            return {"status": "delete_skipped"}
+            return {"task_id": str(result.id)}
 
 
 # ---------------------------------------------------------------------------
@@ -192,3 +193,80 @@ def index(chunks_key: str, namespace_id: uuid.UUID) -> dict:
     logger.info("index=cleanup key=%s", chunks_key)
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Deletion task — called by ingest for DELETE / AUTO_DELETE actions
+# ---------------------------------------------------------------------------
+
+
+@app.task(
+    name="tasks.delete_document",
+    pydantic=True,
+    backend=_db_backend,
+    result_serializer="json",
+    autoretry_for=(Exception,),
+    retry_kwargs={"max_retries": 5},
+    retry_backoff=True,
+    retry_backoff_max=120,
+)
+def delete_document(source: SourceDetails, namespace_id: uuid.UUID) -> dict:
+    """Remove a single document from the indexing service.
+
+    Calls ``DELETE /ingest?namespace=<namespace_id>&source=<path>`` on the
+    indexing service, which deletes all vectorstore chunks and record-manager
+    entries for the source.
+    """
+    if source.path is None:
+        logger.warning(
+            "delete_document=skipped namespace=%s source.path=None",
+            namespace_id,
+        )
+        return {"status": "skipped", "reason": "source_path_missing"}
+
+    call_delete_service(
+        namespace_id=namespace_id,
+        source=source.path,
+        ingestion_url=settings.INGESTION_SERVICE_URL,
+        timeout=settings.HTTPX_TIMEOUT,
+        logger=logger,
+    )
+    logger.info(
+        "delete_document=done namespace=%s source=%s", namespace_id, source.path
+    )
+    return {
+        "status": "deleted",
+        "source": source.path,
+        "namespace_id": str(namespace_id),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Namespace deletion task — wipes every document in a namespace
+# ---------------------------------------------------------------------------
+
+
+@app.task(
+    name="tasks.delete_namespace",
+    pydantic=True,
+    backend=_db_backend,
+    result_serializer="json",
+    autoretry_for=(Exception,),
+    retry_kwargs={"max_retries": 5},
+    retry_backoff=True,
+    retry_backoff_max=120,
+)
+def delete_namespace(namespace_id: uuid.UUID) -> dict:
+    """Remove all documents for *namespace_id* from the indexing service.
+
+    Calls ``DELETE /ingest?namespace=<namespace_id>`` (no ``source`` param),
+    which triggers a full namespace wipe via ``pipeline.aprocess([])``.
+    """
+    call_delete_service(
+        namespace_id=namespace_id,
+        ingestion_url=settings.INGESTION_SERVICE_URL,
+        timeout=settings.HTTPX_TIMEOUT,
+        logger=logger,
+    )
+    logger.info("delete_namespace=done namespace=%s", namespace_id)
+    return {"status": "deleted_namespace", "namespace_id": str(namespace_id)}

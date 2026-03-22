@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import uuid
 from logging import Logger
-from typing import List
+from typing import List, Optional
 
 import httpx
 import pybreaker
@@ -37,6 +37,7 @@ __all__ = [
     "fetch_from_s3",
     "call_parsing_service",
     "call_indexing_service",
+    "call_delete_service",
     "parsing_breaker",
     "indexing_breaker",
 ]
@@ -159,3 +160,31 @@ def call_indexing_service(
     result = indexing_breaker.call(_request)
     logger.info("indexing=done result=%s", result)
     return result
+
+
+def call_delete_service(
+    namespace_id: uuid.UUID,
+    ingestion_url: str,
+    timeout: float,
+    logger: Logger,
+    source: Optional[str] = None,
+) -> None:
+    """Send a DELETE /ingest request to the indexing service.
+
+    Raises ``pybreaker.CircuitBreakerError`` when the indexing circuit is OPEN.
+    """
+    url = f"{ingestion_url.rstrip('/')}/ingest"
+    params: dict = {"namespace": str(namespace_id)}
+    if source is not None:
+        params["source"] = source
+    logger.info(
+        "delete=request url=%s namespace=%s source=%s", url, namespace_id, source
+    )
+
+    def _request() -> None:
+        with httpx.Client(timeout=timeout) as http:
+            response = http.delete(url, params=params)
+            response.raise_for_status()
+
+    indexing_breaker.call(_request)
+    logger.info("delete=done namespace=%s source=%s", namespace_id, source)

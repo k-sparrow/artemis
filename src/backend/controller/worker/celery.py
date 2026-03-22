@@ -45,4 +45,14 @@ app.conf.task_routes = {
         "routing_key": "index",
         "serializer": "json",
     },
+    "tasks.delete_document": {
+        "queue": "artemis.ingestion.index",
+        "routing_key": "index",
+        "serializer": "json",
+    },
+    "tasks.delete_namespace": {
+        "queue": "artemis.ingestion.index",
+        "routing_key": "index",
+        "serializer": "json",
+    },
 }

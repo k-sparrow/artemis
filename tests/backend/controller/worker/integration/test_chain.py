@@ -29,6 +29,29 @@ from tests.backend.controller.worker.integration.conftest import (
 )
 
 
+def _dispatch_delete_document(dispatch_app, s3_bucket: str, namespace_id: uuid.UUID):
+    return dispatch_app.send_task(
+        "tasks.ingest",
+        kwargs={
+            "s3": {"bucket": s3_bucket, "object": "test.md"},
+            "source": {"path": "test.md", "content_type": "text/markdown"},
+            "upload_action": "DELETE",
+            "info": {"namespace_id": str(namespace_id)},
+        },
+        queue="artemis.ingestion.fetch-and-parse",
+        routing_key="fetch-and-parse",
+    )
+
+
+def _dispatch_delete_namespace(dispatch_app, namespace_id: uuid.UUID):
+    return dispatch_app.send_task(
+        "tasks.delete_namespace",
+        kwargs={"namespace_id": str(namespace_id)},
+        queue="artemis.ingestion.index",
+        routing_key="index",
+    )
+
+
 def _dispatch_ingest(dispatch_app, s3_bucket: str, namespace_id: uuid.UUID):
     return dispatch_app.send_task(
         "tasks.ingest",
@@ -143,3 +166,115 @@ class TestFetchAndParseIndexChain:
     #   - This validates the dead-letter replay design contract.
     #   - Note: with autoretry_for + retry_backoff this test will be very slow unless
     #     max_retries is patched to 0 for the test worker.
+
+
+@pytest.mark.integration
+class TestDeleteDocumentTask:
+    """Tier 3 tests for the delete_document task.
+
+    ``ingest`` with ``upload_action=DELETE`` dispatches ``delete_document`` to
+    the index queue.  ``delete_document`` calls ``DELETE /ingest?namespace=...
+    &source=...`` on the indexing service.  No file download or parsing occurs.
+    """
+
+    def test_delete_document_hits_indexing_stub(
+        self,
+        dispatch_app,
+        parsing_stub: StubServer,
+        indexing_stub: StubServer,
+        s3_source_bucket: str,
+        namespace_id: uuid.UUID,
+        worker_container: DockerContainer,
+    ) -> None:
+        """
+        The indexing stub must receive exactly one DELETE request;
+        parsing is never called.
+        """
+        _dispatch_delete_document(dispatch_app, s3_source_bucket, namespace_id)
+        wait_until_stub_called(indexing_stub, timeout=60, method="DELETE")
+
+        delete_requests = [r for r in indexing_stub.requests if r["method"] == "DELETE"]
+        assert len(delete_requests) == 1
+        assert len(parsing_stub.requests) == 0
+
+    def test_delete_document_stub_receives_correct_namespace(
+        self,
+        dispatch_app,
+        indexing_stub: StubServer,
+        s3_source_bucket: str,
+        namespace_id: uuid.UUID,
+        worker_container: DockerContainer,
+    ) -> None:
+        """The namespace UUID must appear as a query param in the DELETE path."""
+        _dispatch_delete_document(dispatch_app, s3_source_bucket, namespace_id)
+        wait_until_stub_called(indexing_stub, timeout=60, method="DELETE")
+
+        delete_req = next(r for r in indexing_stub.requests if r["method"] == "DELETE")
+        assert str(namespace_id) in delete_req["path"]
+
+    def test_delete_document_stub_receives_correct_source(
+        self,
+        dispatch_app,
+        indexing_stub: StubServer,
+        s3_source_bucket: str,
+        namespace_id: uuid.UUID,
+        worker_container: DockerContainer,
+    ) -> None:
+        """The source file path must appear as a query param in the DELETE path."""
+        _dispatch_delete_document(dispatch_app, s3_source_bucket, namespace_id)
+        wait_until_stub_called(indexing_stub, timeout=60, method="DELETE")
+
+        delete_req = next(r for r in indexing_stub.requests if r["method"] == "DELETE")
+        assert "source=test.md" in delete_req["path"]
+
+
+@pytest.mark.integration
+class TestDeleteNamespaceTask:
+    """Tier 3 tests for the delete_namespace task.
+
+    ``delete_namespace`` is dispatched directly to the index queue and calls
+    ``DELETE /ingest?namespace=...`` (no ``source`` param) on the indexing
+    service, triggering a full namespace wipe.
+    """
+
+    def test_delete_namespace_hits_indexing_stub(
+        self,
+        dispatch_app,
+        indexing_stub: StubServer,
+        namespace_id: uuid.UUID,
+        worker_container: DockerContainer,
+    ) -> None:
+        """The indexing stub must receive exactly one DELETE request."""
+        _dispatch_delete_namespace(dispatch_app, namespace_id)
+        wait_until_stub_called(indexing_stub, timeout=60, method="DELETE")
+
+        delete_requests = [r for r in indexing_stub.requests if r["method"] == "DELETE"]
+        assert len(delete_requests) == 1
+
+    def test_delete_namespace_stub_receives_correct_namespace(
+        self,
+        dispatch_app,
+        indexing_stub: StubServer,
+        namespace_id: uuid.UUID,
+        worker_container: DockerContainer,
+    ) -> None:
+        """The namespace UUID must appear as a query param in the DELETE path."""
+        _dispatch_delete_namespace(dispatch_app, namespace_id)
+        wait_until_stub_called(indexing_stub, timeout=60, method="DELETE")
+
+        delete_req = next(r for r in indexing_stub.requests if r["method"] == "DELETE")
+        assert str(namespace_id) in delete_req["path"]
+
+    def test_delete_namespace_stub_receives_no_source(
+        self,
+        dispatch_app,
+        indexing_stub: StubServer,
+        namespace_id: uuid.UUID,
+        worker_container: DockerContainer,
+    ) -> None:
+        """No ``source`` query param must be present — this is a namespace-level wipe."""
+        _dispatch_delete_namespace(dispatch_app, namespace_id)
+        wait_until_stub_called(indexing_stub, timeout=60, method="DELETE")
+
+        delete_req = next(r for r in indexing_stub.requests if r["method"] == "DELETE")
+        assert "source=" not in delete_req["path"]

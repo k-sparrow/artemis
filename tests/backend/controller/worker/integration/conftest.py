@@ -67,6 +67,7 @@ class _StubHandler(BaseHTTPRequestHandler):
         with self.server._lock:
             self.server._requests.append(
                 {
+                    "method": "POST",
                     "path": self.path,
                     "headers": dict(self.headers),
                     "body": body,
@@ -83,6 +84,20 @@ class _StubHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
         self.wfile.write(encoded)
+
+    def do_DELETE(self) -> None:
+        with self.server._lock:
+            self.server._requests.append(
+                {
+                    "method": "DELETE",
+                    "path": self.path,
+                    "headers": dict(self.headers),
+                    "body": b"",
+                }
+            )
+
+        self.send_response(204)
+        self.end_headers()
 
     def log_message(self, *args) -> None:
         pass
@@ -383,14 +398,21 @@ def upload_file(
     )
 
 
-def wait_until_stub_called(stub: StubServer, timeout: int = 60) -> None:
-    """Block until the stub receives at least one request, or raise TimeoutError."""
+def wait_until_stub_called(
+    stub: StubServer, timeout: int = 60, method: str = "POST"
+) -> None:
+    """
+    Block until the stub receives at least one request with *method*,
+    or raise TimeoutError.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if stub.requests:
+        if any(r["method"] == method for r in stub.requests):
             return
         time.sleep(0.5)
-    raise TimeoutError(f"Stub at {stub.url} received no requests within {timeout}s")
+    raise TimeoutError(
+        f"Stub at {stub.url} received no {method} requests within {timeout}s"
+    )
 
 
 def wait_until_minio_empty(minio_client: Minio, bucket: str, timeout: int = 30) -> None:
