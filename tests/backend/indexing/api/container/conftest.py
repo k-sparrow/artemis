@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 
 import httpx
 import pytest
+from qdrant_client import AsyncQdrantClient
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
 
@@ -144,3 +145,10 @@ def app_base_url(app_container: DockerContainer) -> str:
 async def client(app_base_url: str) -> AsyncIterator[httpx.AsyncClient]:
     async with httpx.AsyncClient(base_url=app_base_url, timeout=300.0) as c:
         yield c
+
+
+@pytest.fixture
+def qdrant_client(qdrant_container: QdrantContainer) -> AsyncQdrantClient:
+    host = qdrant_container.get_container_host_ip()
+    port = int(qdrant_container.get_exposed_port(6333))
+    return AsyncQdrantClient(host=host, port=port, prefer_grpc=False)

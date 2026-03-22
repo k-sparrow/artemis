@@ -11,6 +11,7 @@ py_library(
         requirement("asyncpg"),
         requirement("httpx"),
         requirement("pytest"),
+        requirement("qdrant-client"),
         requirement("testcontainers"),
     ],
 )
@@ -24,5 +25,6 @@ py_test(
         requirement("httpx"),
         requirement("pytest"),
         requirement("pytest-asyncio"),
+        requirement("qdrant-client"),
     ],
 )

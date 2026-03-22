@@ -40,6 +40,7 @@ def mock_pipeline() -> AsyncMock:
     pipeline.aprocess = AsyncMock(
         return_value=UpsertResult(num_added=2, ids=["id-1", "id-2"])
     )
+    pipeline.adelete_source = AsyncMock(return_value=None)
     return pipeline
 
 
@@ -50,6 +51,17 @@ def client(mock_pipeline: AsyncMock):
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
+
+
+def _delete(
+    client: TestClient,
+    namespace: uuid.UUID,
+    source: str | None = None,
+):
+    params: dict = {"namespace": str(namespace)}
+    if source is not None:
+        params["source"] = source
+    return client.delete("/ingest", params=params)
 
 
 def _post_chunks(
@@ -166,3 +178,60 @@ class TestIngestEndpoint:
 
         docs_arg = mock_pipeline.aprocess.call_args[0][0]
         assert len(docs_arg) == 5
+
+
+class TestDeleteEndpoint:
+    def test_single_file_deletion_returns_204(
+        self, client: TestClient, namespace: uuid.UUID
+    ) -> None:
+        """DELETE /ingest?namespace=<uuid>&source=<path> → 204 No Content."""
+        response = _delete(client, namespace, source="report.pdf")
+        assert response.status_code == 204
+
+    def test_single_file_deletion_calls_adelete_source(
+        self,
+        client: TestClient,
+        namespace: uuid.UUID,
+        mock_pipeline: AsyncMock,
+    ) -> None:
+        """pipeline.adelete_source must be called with the exact source value."""
+        _delete(client, namespace, source="report.pdf")
+        mock_pipeline.adelete_source.assert_called_once_with("report.pdf")
+
+    def test_namespace_deletion_returns_204(
+        self, client: TestClient, namespace: uuid.UUID
+    ) -> None:
+        """DELETE /ingest?namespace=<uuid> (no source) → 204 No Content."""
+        response = _delete(client, namespace)
+        assert response.status_code == 204
+
+    def test_namespace_deletion_calls_aprocess_with_empty_list(
+        self,
+        client: TestClient,
+        namespace: uuid.UUID,
+        mock_pipeline: AsyncMock,
+    ) -> None:
+        """Namespace deletion must delegate to pipeline.aprocess([])."""
+        _delete(client, namespace)
+        mock_pipeline.aprocess.assert_called_once_with([])
+
+    def test_missing_namespace_returns_422(self, client: TestClient) -> None:
+        """DELETE /ingest without namespace query param → 422."""
+        response = client.delete("/ingest")
+        assert response.status_code == 422
+
+    def test_adelete_source_error_returns_500(self, namespace: uuid.UUID) -> None:
+        """Unhandled exception from adelete_source bubbles up as 500."""
+        crashing_pipeline = AsyncMock()
+        crashing_pipeline.adelete_source = AsyncMock(
+            side_effect=RuntimeError("qdrant unavailable")
+        )
+
+        app.dependency_overrides[get_pipeline] = lambda: crashing_pipeline
+        try:
+            with TestClient(app, raise_server_exceptions=False) as c:
+                response = _delete(c, namespace, source="report.pdf")
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 500

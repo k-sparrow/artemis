@@ -13,6 +13,8 @@ import uuid
 
 import httpx
 import pytest
+from qdrant_client import AsyncQdrantClient
+from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 # Pre-parsed chunks as would be produced by the parsing service.
 _TEST_CHUNKS = [
@@ -49,13 +51,156 @@ async def test_ingest_indexes_chunks(client: httpx.AsyncClient):
     """End-to-end ingest: pre-parsed chunks are embedded by TEI and stored in Qdrant."""
     namespace = uuid.uuid4()
     response = await client.post(
-        f"/ingest?namespace={namespace}",
+        "/ingest",
+        params={"namespace": str(namespace)},
         json=_TEST_CHUNKS,
     )
     assert response.status_code == 200, response.json()
     body = response.json()
     assert body["num_added"] >= 1
     assert body["num_skipped"] == 0
+
+
+# ---------------------------------------------------------------------------
+# DELETE /ingest
+# ---------------------------------------------------------------------------
+
+_COLLECTION = "test_collection"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_delete_missing_namespace_returns_422(client: httpx.AsyncClient):
+    """DELETE /ingest without namespace → 422."""
+    response = await client.delete("/ingest")
+    assert response.status_code == 422
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_delete_nonexistent_source_returns_204(client: httpx.AsyncClient):
+    """DELETE /ingest for a source that was never indexed → still 204 (idempotent)."""
+    namespace = uuid.uuid4()
+    response = await client.delete(
+        "/ingest",
+        params={"namespace": str(namespace), "source": "never_indexed.pdf"},
+    )
+    assert response.status_code == 204
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_delete_single_source_removes_only_target(
+    client: httpx.AsyncClient,
+    qdrant_client: AsyncQdrantClient,
+):
+    """Ingest two sources, delete one — only that source's chunks disappear."""
+    namespace = uuid.uuid4()
+
+    chunks_a = [
+        {"page_content": "Source A content.", "source": "a.pdf", "type": "text"}
+    ]
+    chunks_b = [
+        {"page_content": "Source B content.", "source": "b.pdf", "type": "text"}
+    ]
+
+    r = await client.post(
+        "/ingest",
+        json=chunks_a,
+        params={
+            "namespace": namespace,
+        },
+    )
+    assert r.status_code == 200
+    r = await client.post(
+        "/ingest",
+        json=chunks_b,
+        params={
+            "namespace": namespace,
+        },
+    )
+    assert r.status_code == 200
+
+    response = await client.delete(
+        "/ingest",
+        params={
+            "namespace": namespace,
+            "source": "a.pdf",
+        },
+    )
+    assert response.status_code == 204
+
+    # a.pdf chunks must be gone
+    a_result = await qdrant_client.count(
+        collection_name=_COLLECTION,
+        count_filter=Filter(
+            must=[
+                FieldCondition(
+                    key="metadata.namespace", match=MatchValue(value=str(namespace))
+                ),
+                FieldCondition(key="metadata.source", match=MatchValue(value="a.pdf")),
+            ]
+        ),
+    )
+    assert a_result.count == 0
+
+    # b.pdf chunks must still be present
+    b_result = await qdrant_client.count(
+        collection_name=_COLLECTION,
+        count_filter=Filter(
+            must=[
+                FieldCondition(
+                    key="metadata.namespace", match=MatchValue(value=str(namespace))
+                ),
+                FieldCondition(key="metadata.source", match=MatchValue(value="b.pdf")),
+            ]
+        ),
+    )
+    assert b_result.count > 0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_delete_namespace_removes_all_chunks(
+    client: httpx.AsyncClient,
+    qdrant_client: AsyncQdrantClient,
+):
+    """Namespace deletion wipes all chunks and clears the record manager."""
+    namespace = uuid.uuid4()
+
+    r = await client.post(
+        "/ingest",
+        params={"namespace": str(namespace)},
+        json=_TEST_CHUNKS,
+    )
+    assert r.status_code == 200
+    assert r.json()["num_added"] >= 1
+
+    response = await client.delete("/ingest", params={"namespace": str(namespace)})
+    assert response.status_code == 204
+
+    # Vectorstore must be empty for this namespace
+    result = await qdrant_client.count(
+        collection_name=_COLLECTION,
+        count_filter=Filter(
+            must=[
+                FieldCondition(
+                    key="metadata.namespace", match=MatchValue(value=str(namespace))
+                )
+            ]
+        ),
+    )
+    assert result.count == 0
+
+    # Record manager must also be cleared — re-ingest must treat chunks as new
+    r2 = await client.post(
+        "/ingest",
+        params={"namespace": str(namespace)},
+        json=_TEST_CHUNKS,
+    )
+    assert r2.status_code == 200
+    assert r2.json()["num_added"] >= 1
+    assert r2.json()["num_skipped"] == 0
 
 
 # ---------------------------------------------------------------------------

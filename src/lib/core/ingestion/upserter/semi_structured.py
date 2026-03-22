@@ -253,7 +253,10 @@ class SemiStructuredUpserter(Upserter[SplitChunks]):
     @override
     def delete_source(self, source: str) -> None:
         # Multi-vector: clean docstore originals via its RM first
-        if self._document_index is not None and self._docstore_record_manager is not None:
+        if (
+            self._document_index is not None
+            and self._docstore_record_manager is not None
+        ):
             doc_keys = self._docstore_record_manager.list_keys(group_ids=[source])
             if doc_keys:
                 self._document_index.delete(doc_keys)
@@ -268,8 +271,13 @@ class SemiStructuredUpserter(Upserter[SplitChunks]):
     @override
     async def adelete_source(self, source: str) -> None:
         # Multi-vector: clean docstore originals via its RM first
-        if self._document_index is not None and self._docstore_record_manager is not None:
-            doc_keys = await self._docstore_record_manager.alist_keys(group_ids=[source])
+        if (
+            self._document_index is not None
+            and self._docstore_record_manager is not None
+        ):
+            doc_keys = await self._docstore_record_manager.alist_keys(
+                group_ids=[source]
+            )
             if doc_keys:
                 await self._document_index.adelete(doc_keys)
                 await self._docstore_record_manager.adelete_keys(doc_keys)

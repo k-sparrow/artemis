@@ -122,7 +122,7 @@ class TestSemiStructuredUpserterConfig:
     def test_cleanup_full(self):
         cfg = SemiStructuredUpserterConfig(cleanup="full")
         assert cfg.cleanup == "full"
-    
+
     def test_cleanup_incremental(self):
         cfg = SemiStructuredUpserterConfig(cleanup="incremental")
         assert cfg.cleanup == "incremental"
