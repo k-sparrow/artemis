@@ -2,8 +2,8 @@
 
 Chain structure
 ---------------
-The Kafka HTTP Sink calls ``tasks.ingest``, which resolves the namespace UUID
-and dispatches the two-task chain:
+The Kafka RabbitMQ Sink Connector calls ``tasks.ingest``, which resolves the namespace
+UUID and dispatches the two-task chain:
 
     fetch_and_parse  →  index
 
@@ -30,6 +30,7 @@ import logging
 import uuid
 
 from celery import chain
+from celery.signals import worker_ready
 from celery.utils.log import get_task_logger
 
 from src.backend.controller.lib.schemas import (
@@ -61,6 +62,23 @@ _db_backend = DatabaseBackend(
     engine_options={"echo": False},
     serializer="json",
 )
+
+
+@worker_ready.connect
+def _ensure_parsed_chunks_bucket(**kwargs) -> None:
+    """Create the parsed-chunks MinIO bucket when the worker becomes ready.
+
+    Runs once per worker process, after the broker connection is established
+    and just before the worker starts consuming tasks.  Using the
+    ``worker_ready`` signal (rather than module-level code) avoids triggering
+    a MinIO connection during unit-test imports.
+    """
+    client = get_s3_client()
+    if not client.bucket_exists(settings.PARSED_CHUNKS_BUCKET):
+        client.make_bucket(settings.PARSED_CHUNKS_BUCKET)
+        logger.info(
+            "worker_ready=bucket_created bucket=%s", settings.PARSED_CHUNKS_BUCKET
+        )
 
 
 # ---------------------------------------------------------------------------

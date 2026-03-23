@@ -1,0 +1,44 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+package(
+    default_visibility = ["//tests:__subpackages__"],
+)
+
+py_library(
+    name = "conftest",
+    testonly = True,
+    srcs = ["conftest.py"],
+    deps = [
+        "//tests/lib/testcontainers/tei:pkg",
+        requirement("minio"),
+        requirement("httpx"),
+        requirement("celery"),
+        requirement("kombu"),
+        requirement("pytest"),
+        requirement("pika"),
+        requirement("qdrant-client"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_ingestion",
+    srcs = ["test_ingestion.py"],
+    # e2e tests require all service images to be pre-loaded and are excluded
+    # from the standard //tests/... sweep.  Run with:
+    #   bazel test //tests/e2e:test_ingestion --test_arg=--e2e
+    tags = [
+        "e2e",
+        "manual",
+    ],
+    deps = [
+        ":conftest",
+        requirement("minio"),
+        requirement("qdrant-client"),
+        requirement("testcontainers"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+    ],
+)

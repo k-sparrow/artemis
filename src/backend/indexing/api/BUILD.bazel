@@ -132,6 +132,7 @@ oci_load(
     name = "tarball.dev",
     image = ":image.dev",
     repo_tags = ["artemis/backend-indexing:dev"],
+    visibility = ["//src:__pkg__"],
 )
 
 oci_push(

@@ -126,5 +126,5 @@ oci_load(
     name = "image.tarball",
     image = ":image",
     repo_tags = ["artemis/backend-controller-worker:latest"],
-    visibility = ["//visibility:public"],
+    visibility = ["//src:__pkg__"],
 )

@@ -67,6 +67,24 @@ def _dispatch_ingest(dispatch_app, s3_bucket: str, namespace_id: uuid.UUID):
 
 
 @pytest.mark.integration
+class TestWorkerStartup:
+    """Verify worker lifecycle hooks run correctly on startup."""
+
+    def test_parsed_chunks_bucket_created_on_startup(
+        self,
+        minio_client: Minio,
+        worker_container: DockerContainer,
+    ) -> None:
+        """The worker must create the 'parsed-chunks' MinIO bucket via the
+        ``worker_ready`` signal handler before accepting any tasks.
+
+        This guards against the latent bug where ``ParsedChunkStore.save()``
+        would fail silently if the bucket did not exist.
+        """
+        assert minio_client.bucket_exists("parsed-chunks")
+
+
+@pytest.mark.integration
 class TestFetchAndParseIndexChain:
     def test_happy_path_chain_calls_both_stubs(
         self,

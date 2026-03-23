@@ -4,8 +4,6 @@
 #
 
 load("@bazel_gazelle//:def.bzl", "gazelle")
-
-# load("@rules_multirun//:defs.bzl", "multirun")
 load("@buildifier_prebuilt//:rules.bzl", "buildifier")
 load("@pip//:requirements.bzl", "all_whl_requirements", "requirement")
 load("@rules_python//python:defs.bzl", "py_binary", "py_library")

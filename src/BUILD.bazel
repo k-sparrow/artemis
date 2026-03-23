@@ -1,0 +1,12 @@
+load("@rules_multirun//:defs.bzl", "multirun")
+
+multirun(
+    name = "load.dev.all",
+    commands = [
+        "//src/backend/parsing/api:tarball.dev",
+        "//src/backend/indexing/api:tarball.dev",
+        "//src/backend/controller/worker:image.tarball",
+    ],
+    jobs = 1,  # sequential — docker load is not safe to parallelize
+    visibility = ["//visibility:public"],
+)
