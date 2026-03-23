@@ -1,0 +1,55 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "conftest",
+    testonly = True,
+    srcs = ["conftest.py"],
+    deps = [
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_loaders",
+    srcs = ["test_loaders.py"],
+    tags = ["unit"],
+    deps = [
+        "//src/lib/core/adapters/loaders:config",
+        "//src/lib/core/adapters/loaders:docling",
+        "//src/lib/core/adapters/loaders:pymupdf4llm",
+        requirement("langchain-core"),
+        requirement("pytest"),
+        requirement("pymupdf4llm"),
+    ],
+)
+
+py_test(
+    name = "test_docling_loader",
+    srcs = ["test_docling_loader.py"],
+    tags = ["unit"],
+    deps = [
+        "//src/lib/core/adapters/loaders:docling",
+        requirement("docling-core"),
+        requirement("httpx"),
+        requirement("langchain-core"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+    ],
+)
+
+py_test(
+    name = "test_docling_loader_integration",
+    srcs = ["test_docling_loader_integration.py"],
+    tags = ["integration"],
+    deps = [
+        ":conftest",
+        "//src/lib/core/adapters/loaders:docling",
+        requirement("langchain-core"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+        requirement("testcontainers"),
+    ],
+)

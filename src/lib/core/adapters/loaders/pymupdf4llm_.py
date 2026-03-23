@@ -5,74 +5,69 @@
 """LangChain document loader backed by PyMuPDF4LLM.
 
 Converts a document (supplied as raw bytes) to Markdown using
-``pymupdf4llm.to_markdown`` and yields it as a single
-:class:`~langchain_core.documents.Document`.  No external service is
-required — processing is fully in-process.
+``pymupdf4llm.to_markdown`` and yields one
+:class:`~langchain_core.documents.Document` per page.  No external service
+is required — processing is fully in-process.
+
+The loader writes the bytes to a temporary file during :meth:`lazy_load`,
+processes it, then deletes it before returning — callers never need to
+manage a file themselves.
 """
 
-# core
-from typing import Dict, Any, Iterator
+from __future__ import annotations
+
+import os
+import tempfile
 from pathlib import Path
+from typing import Iterator
 
-# third party
-from pymupdf4llm import to_markdown
-from langchain_core.documents import Document
 from langchain_core.document_loaders.base import BaseLoader
+from langchain_core.documents import Document
+from pymupdf4llm import to_markdown
 
-_all_ = ["PyMuPDF4LLMLoader"]
+__all__ = ["PyMuPDF4LLMLoader"]
 
 
 class PyMuPDF4LLMLoader(BaseLoader):
+    """LangChain document loader wrapper for PyMuPDF4LLM.
+
+    Accepts raw file bytes so it fits the :data:`LoaderFactory` contract
+    ``(file: bytes, filename: str, content_type: str) → BaseLoader``.
+
+    Args:
+        file: Raw bytes of the document to parse.
+        filename: Original file name (used as the ``source`` metadata field
+            and to derive the temporary-file extension).
+        content_type: MIME type of the document (unused by PyMuPDF4LLM
+            itself, kept for interface uniformity with other loaders).
     """
-    A document loader wrapper for PyMuPDF4LLM.
 
-    Core implementation is taken from here:
-    https://github.com/langchain-ai/langchain/discussions/22263#discussioncomment-9969296
-    """
-
-    def __init__(self, file_path: str | Path):
-        """Initialize the loader with a file path.
-
-        Args:
-            file_path: The path to the file to load.
-        """
-        self.file_path = Path(file_path)
+    def __init__(self, file: bytes, filename: str, content_type: str) -> None:
+        self._file = file
+        self._filename = filename
+        self._content_type = content_type
 
     def lazy_load(self) -> Iterator[Document]:
-        """
-        Lazy loads the PDF using pymupdf4llm and returns a list of documents
-        each corresponding to a page of the document, converted to markdown
-        """
-        markdown_pages = []
+        """Write bytes to a temp file, convert to Markdown, clean up."""
+        suffix = Path(self._filename).suffix or ".pdf"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(self._file)
+            tmp_path = tmp.name
         try:
-            # Convert the PDF to markdown
-            markdown_pages = to_markdown(self.file_path, page_chunks=True)
-        except Exception as e:
-            raise e
+            markdown_pages = to_markdown(tmp_path, page_chunks=True)
+        finally:
+            os.unlink(tmp_path)
 
-        # Extract the text content and metadata from the LlamaIndex dictionary
-        # and use them to construct a Document object
         for page in markdown_pages:
-            text: str = page["text"]  # type: ignore
-            metadata: Dict[str, Any] = page["metadata"]  # type: ignore
-
-            # Create a new Document object for the LangChain output
+            meta = page["metadata"]
             yield Document(
-                page_content=text,
+                page_content=page["text"],
                 metadata={
-                    "source": metadata["file_path"],
-                    "file_path": metadata["file_path"],
-                    "page": metadata["page"],
-                    "total_pages": metadata["page_count"],
-                    "format": metadata["format"],
-                    "title": metadata["title"],
-                    "author": metadata["author"],
-                    "subject": metadata["subject"],
-                    "keywords": metadata["keywords"],
-                    "creator": metadata["creator"],
-                    "producer": metadata["producer"],
-                    "creationDate": metadata["creationDate"],
-                    "modDate": metadata["modDate"],
-                    "trapped": metadata["trapped"],
+                    "source": self._filename,
+                    "page": meta["page"],
+                    "total_pages": meta["page_count"],
+                    "format": meta["format"],
+                    "title": meta["title"],
+                    "author": meta["author"],
                 },
             )

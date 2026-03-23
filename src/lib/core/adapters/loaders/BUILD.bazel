@@ -55,8 +55,6 @@ py_library(
     ],
     deps = [
         requirement("langchain-core"),
-        # requirement("pymupdf"),
-        # requirement("pymupdf-layout"),
-        # requirement("pymupdf4llm"),
+        requirement("pymupdf4llm"),
     ],
 )
