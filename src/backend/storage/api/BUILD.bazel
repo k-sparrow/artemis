@@ -16,13 +16,18 @@ load("//tools/backend:uvicorn.bzl", "uvicorn_server")
 
 load("//tools/oci:py_layer.bzl", "py_oci_image")
 
-package(default_visibility = ["//src/backend/storage/api:__subpackages__"])
+package(
+    default_visibility = [
+        "//src/backend/storage/api:__subpackages__",
+        "//tests/backend/storage/api:__subpackages__",
+    ],
+)
 
 STORAGE_SERVICE_PORT = "7000"
 
 # Equivalent to cmdline:
 uvicorn_server(
-    name = "artemis-storage",
+    name = "server",
     app = "src.backend.storage.api.main:app",
     host = "0.0.0.0",
     port = STORAGE_SERVICE_PORT,
@@ -42,8 +47,9 @@ py_library(
 )
 
 API_ROUTER_PKGS = [
-    "//src/backend/storage/api/private:pkg",
     "//src/backend/storage/api/health:pkg",
+    "//src/backend/storage/api/namespaces:pkg",
+    "//src/backend/storage/api/files:pkg",
 ]
 
 py_library(
@@ -54,6 +60,9 @@ py_library(
     deps = [
         ":exceptions",
         ":utils",
+        "//src/backend/storage/api/files:exceptions",
+        "//src/backend/storage/api/namespaces:exceptions",
+        "//src/lib/backend/api:exceptions",
         requirement("fastapi"),
     ] + API_ROUTER_PKGS,
 )
@@ -64,8 +73,18 @@ py_library(
         "exceptions.py",
     ],
     deps = [
-        "//src/backend/storage/api/private:exceptions",
         requirement("fastapi"),
+    ],
+)
+
+py_library(
+    name = "models",
+    srcs = [
+        "models.py",
+    ],
+    deps = [
+        "//src/lib/backend/db:base",
+        requirement("sqlalchemy"),
     ],
 )
 
@@ -76,8 +95,10 @@ py_library(
     ],
     deps = [
         ":config",
+        "//src/lib/backend/db:session",
         requirement("fastapi"),
         requirement("minio"),
+        requirement("sqlalchemy"),
     ],
 )
 
@@ -89,9 +110,24 @@ py_library(
     deps = [
         ":config",
         ":dependencies",
+        ":models",
+        "//src/lib/backend/db:session",
         "//src/lib/backend/logging:pkg",
         requirement("fastapi"),
         requirement("minio"),
+        requirement("sqlalchemy"),
+    ],
+)
+
+py_library(
+    name = "service",
+    srcs = [
+        "service.py",
+    ],
+    deps = [
+        ":exceptions",
+        ":models",
+        requirement("sqlalchemy"),
     ],
 )
 
@@ -103,6 +139,7 @@ py_library(
     deps = [
         requirement("pydantic"),
         requirement("pydantic-settings"),
+        requirement("asyncpg"),
     ],
 )
 
@@ -128,5 +165,5 @@ py_oci_image(
 oci_load(
     name = "image.tarball",
     image = ":image",
-    repo_tags = ["venus/backend-storage:latest"],
+    repo_tags = ["artemis/backend-storage:latest"],
 )

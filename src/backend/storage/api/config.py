@@ -15,8 +15,11 @@ class StorageSettings(BaseSettings):
     S3_SECRET_KEY: str
 
     # Bucket settings
-    S3_VENUS_BUCKET: str
-    S3_VENUS_BUCKET_KAFKA_EVENT: str
+    S3_ARTEMIS_BUCKET: str
+    S3_ARTEMIS_BUCKET_KAFKA_EVENT: str
+
+    # Postgres (asyncpg DSN)
+    SQL_DB_URL: str
 
 
 settings = StorageSettings()

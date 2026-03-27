@@ -1,0 +1,44 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+package(
+    default_visibility = [
+        "//src:__subpackages__",
+        "//tests:__subpackages__",
+    ],
+)
+
+py_library(
+    name = "pkg",
+    srcs = [
+        "__init__.py",
+    ],
+    deps = [
+        ":base",
+        ":session",
+    ],
+)
+
+py_library(
+    name = "base",
+    srcs = [
+        "base.py",
+    ],
+    deps = [
+        requirement("sqlalchemy"),
+    ],
+)
+
+py_library(
+    name = "session",
+    srcs = [
+        "session.py",
+    ],
+    deps = [
+        requirement("sqlalchemy"),
+    ],
+)

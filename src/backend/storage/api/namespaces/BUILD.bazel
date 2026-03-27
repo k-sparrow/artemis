@@ -1,0 +1,71 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+package(
+    default_visibility = [
+        "//src/backend/storage/api:__pkg__",
+        "//tests/backend/storage/api:__subpackages__",
+    ],
+)
+
+py_library(
+    name = "pkg",
+    srcs = [
+        "__init__.py",
+    ],
+    deps = [
+        ":router",
+    ],
+)
+
+py_library(
+    name = "router",
+    srcs = [
+        "router.py",
+    ],
+    deps = [
+        ":schemas",
+        ":service",
+        "//src/backend/storage/api:dependencies",
+        "//src/lib/backend/logging:pkg",
+        requirement("fastapi"),
+    ],
+)
+
+py_library(
+    name = "service",
+    srcs = [
+        "service.py",
+    ],
+    deps = [
+        ":exceptions",
+        "//src/backend/storage/api:models",
+        "//src/backend/storage/api:service",
+        requirement("sqlalchemy"),
+    ],
+)
+
+py_library(
+    name = "exceptions",
+    srcs = [
+        "exceptions.py",
+    ],
+    deps = [
+        requirement("fastapi"),
+    ],
+)
+
+py_library(
+    name = "schemas",
+    srcs = [
+        "schemas.py",
+    ],
+    deps = [
+        "//src/backend/storage/api:models",
+        requirement("pydantic"),
+    ],
+)

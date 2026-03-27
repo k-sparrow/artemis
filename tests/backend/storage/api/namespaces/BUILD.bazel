@@ -1,0 +1,37 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    visibility = ["//visibility:public"],
+)
+
+py_library(
+    name = "conftest",
+    srcs = ["conftest.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/backend/storage/api:dependencies",
+        "//src/backend/storage/api:main",
+        requirement("fastapi"),
+        requirement("httpx"),
+        requirement("pytest"),
+    ],
+)
+
+py_test(
+    name = "test_namespaces",
+    srcs = ["test_namespaces.py"],
+    deps = [
+        ":conftest",
+        "//src/backend/storage/api:exceptions",
+        "//src/backend/storage/api:main",
+        "//src/backend/storage/api:models",
+        "//src/backend/storage/api/namespaces:exceptions",
+        "//src/backend/storage/api/namespaces:service",
+        "//tests/backend/storage/api:conftest",
+        requirement("pytest"),
+    ],
+)

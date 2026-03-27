@@ -1,13 +1,16 @@
 # -------------------------------------
-# Copyright (c) 2025, Dror Kabely
+# Copyright (c) 2026, Dror Kabely
 # -------------------------------------
-#
-# gazelle:python_root
 
 load("@aspect_rules_py//py:defs.bzl", "py_library")
 load("@pip//:requirements.bzl", "requirement")
 
-package(default_visibility = ["//src/backend/storage/api:__pkg__"])
+package(
+    default_visibility = [
+        "//src/backend/storage/api:__pkg__",
+        "//tests/backend/storage/api:__subpackages__",
+    ],
+)
 
 py_library(
     name = "pkg",
@@ -27,20 +30,11 @@ py_library(
     deps = [
         ":schemas",
         ":service",
+        "//src/backend/storage/api:config",
         "//src/backend/storage/api:dependencies",
         "//src/lib/backend/logging:pkg",
         requirement("fastapi"),
         requirement("python-multipart"),
-    ],
-)
-
-py_library(
-    name = "schemas",
-    srcs = [
-        "schemas.py",
-    ],
-    deps = [
-        requirement("pydantic"),
     ],
 )
 
@@ -51,21 +45,10 @@ py_library(
     ],
     deps = [
         ":exceptions",
-        ":utils",
-        requirement("fastapi"),
+        "//src/backend/storage/api:models",
+        "//src/backend/storage/api:service",
         requirement("minio"),
-    ],
-)
-
-py_library(
-    name = "utils",
-    srcs = [
-        "utils.py",
-    ],
-    deps = [
-        "//src/backend/storage/api:config",
-        requirement("fastapi"),
-        requirement("minio"),
+        requirement("sqlalchemy"),
     ],
 )
 
@@ -76,5 +59,15 @@ py_library(
     ],
     deps = [
         requirement("fastapi"),
+    ],
+)
+
+py_library(
+    name = "schemas",
+    srcs = [
+        "schemas.py",
+    ],
+    deps = [
+        requirement("pydantic"),
     ],
 )

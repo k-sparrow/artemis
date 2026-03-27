@@ -1,6 +1,6 @@
 from fastapi_healthchecks.api.router import HealthcheckRouter, Probe
 
-from src.backend.storage.api.config import storage_settings as settings
+from src.backend.storage.api.config import settings
 from src.backend.storage.api.dependencies import get_minio_client_sync
 from src.backend.storage.api.health.checks import MinioHealthcheck
 
@@ -15,7 +15,7 @@ router = HealthcheckRouter(
         checks=[
             MinioHealthcheck(
                 client=get_minio_client_sync(),
-                bucket_name=settings.S3_VENUS_BUCKET,
+                bucket_name=settings.S3_ARTEMIS_BUCKET,
             ),
         ],
     )

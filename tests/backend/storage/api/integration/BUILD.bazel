@@ -1,0 +1,44 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    visibility = ["//visibility:public"],
+)
+
+py_library(
+    name = "conftest",
+    testonly = True,
+    srcs = ["conftest.py"],
+    deps = [
+        "//src/backend/storage/api:dependencies",
+        "//src/backend/storage/api:main",
+        "//src/backend/storage/api:models",
+        "//src/lib/backend/db:session",
+        requirement("asyncpg"),
+        requirement("fastapi"),
+        requirement("httpx"),
+        requirement("minio"),
+        requirement("pytest"),
+        requirement("sqlalchemy"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_api",
+    srcs = ["test_api.py"],
+    tags = ["integration"],
+    deps = [
+        ":conftest",
+        "//src/backend/storage/api:main",
+        "//src/backend/storage/api:models",
+        "//tests/backend/storage/api:conftest",
+        requirement("minio"),
+        requirement("pytest"),
+        requirement("sqlalchemy"),
+        requirement("testcontainers"),
+    ],
+)

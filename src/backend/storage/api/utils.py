@@ -55,8 +55,8 @@ def s3_dump_object(
 ) -> None:
     file_io.seek(0)
     minio_client.put_object(
-        bucket_name=settings.S3_VENUS_BUCKET,
-        object_name=f"venus/private/{str(file_id)}",
+        bucket_name=settings.S3_ARTEMIS_BUCKET,
+        object_name=f"artemis/private/{str(file_id)}",
         data=file_io,
         length=size,
         content_type=content_type,
@@ -79,12 +79,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("lifespan_started")
 
     minio_client = await get_minio_client()
-    await create_bucket(minio_client=minio_client, bucket_name=settings.S3_VENUS_BUCKET)
+    await create_bucket(
+        minio_client=minio_client, bucket_name=settings.S3_ARTEMIS_BUCKET
+    )
     await link_s3_bucket_with_kafka_event(
         minio_client=minio_client,
-        bucket_name=settings.S3_VENUS_BUCKET,
-        event_name=settings.S3_VENUS_BUCKET_KAFKA_EVENT,
+        bucket_name=settings.S3_ARTEMIS_BUCKET,
+        event_name=settings.S3_ARTEMIS_BUCKET_KAFKA_EVENT,
     )
-    logger.info("lifespan_ready", bucket=settings.S3_VENUS_BUCKET)
+
+    # Create Postgres tables (idempotent; Alembic handles this in production).
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from src.backend.storage.api.models import Base  # noqa: F401 — registers models
+
+    engine = create_async_engine(settings.SQL_DB_URL)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    await engine.dispose()
+
+    logger.info("lifespan_ready", bucket=settings.S3_ARTEMIS_BUCKET)
     yield
     logger.info("lifespan_ended")
