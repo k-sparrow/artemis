@@ -149,7 +149,7 @@ class SimpleUpserterConfig:
     """
 
     cleanup: Literal["full", "incremental", "scoped_full", "none"] = "scoped_full"
-    source_id_key: str = "source"
+    source_id_key: str = "obj_id"
     batch_size: int = 32
 
 
@@ -174,7 +174,7 @@ class SemiStructuredUpserterConfig:
     """
 
     cleanup: Literal["full", "incremental", "scoped_full", "none"] = "scoped_full"
-    source_id_key: str = "source"
+    source_id_key: str = "obj_id"
     batch_size: int = 32
     id_key: str = "doc_id"
 

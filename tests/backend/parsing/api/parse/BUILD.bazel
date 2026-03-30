@@ -20,6 +20,7 @@ py_test(
         "//src/backend/parsing/api:dependencies",
         "//src/backend/parsing/api:main",
         "//src/backend/parsing/api/parse:service",
+        "//src/lib/core/adapters/loaders:pkg",
         "//src/lib/core/ingestion:exceptions",
         "//src/lib/core/ingestion:types",
         requirement("httpx"),

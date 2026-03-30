@@ -16,6 +16,7 @@ Type Flow:
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import List, NamedTuple, Protocol, TypeVar, runtime_checkable
+from uuid import UUID
 
 from langchain_core.documents import Document
 from pydantic import BaseModel
@@ -121,14 +122,20 @@ class ChunkType(StrEnum):
 class ParsedChunk(BaseModel):
     """Schema contract between the parsing service and the indexing service.
 
-    All three fields are required.  ``namespace`` is intentionally absent —
-    it is stamped by the indexing service, not by the parser.  ``dl_meta``
-    and other loader-internal fields are dropped at this boundary.
+    ``namespace`` is intentionally absent — it is stamped by the indexing
+    service, not by the parser.  ``dl_meta`` and other loader-internal fields
+    are dropped at this boundary.
+
+    ``obj_id`` is the record-manager deduplication pivot, derived upstream as
+    ``uuid5(namespace_id, source_label)`` by the storage service and stamped
+    on every chunk by the parsing service so the indexing service can scope
+    ``aindex`` cleanup to the correct object.
     """
 
     page_content: str
     source: str
     type: ChunkType
+    obj_id: UUID
 
 
 @dataclass

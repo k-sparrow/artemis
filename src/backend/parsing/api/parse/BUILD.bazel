@@ -15,6 +15,7 @@ py_library(
         "//src/lib/core/adapters/loaders:pkg",
         "//src/lib/core/ingestion:exceptions",
         "//src/lib/core/ingestion:types",
+        "//src/lib/core/ingestion/normalizer:pkg",
         requirement("fastapi"),
         requirement("httpx"),
         requirement("langchain-core"),
@@ -30,6 +31,7 @@ py_library(
         "//src/lib/backend/logging:pkg",
         "//src/lib/core/ingestion:types",
         requirement("fastapi"),
+        requirement("python-multipart"),
     ],
 )
 

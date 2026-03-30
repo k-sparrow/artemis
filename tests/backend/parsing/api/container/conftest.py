@@ -9,7 +9,7 @@ from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
 from testcontainers.core.wait_strategies import HttpWaitStrategy
 
-_DOCLING_IMAGE = "quay.io/docling-project/docling-serve-cu128:latest"
+_DOCLING_IMAGE = "ghcr.io/docling-project/docling-serve-cu128:v1.15.0"
 _DOCLING_PORT = 5001
 _APP_IMAGE = "artemis/backend-parsing:dev"
 _APP_PORT = 10001
