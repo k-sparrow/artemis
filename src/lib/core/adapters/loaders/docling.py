@@ -14,8 +14,28 @@ from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents import Document
 
 # our code
+from src.lib.core.adapters.loaders.exceptions import LoaderError
 
-__all__ = ["DoclingServeAPIDocumentConverter", "DoclingAPIServeLoader"]
+__all__ = [
+    "DoclingServeAPIDocumentConverter",
+    "DoclingAPIServeLoader",
+    "DoclingConversionError",
+]
+
+
+class DoclingConversionError(LoaderError):
+    """Raised when Docling returns 200 but reports conversion errors in the response body.
+
+    Attributes:
+        errors: The raw ``errors`` list from the Docling response, each entry
+            being a dict with ``component_type``, ``module_name``, and ``error_message``.
+    """
+
+    def __init__(self, errors: list[dict]) -> None:
+        self.errors = errors
+        messages = "; ".join(e.get("error_message", str(e)) for e in errors)
+        super().__init__(f"Docling conversion failed: {messages}")
+
 
 # TODO:
 # Create a custom DoclingLoader which DOES NOT use docling.DocumentConverter
@@ -116,7 +136,8 @@ class DoclingServeAPIDocumentConverter:
 
         # convert the result back to DoclingDocument
         json_response = result.json()
-
+        if errors := json_response.get("errors"):
+            raise DoclingConversionError(errors)
         return DoclingDocument.model_validate(json_response["document"]["json_content"])
 
     async def aconvert(self, source: FileInput) -> DoclingDocument:
@@ -132,7 +153,8 @@ class DoclingServeAPIDocumentConverter:
 
         # convert the result back to DoclingDocument
         json_response = result.json()
-
+        if errors := json_response.get("errors"):
+            raise DoclingConversionError(errors)
         return DoclingDocument.model_validate(json_response["document"]["json_content"])
 
 

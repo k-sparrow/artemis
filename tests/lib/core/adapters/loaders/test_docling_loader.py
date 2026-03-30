@@ -21,7 +21,7 @@ The integration tests (real Docling container) live in
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -30,6 +30,8 @@ from langchain_core.documents import Document
 
 from src.lib.core.adapters.loaders.docling import (
     DoclingAPIServeLoader,
+    DoclingConversionError,
+    DoclingServeAPIDocumentConverter,
     ExportType,
     MetaExtractor,
 )
@@ -237,6 +239,37 @@ class TestDoclingAPIServeLoaderErrors:
         with pytest.raises(httpx.ConnectError):
             _ = [doc async for doc in loader.alazy_load()]
 
+    def test_conversion_error_propagates_from_lazy_load(self) -> None:
+        """DoclingConversionError raised by converter surfaces from lazy_load."""
+        loader, mock_converter, _ = _make_loader(export_type=ExportType.MARKDOWN)
+        mock_converter.convert.side_effect = DoclingConversionError(
+            [
+                {
+                    "component_type": "user_input",
+                    "module_name": "",
+                    "error_message": "File format not allowed: binary.exe",
+                }
+            ]
+        )
+        with pytest.raises(DoclingConversionError, match="File format not allowed"):
+            list(loader.lazy_load())
+
+    @pytest.mark.asyncio
+    async def test_conversion_error_propagates_from_alazy_load(self) -> None:
+        """DoclingConversionError raised by converter surfaces from alazy_load."""
+        loader, mock_converter, _ = _make_loader(export_type=ExportType.MARKDOWN)
+        mock_converter.aconvert.side_effect = DoclingConversionError(
+            [
+                {
+                    "component_type": "user_input",
+                    "module_name": "",
+                    "error_message": "File format not allowed: binary.exe",
+                }
+            ]
+        )
+        with pytest.raises(DoclingConversionError, match="File format not allowed"):
+            _ = [doc async for doc in loader.alazy_load()]
+
     def test_unknown_export_type_raises_value_error(self) -> None:
         loader, _, _ = _make_loader()
         loader._export_type = "unsupported"  # type: ignore[assignment]
@@ -249,3 +282,63 @@ class TestDoclingAPIServeLoaderErrors:
         loader._export_type = "unsupported"  # type: ignore[assignment]
         with pytest.raises(ValueError, match="Unexpected export type"):
             _ = [doc async for doc in loader.alazy_load()]
+
+
+# ---------------------------------------------------------------------------
+# DoclingServeAPIDocumentConverter — errors field handling
+# ---------------------------------------------------------------------------
+
+
+_DOCLING_ERRORS = [
+    {
+        "component_type": "user_input",
+        "module_name": "",
+        "error_message": "File format not allowed: binary.exe",
+    }
+]
+
+
+class TestDoclingServeAPIDocumentConverter:
+    """Tests the HTTP response → exception translation inside convert/aconvert.
+
+    The httpx clients are patched so no network calls are made.
+    """
+
+    def test_convert_raises_on_non_empty_errors(self) -> None:
+        """convert() raises DoclingConversionError when the response has errors."""
+        converter = DoclingServeAPIDocumentConverter(base_url="http://docling-test")
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"errors": _DOCLING_ERRORS, "document": None}
+
+        with patch.object(converter.client, "post", return_value=mock_response):
+            with pytest.raises(DoclingConversionError, match="File format not allowed"):
+                converter.convert(("binary.exe", b"\x00", "application/octet-stream"))
+
+    def test_convert_error_carries_errors_list(self) -> None:
+        """The DoclingConversionError carries the raw errors list from Docling."""
+        converter = DoclingServeAPIDocumentConverter(base_url="http://docling-test")
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"errors": _DOCLING_ERRORS, "document": None}
+
+        with patch.object(converter.client, "post", return_value=mock_response):
+            with pytest.raises(DoclingConversionError) as exc_info:
+                converter.convert(("binary.exe", b"\x00", "application/octet-stream"))
+            assert exc_info.value.errors == _DOCLING_ERRORS
+
+    @pytest.mark.asyncio
+    async def test_aconvert_raises_on_non_empty_errors(self) -> None:
+        """aconvert() raises DoclingConversionError when the response has errors."""
+        converter = DoclingServeAPIDocumentConverter(base_url="http://docling-test")
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"errors": _DOCLING_ERRORS, "document": None}
+
+        with patch.object(
+            converter.async_client, "post", new=AsyncMock(return_value=mock_response)
+        ):
+            with pytest.raises(DoclingConversionError, match="File format not allowed"):
+                await converter.aconvert(
+                    ("binary.exe", b"\x00", "application/octet-stream")
+                )

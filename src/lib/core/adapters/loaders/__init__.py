@@ -17,6 +17,7 @@ from src.lib.core.adapters.loaders.config import (
     LoaderConfig,
     create_loader_factory,
 )
+from src.lib.core.adapters.loaders.exceptions import LoaderError
 
 
 __all__ = [
@@ -28,4 +29,5 @@ __all__ = [
     "LoaderType",
     "LoaderConfig",
     "create_loader_factory",
+    "LoaderError",
 ]
