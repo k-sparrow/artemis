@@ -23,12 +23,12 @@ router = APIRouter(tags=["Ingestion"])
 async def delete_endpoint(
     pipeline: pipeline_dependency,
     namespace: UUID,
-    source: Optional[str] = None,
+    obj_id: Optional[str] = None,
 ) -> None:
-    logger.info("delete_started", namespace=str(namespace), source=source)
+    logger.info("delete_started", namespace=str(namespace), obj_id=obj_id)
     try:
-        await service.a_delete(namespace, pipeline, source)
-        logger.info("delete_completed", namespace=str(namespace), source=source)
+        await service.a_delete(namespace, pipeline, obj_id)
+        logger.info("delete_completed", namespace=str(namespace), obj_id=obj_id)
     except Exception as e:
         logger.error("delete_failed", error=str(e))
         raise

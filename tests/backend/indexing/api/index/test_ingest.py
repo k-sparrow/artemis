@@ -2,7 +2,7 @@
 # Copyright (c) 2026, Dror Kabely
 # -------------------------------------
 #
-"""Unit tests for the POST /ingest endpoint.
+"""Unit tests for the POST /ingest and DELETE /ingest endpoints.
 
 The indexing service accepts pre-parsed List[ParsedChunk] JSON — it no longer
 handles file uploads or calls any document loader.  All infrastructure
@@ -22,6 +22,8 @@ from src.backend.indexing.api.dependencies import get_pipeline
 from src.backend.indexing.api.main import app
 from src.lib.core.ingestion.exceptions import DocumentProcessingException
 from src.lib.core.ingestion.types import UpsertResult
+
+OBJ_ID = uuid.UUID("12345678-1234-5678-1234-567812345678")
 
 
 # ---------------------------------------------------------------------------
@@ -56,11 +58,11 @@ def client(mock_pipeline: AsyncMock):
 def _delete(
     client: TestClient,
     namespace: uuid.UUID,
-    source: str | None = None,
+    obj_id: str | None = None,
 ):
     params: dict = {"namespace": str(namespace)}
-    if source is not None:
-        params["source"] = source
+    if obj_id is not None:
+        params["obj_id"] = obj_id
     return client.delete("/ingest", params=params)
 
 
@@ -68,9 +70,17 @@ def _post_chunks(
     client: TestClient,
     namespace: uuid.UUID,
     chunks: list | None = None,
+    obj_id: uuid.UUID = OBJ_ID,
 ):
     if chunks is None:
-        chunks = [{"page_content": "hello world", "source": "test.md", "type": "text"}]
+        chunks = [
+            {
+                "page_content": "hello world",
+                "source": "test.md",
+                "type": "text",
+                "obj_id": str(obj_id),
+            }
+        ]
     return client.post(
         "/ingest",
         params={"namespace": str(namespace)},
@@ -103,7 +113,9 @@ class TestIngestEndpoint:
         response = _post_chunks(
             client,
             namespace,
-            chunks=[{"source": "test.md", "type": "text"}],  # page_content missing
+            chunks=[
+                {"source": "test.md", "type": "text", "obj_id": str(OBJ_ID)}
+            ],  # page_content missing
         )
         assert response.status_code == 422
 
@@ -148,13 +160,16 @@ class TestIngestEndpoint:
 
         assert response.status_code == 500
 
-    def test_pipeline_called_with_namespace_in_metadata(
+    def test_pipeline_called_with_namespace_and_obj_id_in_metadata(
         self,
         client: TestClient,
         namespace: uuid.UUID,
         mock_pipeline: AsyncMock,
     ) -> None:
-        """The namespace must be stamped on every document before pipeline.aprocess()."""
+        """
+        Both namespace and obj_id must be stamped on
+        every document before pipeline.aprocess().
+        """
         _post_chunks(client, namespace)
 
         mock_pipeline.aprocess.assert_called_once()
@@ -162,6 +177,9 @@ class TestIngestEndpoint:
         assert all(
             doc.metadata.get("namespace") == str(namespace) for doc in docs_arg
         ), "All documents must carry the namespace in their metadata"
+        assert all(
+            doc.metadata.get("obj_id") == str(OBJ_ID) for doc in docs_arg
+        ), "All documents must carry obj_id in their metadata"
 
     def test_multiple_chunks_all_passed_to_pipeline(
         self,
@@ -171,7 +189,12 @@ class TestIngestEndpoint:
     ) -> None:
         """All chunks in the request body are forwarded to the pipeline."""
         chunks = [
-            {"page_content": f"chunk {i}", "source": "test.md", "type": "text"}
+            {
+                "page_content": f"chunk {i}",
+                "source": "test.md",
+                "type": "text",
+                "obj_id": str(OBJ_ID),
+            }
             for i in range(5)
         ]
         _post_chunks(client, namespace, chunks=chunks)
@@ -181,27 +204,27 @@ class TestIngestEndpoint:
 
 
 class TestDeleteEndpoint:
-    def test_single_file_deletion_returns_204(
+    def test_single_object_deletion_returns_204(
         self, client: TestClient, namespace: uuid.UUID
     ) -> None:
-        """DELETE /ingest?namespace=<uuid>&source=<path> → 204 No Content."""
-        response = _delete(client, namespace, source="report.pdf")
+        """DELETE /ingest?namespace=<uuid>&obj_id=<uuid> → 204 No Content."""
+        response = _delete(client, namespace, obj_id=str(OBJ_ID))
         assert response.status_code == 204
 
-    def test_single_file_deletion_calls_adelete_source(
+    def test_single_object_deletion_calls_adelete_source(
         self,
         client: TestClient,
         namespace: uuid.UUID,
         mock_pipeline: AsyncMock,
     ) -> None:
-        """pipeline.adelete_source must be called with the exact source value."""
-        _delete(client, namespace, source="report.pdf")
-        mock_pipeline.adelete_source.assert_called_once_with("report.pdf")
+        """pipeline.adelete_source must be called with the exact obj_id string."""
+        _delete(client, namespace, obj_id=str(OBJ_ID))
+        mock_pipeline.adelete_source.assert_called_once_with(str(OBJ_ID))
 
     def test_namespace_deletion_returns_204(
         self, client: TestClient, namespace: uuid.UUID
     ) -> None:
-        """DELETE /ingest?namespace=<uuid> (no source) → 204 No Content."""
+        """DELETE /ingest?namespace=<uuid> (no obj_id) → 204 No Content."""
         response = _delete(client, namespace)
         assert response.status_code == 204
 
@@ -230,7 +253,7 @@ class TestDeleteEndpoint:
         app.dependency_overrides[get_pipeline] = lambda: crashing_pipeline
         try:
             with TestClient(app, raise_server_exceptions=False) as c:
-                response = _delete(c, namespace, source="report.pdf")
+                response = _delete(c, namespace, obj_id=str(OBJ_ID))
         finally:
             app.dependency_overrides.clear()
 

@@ -9,23 +9,23 @@ from src.lib.core.ingestion.types import ParsedChunk, UpsertResult
 async def a_delete(
     namespace: UUID,
     pipeline: BasePipeline,
-    source: Optional[str] = None,
+    obj_id: Optional[str] = None,
 ) -> None:
     """Delete documents from the vectorstore for *namespace*.
 
-    If *source* is provided, only chunks for that file are removed —
+    If *obj_id* is provided, only chunks for that object are removed —
     both from the vectorstore and the record manager — via
     :meth:`pipeline.adelete_source`.
 
-    If *source* is ``None`` (namespace-level deletion), the pipeline is
+    If *obj_id* is ``None`` (namespace-level deletion), the pipeline is
     called with an empty document list.  Because the upserters use
     ``cleanup="scoped_full"`` and ``scoped_full_cleanup_source_ids`` will be
     an empty set, LangChain's ``aindex`` falls back to unscoped full cleanup —
     deleting every key tracked in the namespace's record manager and the
     corresponding vectorstore entries.
     """
-    if source is not None:
-        await pipeline.adelete_source(source)
+    if obj_id is not None:
+        await pipeline.adelete_source(obj_id)
     else:
         await pipeline.aprocess([])
 
@@ -46,7 +46,11 @@ async def a_index_and_ingest(
     docs = [
         Document(
             page_content=chunk.page_content,
-            metadata={"source": chunk.source, "type": chunk.type},
+            metadata={
+                "source": chunk.source,
+                "type": chunk.type,
+                "obj_id": str(chunk.obj_id),
+            },
         )
         for chunk in chunks
     ]

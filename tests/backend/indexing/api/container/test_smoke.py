@@ -16,17 +16,22 @@ import pytest
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
+OBJ_ID_A = uuid.uuid4()
+OBJ_ID_B = uuid.uuid4()
+
 # Pre-parsed chunks as would be produced by the parsing service.
 _TEST_CHUNKS = [
     {
         "page_content": "This is a smoke test document with some content.",
         "source": "test.md",
         "type": "text",
+        "obj_id": str(uuid.uuid4()),
     },
     {
         "page_content": "A second chunk to verify multi-chunk ingestion.",
         "source": "test.md",
         "type": "text",
+        "obj_id": str(uuid.uuid4()),
     },
 ]
 
@@ -78,59 +83,60 @@ async def test_delete_missing_namespace_returns_422(client: httpx.AsyncClient):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_delete_nonexistent_source_returns_204(client: httpx.AsyncClient):
-    """DELETE /ingest for a source that was never indexed → still 204 (idempotent)."""
+async def test_delete_nonexistent_obj_id_returns_204(client: httpx.AsyncClient):
+    """DELETE /ingest for an obj_id that was never indexed → still 204 (idempotent)."""
     namespace = uuid.uuid4()
     response = await client.delete(
         "/ingest",
-        params={"namespace": str(namespace), "source": "never_indexed.pdf"},
+        params={"namespace": str(namespace), "obj_id": str(uuid.uuid4())},
     )
     assert response.status_code == 204
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_delete_single_source_removes_only_target(
+async def test_delete_single_object_removes_only_target(
     client: httpx.AsyncClient,
     qdrant_client: AsyncQdrantClient,
 ):
-    """Ingest two sources, delete one — only that source's chunks disappear."""
+    """Ingest two objects, delete one — only that object's chunks disappear."""
     namespace = uuid.uuid4()
+    obj_id_a = uuid.uuid4()
+    obj_id_b = uuid.uuid4()
 
     chunks_a = [
-        {"page_content": "Source A content.", "source": "a.pdf", "type": "text"}
+        {
+            "page_content": "Source A content.",
+            "source": "a.pdf",
+            "type": "text",
+            "obj_id": str(obj_id_a),
+        }
     ]
     chunks_b = [
-        {"page_content": "Source B content.", "source": "b.pdf", "type": "text"}
+        {
+            "page_content": "Source B content.",
+            "source": "b.pdf",
+            "type": "text",
+            "obj_id": str(obj_id_b),
+        }
     ]
 
     r = await client.post(
-        "/ingest",
-        json=chunks_a,
-        params={
-            "namespace": namespace,
-        },
+        "/ingest", json=chunks_a, params={"namespace": str(namespace)}
     )
     assert r.status_code == 200
     r = await client.post(
-        "/ingest",
-        json=chunks_b,
-        params={
-            "namespace": namespace,
-        },
+        "/ingest", json=chunks_b, params={"namespace": str(namespace)}
     )
     assert r.status_code == 200
 
     response = await client.delete(
         "/ingest",
-        params={
-            "namespace": namespace,
-            "source": "a.pdf",
-        },
+        params={"namespace": str(namespace), "obj_id": str(obj_id_a)},
     )
     assert response.status_code == 204
 
-    # a.pdf chunks must be gone
+    # obj_id_a chunks must be gone
     a_result = await qdrant_client.count(
         collection_name=_COLLECTION,
         count_filter=Filter(
@@ -138,13 +144,15 @@ async def test_delete_single_source_removes_only_target(
                 FieldCondition(
                     key="metadata.namespace", match=MatchValue(value=str(namespace))
                 ),
-                FieldCondition(key="metadata.source", match=MatchValue(value="a.pdf")),
+                FieldCondition(
+                    key="metadata.obj_id", match=MatchValue(value=str(obj_id_a))
+                ),
             ]
         ),
     )
     assert a_result.count == 0
 
-    # b.pdf chunks must still be present
+    # obj_id_b chunks must still be present
     b_result = await qdrant_client.count(
         collection_name=_COLLECTION,
         count_filter=Filter(
@@ -152,7 +160,9 @@ async def test_delete_single_source_removes_only_target(
                 FieldCondition(
                     key="metadata.namespace", match=MatchValue(value=str(namespace))
                 ),
-                FieldCondition(key="metadata.source", match=MatchValue(value="b.pdf")),
+                FieldCondition(
+                    key="metadata.obj_id", match=MatchValue(value=str(obj_id_b))
+                ),
             ]
         ),
     )
