@@ -24,6 +24,7 @@ from src.lib.core.ingestion.config import (
     SemiStructuredIndexerConfig,
     SemiStructuredResources,
     SemiStructuredUpserterConfig,
+    SimpleUpserterConfig,
     create_pipeline,
 )
 from src.lib.core.ingestion.normalizer import MetadataFieldNormalizer
@@ -48,7 +49,18 @@ def normalizer(namespace: uuid.UUID) -> MetadataFieldNormalizer:
 
 
 # ---------------------------------------------------------------------------
-# Parametrized pipeline — one run per algorithm type
+# source_id_key — parametrized over both supported values
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(params=["source", "obj_id"])
+def source_id_key(request: pytest.FixtureRequest) -> str:
+    """The metadata field used as the record-manager deduplication key."""
+    return request.param
+
+
+# ---------------------------------------------------------------------------
+# Parametrized pipeline — one run per (algorithm type × source_id_key)
 # ---------------------------------------------------------------------------
 
 
@@ -61,16 +73,18 @@ def pipeline(
     vectorstore: QdrantVectorStore,
     record_manager: SQLRecordManager,
     docstore_record_manager: SQLRecordManager,
+    source_id_key: str,
 ) -> BasePipeline:
-    """A fully wired pipeline, parametrized over all pipeline types.
-
-    SIMPLE uses the vectorstore only.
-    SEMI_STRUCTURED additionally receives the record_manager for deduplication.
+    """A fully wired pipeline, parametrized over all pipeline types and both
+    supported source_id_key values (``source`` and ``obj_id``).
     """
     pipeline_type: PipelineType = request.param
 
     if pipeline_type == PipelineType.SIMPLE:
-        config = PipelineConfig(pipeline_type=pipeline_type)
+        config = PipelineConfig(
+            pipeline_type=pipeline_type,
+            upserter=SimpleUpserterConfig(source_id_key=source_id_key),
+        )
         resources = PipelineResources(
             vectorstore=vectorstore,
             record_manager=record_manager,
@@ -79,7 +93,7 @@ def pipeline(
         config = PipelineConfig(
             pipeline_type=pipeline_type,
             indexer=SemiStructuredIndexerConfig(),
-            upserter=SemiStructuredUpserterConfig(),
+            upserter=SemiStructuredUpserterConfig(source_id_key=source_id_key),
         )
         resources = SemiStructuredResources(
             vectorstore=vectorstore,

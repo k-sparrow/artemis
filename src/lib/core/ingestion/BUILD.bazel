@@ -23,6 +23,7 @@ py_library(
     ],
     deps = [
         ":config",
+        ":contract",
         ":exceptions",
         ":types",
         "//src/lib/core/ingestion/indexer:pkg",
@@ -55,6 +56,16 @@ py_library(
     ],
     deps = [
         requirement("langchain-core"),
+        requirement("pydantic"),
+    ],
+)
+
+py_library(
+    name = "contract",
+    srcs = [
+        "contract.py",
+    ],
+    deps = [
         requirement("pydantic"),
     ],
 )

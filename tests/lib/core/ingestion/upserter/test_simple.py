@@ -7,6 +7,17 @@ from src.lib.core.ingestion.types import UpsertResult
 from src.lib.core.ingestion.upserter import SimpleUpserter
 
 
+def _docs(source_id_key: str, value: str, count: int = 1) -> list[Document]:
+    """Return *count* distinct documents all sharing the same source id value."""
+    return [
+        Document(
+            page_content=f"Content for chunk {i}",
+            metadata={source_id_key: value},
+        )
+        for i in range(count)
+    ]
+
+
 class TestSimpleUpserter:
     """Test suite for SimpleUpserter."""
 
@@ -105,17 +116,18 @@ class TestSimpleUpserter:
         assert result == UpsertResult()
 
     @pytest.mark.asyncio
-    async def test_deduplication_on_second_upsert(self, vectorstore, record_manager):
-        """Second upsert of identical docs should be skipped, not re-added."""
+    @pytest.mark.parametrize("source_id_key", ["source", "obj_id"])
+    async def test_deduplication_on_second_upsert(
+        self, vectorstore, record_manager, source_id_key: str
+    ):
+        """Second upsert of identical docs must be skipped regardless of which
+        metadata field is used as the record-manager deduplication key."""
         upserter = SimpleUpserter(
-            vectorstore=vectorstore, record_manager=record_manager
+            vectorstore=vectorstore,
+            record_manager=record_manager,
+            source_id_key=source_id_key,
         )
-        docs = [
-            Document(
-                page_content="Machine learning is a subset of artificial intelligence",
-                metadata={"source": "ml.pdf"},
-            ),
-        ]
+        docs = _docs(source_id_key, "doc-a")
 
         first = await upserter.aupsert(docs)
         second = await upserter.aupsert(docs)
@@ -124,6 +136,37 @@ class TestSimpleUpserter:
         assert second.num_added == 0
         assert second.num_skipped == 1
         assert second.ids == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("source_id_key", ["source", "obj_id"])
+    async def test_adelete_source_removes_chunks_and_clears_record_manager(
+        self, vectorstore, record_manager, qdrant_client, source_id_key: str
+    ):
+        """adelete_source must remove all vectorstore chunks for the given source
+        value and clear the record-manager entries, so a re-upsert treats them
+        as new rather than skipped."""
+        upserter = SimpleUpserter(
+            vectorstore=vectorstore,
+            record_manager=record_manager,
+            source_id_key=source_id_key,
+        )
+        docs = _docs(source_id_key, "doc-a", count=2)
+
+        first = await upserter.aupsert(docs)
+        assert first.num_added == 2
+
+        count_before = await qdrant_client.count(vectorstore.collection_name)
+        assert count_before.count == 2
+
+        await upserter.adelete_source("doc-a")
+
+        count_after = await qdrant_client.count(vectorstore.collection_name)
+        assert count_after.count == 0
+
+        # Re-upsert must add again, not skip — record manager must be cleared.
+        second = await upserter.aupsert(docs)
+        assert second.num_added == 2
+        assert second.num_skipped == 0
 
     @pytest.mark.asyncio
     async def test_upserted_documents_retrievable(

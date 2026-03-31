@@ -46,9 +46,11 @@ _IMAGE_TAG = "artemis/backend-controller-worker:latest"
 # Configurable stub HTTP server
 # ---------------------------------------------------------------------------
 
+_STUB_OBJ_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+
 _SAMPLE_CHUNKS = [
-    {"page_content": "hello world", "source": "test.md", "type": "text"},
-    {"page_content": "| a | b |", "source": "test.md", "type": "table"},
+    {"page_content": "hello world", "source": "test.md", "type": "text", "obj_id": _STUB_OBJ_ID},
+    {"page_content": "| a | b |", "source": "test.md", "type": "table", "obj_id": _STUB_OBJ_ID},
 ]
 _UPSERT_RESULT = {
     "num_added": 2,

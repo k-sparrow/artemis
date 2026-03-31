@@ -29,12 +29,21 @@ from tests.backend.controller.worker.integration.conftest import (
 )
 
 
+def _source_dict(namespace_id: uuid.UUID, filename: str = "test.md") -> dict:
+    return {
+        "source": filename,
+        "content_type": "text/markdown",
+        "obj_id": str(uuid.uuid5(namespace_id, filename)),
+        "object_type": "file",
+    }
+
+
 def _dispatch_delete_document(dispatch_app, s3_bucket: str, namespace_id: uuid.UUID):
     return dispatch_app.send_task(
         "tasks.ingest",
         kwargs={
             "s3": {"bucket": s3_bucket, "object": "test.md"},
-            "source": {"path": "test.md", "content_type": "text/markdown"},
+            "source": _source_dict(namespace_id),
             "upload_action": "DELETE",
             "info": {"namespace_id": str(namespace_id)},
         },
@@ -57,7 +66,7 @@ def _dispatch_ingest(dispatch_app, s3_bucket: str, namespace_id: uuid.UUID):
         "tasks.ingest",
         kwargs={
             "s3": {"bucket": s3_bucket, "object": "test.md"},
-            "source": {"path": "test.md", "content_type": "text/markdown"},
+            "source": _source_dict(namespace_id),
             "upload_action": "CREATE",
             "info": {"namespace_id": str(namespace_id)},
         },
@@ -230,7 +239,7 @@ class TestDeleteDocumentTask:
         delete_req = next(r for r in indexing_stub.requests if r["method"] == "DELETE")
         assert str(namespace_id) in delete_req["path"]
 
-    def test_delete_document_stub_receives_correct_source(
+    def test_delete_document_stub_receives_correct_obj_id(
         self,
         dispatch_app,
         indexing_stub: StubServer,
@@ -238,12 +247,13 @@ class TestDeleteDocumentTask:
         namespace_id: uuid.UUID,
         worker_container: DockerContainer,
     ) -> None:
-        """The source file path must appear as a query param in the DELETE path."""
+        """The obj_id derived from (namespace_id, filename) must appear as a query param."""
         _dispatch_delete_document(dispatch_app, s3_source_bucket, namespace_id)
         wait_until_stub_called(indexing_stub, timeout=60, method="DELETE")
 
+        expected_obj_id = str(uuid.uuid5(namespace_id, "test.md"))
         delete_req = next(r for r in indexing_stub.requests if r["method"] == "DELETE")
-        assert "source=test.md" in delete_req["path"]
+        assert f"obj_id={expected_obj_id}" in delete_req["path"]
 
 
 @pytest.mark.integration

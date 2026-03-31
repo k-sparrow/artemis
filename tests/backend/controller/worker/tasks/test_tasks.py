@@ -35,14 +35,20 @@ from src.backend.controller.worker.tasks import (
 )
 
 _NAMESPACE_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+_OBJ_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaab")
 
 _S3 = S3Details(bucket="docs", object="files/test.md")
-_SOURCE = SourceDetails(path="test.md", content_type="text/markdown")
+_SOURCE = SourceDetails(
+    source="test.md",
+    content_type="text/markdown",
+    obj_id=_OBJ_ID,
+    object_type="file",
+)
 _INFO = IngestionInfo(namespace_id=_NAMESPACE_ID)
 
 _CHUNKS: List[ParsedChunk] = [
-    ParsedChunk(page_content="hello", source="test.md", type=ChunkType.TEXT),
-    ParsedChunk(page_content="| a |", source="test.md", type=ChunkType.TABLE),
+    ParsedChunk(page_content="hello", source="test.md", type=ChunkType.TEXT, obj_id=_OBJ_ID),
+    ParsedChunk(page_content="| a |", source="test.md", type=ChunkType.TABLE, obj_id=_OBJ_ID),
 ]
 
 _UPSERT_RESULT = {"num_added": 2, "num_updated": 0, "num_skipped": 0, "ids": ["x", "y"]}
@@ -173,21 +179,12 @@ class TestIngest:
 # ---------------------------------------------------------------------------
 
 
-_SOURCE_NO_PATH = SourceDetails(path=None, content_type="text/markdown")
-
-
 class TestDeleteDocument:
     """Tests for the ``delete_document`` task.
 
     ``delete_document`` receives a ``SourceDetails`` and a namespace UUID and
-    calls ``call_delete_service`` with the source path and namespace so the
-    indexing service can remove the file's chunks from the vectorstore and
-    record manager.
-
-    The early-exit guard (``source.path is None``) exists because MinIO object
-    events can arrive without a meaningful path when the original upload had no
-    key — in that case there is nothing to delete and the task returns a skip
-    status without calling the indexing service.
+    calls ``call_delete_service`` with ``obj_id`` and namespace so the indexing
+    service can remove the file's chunks from the vectorstore and record manager.
     """
 
     def _run(self, mock_delete_svc: MagicMock, source: SourceDetails = _SOURCE) -> dict:
@@ -197,28 +194,20 @@ class TestDeleteDocument:
             return delete_document.run(source=source, namespace_id=_NAMESPACE_ID)
 
     def test_returns_deleted_status(self) -> None:
-        """Successful deletion must return a status dict with source and namespace."""
+        """Successful deletion must return a status dict with obj_id and namespace."""
         result = self._run(MagicMock())
         assert result == {
             "status": "deleted",
-            "source": "test.md",
+            "obj_id": str(_OBJ_ID),
             "namespace_id": str(_NAMESPACE_ID),
         }
 
     def test_call_delete_service_called_with_correct_args(self) -> None:
-        """The indexing service must be called with the resolved path and namespace."""
+        """The indexing service must be called with obj_id and namespace."""
         mock_delete_svc = MagicMock()
         self._run(mock_delete_svc)
         assert mock_delete_svc.call_args[1]["namespace_id"] == _NAMESPACE_ID
-        assert mock_delete_svc.call_args[1]["source"] == "test.md"
-
-    def test_skips_when_source_path_is_none(self) -> None:
-        """When ``source.path`` is None the task must return early without calling
-        the indexing service — there is no object key to delete."""
-        mock_delete_svc = MagicMock()
-        result = self._run(mock_delete_svc, source=_SOURCE_NO_PATH)
-        assert result == {"status": "skipped", "reason": "source_path_missing"}
-        mock_delete_svc.assert_not_called()
+        assert mock_delete_svc.call_args[1]["obj_id"] == str(_OBJ_ID)
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +348,7 @@ class TestFetchAndParse:
             fetch_and_parse.run(_S3, _SOURCE, _NAMESPACE_ID)
 
         assert mock_parse.call_args[1]["file_bytes"] == b"file bytes"
-        assert mock_parse.call_args[1]["source"].path == "test.md"
+        assert mock_parse.call_args[1]["source"].source == "test.md"
 
     def test_chunks_saved_to_store(self) -> None:
         """The chunks returned by the parsing service must be persisted to MinIO."""

@@ -231,30 +231,23 @@ def index(chunks_key: str, namespace_id: uuid.UUID) -> dict:
 def delete_document(source: SourceDetails, namespace_id: uuid.UUID) -> dict:
     """Remove a single document from the indexing service.
 
-    Calls ``DELETE /ingest?namespace=<namespace_id>&source=<path>`` on the
+    Calls ``DELETE /ingest?namespace=<namespace_id>&obj_id=<obj_id>`` on the
     indexing service, which deletes all vectorstore chunks and record-manager
-    entries for the source.
+    entries for the object.
     """
-    if source.path is None:
-        logger.warning(
-            "delete_document=skipped namespace=%s source.path=None",
-            namespace_id,
-        )
-        return {"status": "skipped", "reason": "source_path_missing"}
-
     call_delete_service(
         namespace_id=namespace_id,
-        source=source.path,
+        obj_id=str(source.obj_id),
         ingestion_url=settings.INGESTION_SERVICE_URL,
         timeout=settings.HTTPX_TIMEOUT,
         logger=logger,
     )
     logger.info(
-        "delete_document=done namespace=%s source=%s", namespace_id, source.path
+        "delete_document=done namespace=%s םbj_id=%s", namespace_id, source.obj_id
     )
     return {
         "status": "deleted",
-        "source": source.path,
+        "obj_id": str(source.obj_id),
         "namespace_id": str(namespace_id),
     }
 

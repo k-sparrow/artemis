@@ -7,6 +7,20 @@ from src.lib.core.ingestion.types import SplitChunks, UpsertResult
 from src.lib.core.ingestion.upserter import SemiStructuredUpserter
 
 
+def _chunks(source_id_key: str, value: str, count: int = 1) -> SplitChunks:
+    """Return *count* text chunks all sharing the same source id value."""
+    return SplitChunks(
+        text_chunks=[
+            Document(
+                page_content=f"Text chunk {i}",
+                metadata={source_id_key: value},
+            )
+            for i in range(count)
+        ],
+        table_chunks=[],
+    )
+
+
 class TestSemiStructuredUpserter:
     """Test suite for SemiStructuredUpserter."""
 
@@ -140,17 +154,18 @@ class TestSemiStructuredUpserter:
         assert count.count == 2
 
     @pytest.mark.asyncio
-    async def test_deduplication_with_record_manager(self, vectorstore, record_manager):
-        """With a record_manager, repeated upsert skips unchanged chunks."""
+    @pytest.mark.parametrize("source_id_key", ["source", "obj_id"])
+    async def test_deduplication_with_record_manager(
+        self, vectorstore, record_manager, source_id_key: str
+    ):
+        """With a record_manager, repeated upsert of identical chunks must be
+        skipped regardless of which metadata field is the deduplication key."""
         upserter = SemiStructuredUpserter(
-            vectorstore=vectorstore, record_manager=record_manager
+            vectorstore=vectorstore,
+            record_manager=record_manager,
+            source_id_key=source_id_key,
         )
-        chunks = SplitChunks(
-            text_chunks=[
-                Document(page_content="Dedup text", metadata={"source": "dedup.pdf"}),
-            ],
-            table_chunks=[],
-        )
+        chunks = _chunks(source_id_key, "doc-a")
 
         first = await upserter.aupsert(chunks)
         second = await upserter.aupsert(chunks)
@@ -158,6 +173,37 @@ class TestSemiStructuredUpserter:
         assert first.num_added == 1
         assert second.num_added == 0
         assert second.num_skipped == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("source_id_key", ["source", "obj_id"])
+    async def test_adelete_source_removes_chunks_and_clears_record_manager(
+        self, vectorstore, record_manager, qdrant_client, source_id_key: str
+    ):
+        """adelete_source must remove all vectorstore chunks for the given source
+        value and clear the record-manager entries, so a re-upsert treats them
+        as new rather than skipped."""
+        upserter = SemiStructuredUpserter(
+            vectorstore=vectorstore,
+            record_manager=record_manager,
+            source_id_key=source_id_key,
+        )
+        chunks = _chunks(source_id_key, "doc-a", count=2)
+
+        first = await upserter.aupsert(chunks)
+        assert first.num_added == 2
+
+        count_before = await qdrant_client.count(vectorstore.collection_name)
+        assert count_before.count == 2
+
+        await upserter.adelete_source("doc-a")
+
+        count_after = await qdrant_client.count(vectorstore.collection_name)
+        assert count_after.count == 0
+
+        # Re-upsert must add again, not skip — record manager must be cleared.
+        second = await upserter.aupsert(chunks)
+        assert second.num_added == 2
+        assert second.num_skipped == 0
 
     @pytest.mark.asyncio
     async def test_table_metadata_preserved(self, vectorstore):

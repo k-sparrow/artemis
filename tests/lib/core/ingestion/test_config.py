@@ -102,6 +102,14 @@ class TestSimpleUpserterConfig:
         cfg = SimpleUpserterConfig()
         assert cfg is not None
 
+    def test_default_source_id_key(self):
+        cfg = SimpleUpserterConfig()
+        assert cfg.source_id_key == "obj_id"
+
+    def test_custom_source_id_key(self):
+        cfg = SimpleUpserterConfig(source_id_key="source")
+        assert cfg.source_id_key == "source"
+
     def test_frozen(self):
         cfg = SimpleUpserterConfig()
         with pytest.raises(Exception):
@@ -117,7 +125,7 @@ class TestSemiStructuredUpserterConfig:
     def test_defaults(self):
         cfg = SemiStructuredUpserterConfig()
         assert cfg.cleanup == "scoped_full"
-        assert cfg.source_id_key == "source"
+        assert cfg.source_id_key == "obj_id"
 
     def test_cleanup_full(self):
         cfg = SemiStructuredUpserterConfig(cleanup="full")

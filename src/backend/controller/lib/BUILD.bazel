@@ -20,6 +20,7 @@ py_library(
     name = "schemas",
     srcs = ["schemas.py"],
     deps = [
+        "//src/lib/core/ingestion:contract",
         requirement("pydantic"),
         requirement("typing-extensions"),
     ],

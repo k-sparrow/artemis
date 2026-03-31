@@ -30,14 +30,16 @@ _logger = logging.getLogger(__name__)
 _PARSING_URL = "http://test-parsing:10001"
 _INDEXING_URL = "http://test-indexing:10000"
 
+_OBJ_ID = uuid.UUID("12345678-1234-5678-1234-567812345678")
+
 _SAMPLE_CHUNKS = [
-    ParsedChunk(page_content="chunk one", source="test.md", type=ChunkType.TEXT),
-    ParsedChunk(page_content="| col |", source="test.md", type=ChunkType.TABLE),
+    ParsedChunk(page_content="chunk one", source="test.md", type=ChunkType.TEXT, obj_id=_OBJ_ID),
+    ParsedChunk(page_content="| col |", source="test.md", type=ChunkType.TABLE, obj_id=_OBJ_ID),
 ]
 
 _SAMPLE_CHUNKS_JSON = [
-    {"page_content": "chunk one", "source": "test.md", "type": "text"},
-    {"page_content": "| col |", "source": "test.md", "type": "table"},
+    {"page_content": "chunk one", "source": "test.md", "type": "text", "obj_id": str(_OBJ_ID)},
+    {"page_content": "| col |", "source": "test.md", "type": "table", "obj_id": str(_OBJ_ID)},
 ]
 
 
@@ -76,7 +78,12 @@ class TestFetchFromS3:
 
 class TestCallParsingService:
     def _source(self, filename: str = "test.md") -> SourceDetails:
-        return SourceDetails(path=filename, content_type="text/markdown")
+        return SourceDetails(
+            source=filename,
+            content_type="text/markdown",
+            obj_id=_OBJ_ID,
+            object_type="file",
+        )
 
     @respx.mock
     def test_happy_path_returns_parsed_chunks(self) -> None:
@@ -112,8 +119,27 @@ class TestCallParsingService:
         )
 
         request = route.calls.last.request
-        # multipart body must contain the filename
         assert b"report.pdf" in request.content
+
+    @respx.mock
+    def test_obj_id_forwarded_as_metadata_form_field(self) -> None:
+        """obj_id must be JSON-encoded in the ``metadata`` form field."""
+        import json as _json
+
+        route = respx.post(f"{_PARSING_URL}/v1/parse").mock(
+            return_value=Response(200, json=[_SAMPLE_CHUNKS_JSON[0]])
+        )
+
+        call_parsing_service(
+            file_bytes=b"content",
+            source=self._source(),
+            parsing_url=_PARSING_URL,
+            timeout=5.0,
+            logger=_logger,
+        )
+
+        request = route.calls.last.request
+        assert str(_OBJ_ID).encode() in request.content
 
     @respx.mock
     def test_content_type_forwarded(self) -> None:
@@ -123,7 +149,12 @@ class TestCallParsingService:
 
         call_parsing_service(
             file_bytes=b"content",
-            source=SourceDetails(path="doc.pdf", content_type="application/pdf"),
+            source=SourceDetails(
+                source="doc.pdf",
+                content_type="application/pdf",
+                obj_id=_OBJ_ID,
+                object_type="file",
+            ),
             parsing_url=_PARSING_URL,
             timeout=5.0,
             logger=_logger,
@@ -146,23 +177,6 @@ class TestCallParsingService:
                 timeout=5.0,
                 logger=_logger,
             )
-
-    @respx.mock
-    def test_source_path_none_falls_back_to_document(self) -> None:
-        route = respx.post(f"{_PARSING_URL}/v1/parse").mock(
-            return_value=Response(200, json=[_SAMPLE_CHUNKS_JSON[0]])
-        )
-
-        call_parsing_service(
-            file_bytes=b"content",
-            source=SourceDetails(path=None, content_type="application/octet-stream"),
-            parsing_url=_PARSING_URL,
-            timeout=5.0,
-            logger=_logger,
-        )
-
-        request = route.calls.last.request
-        assert b"document" in request.content
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +267,12 @@ class TestCallIndexingService:
 def _parse(url: str = _PARSING_URL) -> None:
     call_parsing_service(
         file_bytes=b"x",
-        source=SourceDetails(path="f.md", content_type="text/markdown"),
+        source=SourceDetails(
+            source="f.md",
+            content_type="text/markdown",
+            obj_id=_OBJ_ID,
+            object_type="file",
+        ),
         parsing_url=url,
         timeout=5.0,
         logger=_logger,

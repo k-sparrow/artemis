@@ -46,7 +46,7 @@ class ParsedChunkStore:
         :meth:`delete`.
         """
         key = f"parsed-chunks/{task_id}.json"
-        data = json.dumps([c.model_dump() for c in chunks]).encode()
+        data = json.dumps([c.model_dump(mode="json") for c in chunks]).encode()
         self._client.put_object(
             self._bucket,
             key,

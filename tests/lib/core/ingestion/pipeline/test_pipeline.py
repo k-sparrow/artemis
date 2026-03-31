@@ -166,53 +166,60 @@ class TestGenericPipelineContract:
         qdrant_client: AsyncQdrantClient,
         sample_documents: List[Document],
         normalizer: MetadataFieldNormalizer,
+        source_id_key: str,
     ) -> None:
-        """adelete_source must remove all chunks for the target source from both
-        the vectorstore and the record manager, while leaving chunks from every
+        """adelete_source must remove all chunks for the target source-id value
+        from both the vectorstore and the record manager, while leaving every
         other source completely untouched.
 
-        Uses the two-source ``sample_documents`` fixture (test1.pdf / test2.pdf)
-        and deletes only test1.pdf, then asserts:
-        1. No vectorstore points carry source=test1.pdf.
-        2. At least one vectorstore point still carries source=test2.pdf.
-        3. The record manager holds no keys for test1.pdf.
-        4. The record manager still holds keys for test2.pdf.
+        The test is generic over ``source_id_key``: it reads the delete/keep
+        values directly from the fixture documents rather than hard-coding field
+        names or values.
         """
         docs = await normalizer.anormalize(sample_documents)
+
+        # Derive the source-id values for each "file" from the fixture documents.
+        # sample_documents has two logical files: test1.pdf and test2.pdf.
+        values_by_source: dict[str, str] = {}
+        for doc in docs:
+            values_by_source[doc.metadata["source"]] = doc.metadata[source_id_key]
+        delete_value = values_by_source["test1.pdf"]
+        keep_value = values_by_source["test2.pdf"]
+
         await pipeline.aprocess(docs)
 
-        # Baseline: both sources are present
+        # Baseline: both source-id values are present in the vectorstore.
         records_before, _ = await qdrant_client.scroll(
             collection_name=vectorstore.collection_name,
             with_payload=True,
             limit=1000,
         )
-        sources_before = {
-            r.payload.get("metadata", {}).get("source") for r in records_before
+        ids_before = {
+            r.payload.get("metadata", {}).get(source_id_key) for r in records_before
         }
-        assert "test1.pdf" in sources_before
-        assert "test2.pdf" in sources_before
+        assert delete_value in ids_before
+        assert keep_value in ids_before
 
-        await pipeline.adelete_source("test1.pdf")
+        await pipeline.adelete_source(delete_value)
 
-        # Vectorstore: test1.pdf gone, test2.pdf intact
+        # Vectorstore: delete_value gone, keep_value intact.
         records_after, _ = await qdrant_client.scroll(
             collection_name=vectorstore.collection_name,
             with_payload=True,
             limit=1000,
         )
-        sources_after = {
-            r.payload.get("metadata", {}).get("source") for r in records_after
+        ids_after = {
+            r.payload.get("metadata", {}).get(source_id_key) for r in records_after
         }
-        assert "test1.pdf" not in sources_after
-        assert "test2.pdf" in sources_after
+        assert delete_value not in ids_after
+        assert keep_value in ids_after
 
-        # Record manager: keys for test1.pdf wiped, test2.pdf keys survive
-        keys_test1 = await record_manager.alist_keys(group_ids=["test1.pdf"])
-        assert keys_test1 == []
+        # Record manager: keys for delete_value wiped, keep_value keys survive.
+        keys_deleted = await record_manager.alist_keys(group_ids=[delete_value])
+        assert keys_deleted == []
 
-        keys_test2 = await record_manager.alist_keys(group_ids=["test2.pdf"])
-        assert len(keys_test2) > 0
+        keys_kept = await record_manager.alist_keys(group_ids=[keep_value])
+        assert len(keys_kept) > 0
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -223,6 +230,7 @@ class TestGenericPipelineContract:
     async def test_full_cleanup_empties_vectorstore_and_record_manager(
         self,
         pipeline_type: PipelineType,
+        source_id_key: str,
         vectorstore: QdrantVectorStore,
         record_manager: SQLRecordManager,
         qdrant_client: AsyncQdrantClient,
@@ -241,7 +249,7 @@ class TestGenericPipelineContract:
         if pipeline_type == PipelineType.SIMPLE:
             config = PipelineConfig(
                 pipeline_type=pipeline_type,
-                upserter=SimpleUpserterConfig(cleanup="full"),
+                upserter=SimpleUpserterConfig(cleanup="full", source_id_key=source_id_key),
             )
             resources: PipelineResources = PipelineResources(
                 vectorstore=vectorstore,
@@ -251,7 +259,7 @@ class TestGenericPipelineContract:
             config = PipelineConfig(
                 pipeline_type=pipeline_type,
                 indexer=SemiStructuredIndexerConfig(),
-                upserter=SemiStructuredUpserterConfig(cleanup="full"),
+                upserter=SemiStructuredUpserterConfig(cleanup="full", source_id_key=source_id_key),
             )
             resources = SemiStructuredResources(
                 vectorstore=vectorstore,
@@ -279,6 +287,7 @@ class TestGenericPipelineContract:
     @pytest.mark.asyncio
     async def test_full_cleanup_empties_docstore(
         self,
+        source_id_key: str,
         vectorstore: QdrantVectorStore,
         record_manager: SQLRecordManager,
         docstore_record_manager: SQLRecordManager,
@@ -302,7 +311,7 @@ class TestGenericPipelineContract:
         config = PipelineConfig(
             pipeline_type=PipelineType.SEMI_STRUCTURED,
             indexer=SemiStructuredIndexerConfig(),
-            upserter=SemiStructuredUpserterConfig(cleanup="full"),
+            upserter=SemiStructuredUpserterConfig(cleanup="full", source_id_key=source_id_key),
         )
         resources = SemiStructuredResources(
             vectorstore=vectorstore,

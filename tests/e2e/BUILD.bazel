@@ -11,6 +11,7 @@ py_library(
     testonly = True,
     srcs = ["conftest.py"],
     deps = [
+        "//tests:conftest",
         "//tests/lib/testcontainers/tei:pkg",
         requirement("minio"),
         requirement("httpx"),

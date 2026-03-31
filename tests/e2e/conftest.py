@@ -54,7 +54,7 @@ from tests.lib.testcontainers.tei import TEIContainer
 # Image tags
 # ---------------------------------------------------------------------------
 
-_DOCLING_IMAGE = "quay.io/docling-project/docling-serve:latest"  # CPU variant
+_DOCLING_IMAGE = "ghcr.io/docling-project/docling-serve-cu128:v1.15.0"
 _PARSING_IMAGE = "artemis/backend-parsing:dev"
 _INDEXING_IMAGE = "artemis/backend-indexing:dev"
 _WORKER_IMAGE = "artemis/backend-controller-worker:latest"
@@ -386,7 +386,12 @@ def dispatch_ingest(
         "tasks.ingest",
         kwargs={
             "s3": {"bucket": bucket, "object": key},
-            "source": {"path": key, "content_type": "text/markdown"},
+            "source": {
+                "source": key,
+                "content_type": "text/markdown",
+                "obj_id": str(uuid.uuid5(namespace_id, key)),
+                "object_type": "file",
+            },
             "upload_action": action,
             "info": {"namespace_id": str(namespace_id)},
         },

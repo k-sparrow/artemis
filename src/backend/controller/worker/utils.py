@@ -20,6 +20,7 @@ threads available instead of blocking on dead HTTP connections.
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from logging import Logger
@@ -113,14 +114,15 @@ def call_parsing_service(
     Raises ``pybreaker.CircuitBreakerError`` when the parsing circuit is OPEN.
     """
     url = f"{parsing_url.rstrip('/')}/v1/parse"
-    filename = source.path or "document"
-    logger.info("parsing=request url=%s filename=%s", url, filename)
+    object_source = source.source
+    logger.info("parsing=request url=%s source=%s", url, object_source)
 
     def _request() -> list:
         with httpx.Client(timeout=timeout) as http:
             response = http.post(
                 url,
-                files={"file": (filename, file_bytes, source.content_type)},
+                files={"file": (object_source, file_bytes, source.content_type)},
+                data={"metadata": json.dumps({"obj_id": str(source.obj_id)})},
             )
             response.raise_for_status()
             return response.json()
@@ -152,7 +154,7 @@ def call_indexing_service(
             response = http.post(
                 url,
                 params={"namespace": str(namespace_id)},
-                json=[c.model_dump() for c in chunks],
+                json=[c.model_dump(mode="json") for c in chunks],
             )
             response.raise_for_status()
             return response.json()
@@ -167,7 +169,7 @@ def call_delete_service(
     ingestion_url: str,
     timeout: float,
     logger: Logger,
-    source: Optional[str] = None,
+    obj_id: Optional[str] = None,
 ) -> None:
     """Send a DELETE /ingest request to the indexing service.
 
@@ -175,10 +177,10 @@ def call_delete_service(
     """
     url = f"{ingestion_url.rstrip('/')}/ingest"
     params: dict = {"namespace": str(namespace_id)}
-    if source is not None:
-        params["source"] = source
+    if obj_id is not None:
+        params["obj_id"] = obj_id
     logger.info(
-        "delete=request url=%s namespace=%s source=%s", url, namespace_id, source
+        "delete=request url=%s namespace=%s obj_id=%s", url, namespace_id, obj_id
     )
 
     def _request() -> None:
@@ -187,4 +189,4 @@ def call_delete_service(
             response.raise_for_status()
 
     indexing_breaker.call(_request)
-    logger.info("delete=done namespace=%s source=%s", namespace_id, source)
+    logger.info("delete=done namespace=%s obj_id=%s", namespace_id, obj_id)

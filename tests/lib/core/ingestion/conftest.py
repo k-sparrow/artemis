@@ -185,19 +185,23 @@ def sync_record_manager(sync_engine: Engine) -> SQLRecordManager:
 # ---------------------------------------------------------------------------
 
 
+_OBJ_ID_TEST1 = "11111111-1111-1111-1111-111111111111"
+_OBJ_ID_TEST2 = "22222222-2222-2222-2222-222222222222"
+
+
 @pytest.fixture
 def sample_documents() -> List[Document]:
     return [
         Document(
             page_content="This is the first test document about machine learning.",
-            metadata={"source": "test1.pdf", "page": 1},
+            metadata={"source": "test1.pdf", "page": 1, "obj_id": _OBJ_ID_TEST1},
         ),
         Document(
             page_content="This is the second test document about natural language processing.",  # noqa: E501
-            metadata={"source": "test1.pdf", "page": 2},
+            metadata={"source": "test1.pdf", "page": 2, "obj_id": _OBJ_ID_TEST1},
         ),
         Document(
             page_content="This is a table with data: | Name | Value | | A | 1 | | B | 2 |",  # noqa: E501
-            metadata={"source": "test2.pdf", "type": "table", "page": 1},
+            metadata={"source": "test2.pdf", "type": "table", "page": 1, "obj_id": _OBJ_ID_TEST2},
         ),
     ]

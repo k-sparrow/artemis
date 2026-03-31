@@ -3,8 +3,22 @@
 # -------------------------------------
 #
 
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
 exports_files(
     [
         "pytest.ini",
+    ],
+)
+
+py_library(
+    name = "conftest",
+    testonly = True,
+    srcs = ["conftest.py"],
+    visibility = ["//tests:__subpackages__"],
+    deps = [
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
     ],
 )
