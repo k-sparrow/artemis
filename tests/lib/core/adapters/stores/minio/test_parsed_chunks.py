@@ -15,14 +15,39 @@ import pytest
 from src.lib.core.adapters.stores.minio.parsed_chunks import ParsedChunkStore
 from src.lib.core.ingestion.types import ChunkType, ParsedChunk
 
+import uuid as _uuid
+
+_OBJ_ID_A = _uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+_OBJ_ID_B = _uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+
 _CHUNKS = [
-    ParsedChunk(page_content="hello world", source="test.md", type=ChunkType.TEXT),
-    ParsedChunk(page_content="| a | b |", source="report.pdf", type=ChunkType.TABLE),
+    ParsedChunk(
+        page_content="hello world",
+        source="test.md",
+        type=ChunkType.TEXT,
+        obj_id=_OBJ_ID_A,
+    ),
+    ParsedChunk(
+        page_content="| a | b |",
+        source="report.pdf",
+        type=ChunkType.TABLE,
+        obj_id=_OBJ_ID_B,
+    ),
 ]
 
 _CHUNKS_JSON = [
-    {"page_content": "hello world", "source": "test.md", "type": "text"},
-    {"page_content": "| a | b |", "source": "report.pdf", "type": "table"},
+    {
+        "page_content": "hello world",
+        "source": "test.md",
+        "type": "text",
+        "obj_id": str(_OBJ_ID_A),
+    },
+    {
+        "page_content": "| a | b |",
+        "source": "report.pdf",
+        "type": "table",
+        "obj_id": str(_OBJ_ID_B),
+    },
 ]
 
 

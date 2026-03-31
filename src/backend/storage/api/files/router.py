@@ -1,7 +1,7 @@
-"""FastAPI router for file ingestion dispatch and observability.
+"""FastAPI router for object ingestion dispatch and observability.
 
 Routes are mounted under /namespaces in main.py so all paths here are
-relative to that prefix: /{namespace_id}/files, /{namespace_id}/tasks, etc.
+relative to that prefix: /{namespace_id}/objects, /{namespace_id}/tasks, etc.
 """
 
 from __future__ import annotations
@@ -17,13 +17,13 @@ from src.backend.storage.api.dependencies import (
 )
 from src.backend.storage.api.files import service
 from src.backend.storage.api.files.schemas import (
-    FileUploadResponse,
-    IngestedFileResponse,
+    IngestedObjectResponse,
+    ObjectUploadResponse,
     TaskStatusResponse,
 )
 from src.lib.backend.logging import get_logger
 
-router = APIRouter(tags=["files"])
+router = APIRouter(tags=["objects"])
 log = get_logger(__name__)
 
 
@@ -33,16 +33,16 @@ log = get_logger(__name__)
 
 
 @router.post(
-    "/{namespace_id}/files",
-    response_model=FileUploadResponse,
+    "/{namespace_id}/objects",
+    response_model=ObjectUploadResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
-async def upload_file_endpoint(
+async def upload_object_endpoint(
     namespace_id: uuid.UUID,
     file: UploadFile,
     session: db_session_dependency,
     minio: minio_client_dependency,
-) -> FileUploadResponse:
+) -> ObjectUploadResponse:
     data = await file.read()
     task_id, s3_key = await service.upload_file(
         minio=minio,
@@ -54,45 +54,47 @@ async def upload_file_endpoint(
         data=data,
     )
     log.info(
-        "file_uploaded", namespace=namespace_id, filename=file.filename, task_id=task_id
+        "object_uploaded",
+        namespace=namespace_id,
+        filename=file.filename,
+        task_id=task_id,
     )
-    # TODO(epic-1.2): apply_async(ingest_task, task_id=task_id, ...)
-    return FileUploadResponse(task_id=task_id, s3_key=s3_key)
+    return ObjectUploadResponse(task_id=task_id, s3_key=s3_key)
 
 
 @router.put(
-    "/{namespace_id}/files/{file_id}",
-    response_model=FileUploadResponse,
+    "/{namespace_id}/objects/{obj_id}",
+    response_model=ObjectUploadResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
-async def reingest_file_endpoint(
+async def reingest_object_endpoint(
     namespace_id: uuid.UUID,
-    file_id: uuid.UUID,
+    obj_id: uuid.UUID,
     file: UploadFile,
     session: db_session_dependency,
     minio: minio_client_dependency,
-) -> FileUploadResponse:
+) -> ObjectUploadResponse:
     data = await file.read()
     task_id, s3_key = await service.reingest_file(
         minio=minio,
         session=session,
         bucket=settings.S3_ARTEMIS_BUCKET,
         namespace_id=namespace_id,
-        file_id=file_id,
+        obj_id=obj_id,
+        filename=file.filename,
         content_type=file.content_type,
         data=data,
     )
     log.info(
-        "file_reingested", namespace=namespace_id, file_id=file_id, task_id=task_id
+        "object_reingested", namespace=namespace_id, obj_id=obj_id, task_id=task_id
     )
-    # TODO(epic-1.2): apply_async(ingest_task, task_id=task_id, ...)
-    return FileUploadResponse(task_id=task_id, s3_key=s3_key)
+    return ObjectUploadResponse(task_id=task_id, s3_key=s3_key)
 
 
-@router.delete("/{namespace_id}/files/{file_id}", status_code=status.HTTP_202_ACCEPTED)
-async def delete_file_endpoint(
+@router.delete("/{namespace_id}/objects/{obj_id}", status_code=status.HTTP_202_ACCEPTED)
+async def delete_object_endpoint(
     namespace_id: uuid.UUID,
-    file_id: uuid.UUID,
+    obj_id: uuid.UUID,
     session: db_session_dependency,
     minio: minio_client_dependency,
 ) -> None:
@@ -102,13 +104,12 @@ async def delete_file_endpoint(
         session=session,
         bucket=settings.S3_ARTEMIS_BUCKET,
         namespace_id=namespace_id,
-        file_id=file_id,
+        obj_id=obj_id,
         task_id=task_id,
     )
     log.info(
-        "file_tombstoned", namespace=namespace_id, file_id=file_id, task_id=task_id
+        "object_tombstoned", namespace=namespace_id, obj_id=obj_id, task_id=task_id
     )
-    # TODO(epic-1.2): apply_async(delete_task, namespace_id=..., file_id=...)
 
 
 # ---------------------------------------------------------------------------
@@ -116,23 +117,23 @@ async def delete_file_endpoint(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/{namespace_id}/files", response_model=list[IngestedFileResponse])
-async def list_files_endpoint(
+@router.get("/{namespace_id}/objects", response_model=list[IngestedObjectResponse])
+async def list_objects_endpoint(
     namespace_id: uuid.UUID,
     session: db_session_dependency,
-) -> list[IngestedFileResponse]:
-    files = await service.list_files(session=session, namespace_id=namespace_id)
-    return [IngestedFileResponse.model_validate(f) for f in files]
+) -> list[IngestedObjectResponse]:
+    objects = await service.list_files(session=session, namespace_id=namespace_id)
+    return [IngestedObjectResponse.model_validate(o) for o in objects]
 
 
-@router.get("/{namespace_id}/tasks", response_model=list[IngestedFileResponse])
+@router.get("/{namespace_id}/tasks", response_model=list[IngestedObjectResponse])
 async def list_tasks_endpoint(
     namespace_id: uuid.UUID,
     session: db_session_dependency,
-) -> list[IngestedFileResponse]:
-    """Return terminal-state task records for *namespace_id* from ingested_file."""
-    files = await service.list_files(session=session, namespace_id=namespace_id)
-    return [IngestedFileResponse.model_validate(f) for f in files]
+) -> list[IngestedObjectResponse]:
+    """Return terminal-state task records for *namespace_id* from ingested_objects."""
+    objects = await service.list_files(session=session, namespace_id=namespace_id)
+    return [IngestedObjectResponse.model_validate(o) for o in objects]
 
 
 @router.get("/{namespace_id}/tasks/{task_id}", response_model=TaskStatusResponse)

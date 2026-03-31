@@ -14,29 +14,35 @@ from src.backend.storage.api.files.exceptions import (
     IngestedFileNotFoundError,
     TaskNotFoundError,
 )
-from src.backend.storage.api.models import IngestedFile, IngestionTaskType
+from src.backend.storage.api.models import IngestedObject, IngestionTaskType
 from src.backend.storage.api.service import _fetch_namespace
+from src.lib.core.ingestion.contract import (
+    IngestionInfo,
+    IngestionTaskDetails,
+    S3Details,
+    SourceDetails,
+)
 
 
-def _s3_key(namespace_id: uuid.UUID, file_id: uuid.UUID) -> str:
-    return f"{namespace_id}/{file_id}"
+def _s3_key(namespace_id: uuid.UUID, obj_id: uuid.UUID) -> str:
+    return f"{namespace_id}/{obj_id}"
 
 
-async def _fetch_ingested_file(
+async def _fetch_ingested_object(
     session: AsyncSession,
     namespace_id: uuid.UUID,
-    file_id: uuid.UUID,
-) -> IngestedFile:
+    obj_id: uuid.UUID,
+) -> IngestedObject:
     result = await session.execute(
-        sa.select(IngestedFile).where(
-            IngestedFile.id == file_id,
-            IngestedFile.namespace_id == namespace_id,
+        sa.select(IngestedObject).where(
+            IngestedObject.id == obj_id,
+            IngestedObject.namespace_id == namespace_id,
         )
     )
-    file = result.scalar_one_or_none()
-    if file is None:
+    obj = result.scalar_one_or_none()
+    if obj is None:
         raise IngestedFileNotFoundError()
-    return file
+    return obj
 
 
 async def upload_file(
@@ -50,18 +56,32 @@ async def upload_file(
 ) -> tuple[uuid.UUID, str]:
     await _fetch_namespace(session=session, namespace_id=namespace_id)
     task_id = uuid.uuid4()
-    file_id = uuid.uuid4()
-    s3_key = _s3_key(namespace_id, file_id)
+    source_label = filename or str(uuid.uuid4())
+    obj_id = uuid.uuid5(namespace_id, source_label)
+    s3_key = _s3_key(namespace_id, obj_id)
+    resolved_content_type = content_type or "application/octet-stream"
+
+    details = IngestionTaskDetails(
+        upload_action=IngestionTaskType.CREATE,
+        s3=S3Details(bucket=bucket, object=s3_key),
+        source=SourceDetails(
+            source=source_label,
+            content_type=resolved_content_type,
+            obj_id=obj_id,
+            object_type="file",
+        ),
+        info=IngestionInfo(namespace_id=namespace_id),
+    )
+
     minio.put_object(
         bucket_name=bucket,
         object_name=s3_key,
         data=io.BytesIO(data),
         length=len(data),
-        content_type=content_type or "application/octet-stream",
+        content_type=resolved_content_type,
         metadata={
             "task_id": str(task_id),
-            "namespace_id": str(namespace_id),
-            "task_type": IngestionTaskType.CREATE,
+            "contract": details.model_dump_json(),
         },
     )
     return task_id, s3_key
@@ -72,26 +92,43 @@ async def reingest_file(
     session: AsyncSession,
     bucket: str,
     namespace_id: uuid.UUID,
-    file_id: uuid.UUID,
+    obj_id: uuid.UUID,
+    filename: str | None,
     content_type: str | None,
     data: bytes,
 ) -> tuple[uuid.UUID, str]:
     await _fetch_namespace(session=session, namespace_id=namespace_id)
-    await _fetch_ingested_file(
-        session=session, namespace_id=namespace_id, file_id=file_id
+    await _fetch_ingested_object(
+        session=session, namespace_id=namespace_id, obj_id=obj_id
     )
     task_id = uuid.uuid4()
-    s3_key = _s3_key(namespace_id, file_id)
+    # Use the provided filename as the source label; fall back to str(obj_id)
+    # if not supplied so source.source is always non-null.
+    source_label = filename or str(obj_id)
+    s3_key = _s3_key(namespace_id, obj_id)
+    resolved_content_type = content_type or "application/octet-stream"
+
+    details = IngestionTaskDetails(
+        upload_action=IngestionTaskType.MODIFY,
+        s3=S3Details(bucket=bucket, object=s3_key),
+        source=SourceDetails(
+            source=source_label,
+            content_type=resolved_content_type,
+            obj_id=obj_id,
+            object_type="file",
+        ),
+        info=IngestionInfo(namespace_id=namespace_id),
+    )
+
     minio.put_object(
         bucket_name=bucket,
         object_name=s3_key,
         data=io.BytesIO(data),
         length=len(data),
-        content_type=content_type or "application/octet-stream",
+        content_type=resolved_content_type,
         metadata={
             "task_id": str(task_id),
-            "namespace_id": str(namespace_id),
-            "task_type": IngestionTaskType.MODIFY,
+            "contract": details.model_dump_json(),
         },
     )
     return task_id, s3_key
@@ -102,28 +139,32 @@ async def delete_file(
     session: AsyncSession,
     bucket: str,
     namespace_id: uuid.UUID,
-    file_id: uuid.UUID,
+    obj_id: uuid.UUID,
     task_id: uuid.UUID,
 ) -> None:
-    """Tombstone a file by uploading a 0-byte marker object.
+    """Tombstone an object by uploading a 0-byte marker object.
 
-    Implementation note (epic 1.2)
-    --------------------------------
-    This 0-byte tombstone is a **temporary** workaround for the Kafka middleman.
-    The MinIO PUT fires an S3 event → Kafka → RabbitMQ sink → Celery worker, which
-    then performs the actual hard-delete of the Qdrant vectors and S3 objects.
-
-    Once epic 1.2 lands and the storage service can call ``apply_async`` directly,
-    dismantle this as follows:
-    1. Remove the ``minio.put_object`` call here.
-    2. Call ``delete_task.apply_async(kwargs={...}, task_id=str(task_id))``.
-    3. Drop the tombstone-detection branch in the worker.
+    The MinIO PUT fires an S3 event → Kafka → RabbitMQ sink → Celery worker,
+    which performs the actual hard-delete of the Qdrant vectors and S3 objects.
     """
     await _fetch_namespace(session=session, namespace_id=namespace_id)
-    await _fetch_ingested_file(
-        session=session, namespace_id=namespace_id, file_id=file_id
+    ingested = await _fetch_ingested_object(
+        session=session, namespace_id=namespace_id, obj_id=obj_id
     )
-    s3_key = _s3_key(namespace_id, file_id)
+    s3_key = _s3_key(namespace_id, obj_id)
+
+    details = IngestionTaskDetails(
+        upload_action=IngestionTaskType.DELETE,
+        s3=S3Details(bucket=bucket, object=s3_key),
+        source=SourceDetails(
+            source=ingested.source,
+            content_type=ingested.content_type,
+            obj_id=obj_id,
+            object_type=ingested.object_type,
+        ),
+        info=IngestionInfo(namespace_id=namespace_id),
+    )
+
     minio.put_object(
         bucket_name=bucket,
         object_name=s3_key,
@@ -131,8 +172,7 @@ async def delete_file(
         length=0,
         metadata={
             "task_id": str(task_id),
-            "namespace_id": str(namespace_id),
-            "task_type": IngestionTaskType.DELETE,
+            "contract": details.model_dump_json(),
         },
     )
 
@@ -140,10 +180,10 @@ async def delete_file(
 async def list_files(
     session: AsyncSession,
     namespace_id: uuid.UUID,
-) -> list[IngestedFile]:
+) -> list[IngestedObject]:
     await _fetch_namespace(session=session, namespace_id=namespace_id)
     result = await session.execute(
-        sa.select(IngestedFile).where(IngestedFile.namespace_id == namespace_id)
+        sa.select(IngestedObject).where(IngestedObject.namespace_id == namespace_id)
     )
     return list(result.scalars().all())
 

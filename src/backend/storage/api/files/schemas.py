@@ -1,4 +1,4 @@
-"""Pydantic request / response schemas for the /files routes."""
+"""Pydantic request / response schemas for the /objects routes."""
 
 from __future__ import annotations
 
@@ -8,18 +8,19 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
-class FileUploadResponse(BaseModel):
+class ObjectUploadResponse(BaseModel):
     task_id: uuid.UUID = Field(
         description="Pre-generated Celery task ID to poll against."
     )
-    s3_key: str = Field(description="MinIO object key where the file was stored.")
+    s3_key: str = Field(description="MinIO object key where the object was stored.")
 
 
-class IngestedFileResponse(BaseModel):
+class IngestedObjectResponse(BaseModel):
     id: uuid.UUID
     namespace_id: uuid.UUID
     task_id: uuid.UUID
-    filename: str
+    source: str
+    object_type: str
     content_type: str
     size_bytes: int | None
     status: str

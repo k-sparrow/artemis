@@ -126,10 +126,10 @@ class Namespace(Base):
     )
 
     owner: Mapped[Owner] = relationship(back_populates="namespaces")
-    files: Mapped[list["IngestedFile"]] = relationship(back_populates="namespace")
+    objects: Mapped[list["IngestedObject"]] = relationship(back_populates="namespace")
 
 
-class IngestedFile(Base):
+class IngestedObject(Base):
     """Terminal-state record of a completed ingestion task.
 
     Written exclusively by the JDBC sink (CDC from ``apollo_celery_taskmeta``).
@@ -139,12 +139,13 @@ class IngestedFile(Base):
     The storage service reads from this table; it never writes to it.
     """
 
-    __tablename__ = "ingested_file"
+    __tablename__ = "ingested_objects"
 
     id: Mapped[uuid.UUID] = mapped_column(
         sa.UUID(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
+        comment="obj_id: uuid5(namespace_id, source) — stable object identity",
     )
     namespace_id: Mapped[uuid.UUID] = mapped_column(
         sa.UUID(as_uuid=True),
@@ -158,15 +159,20 @@ class IngestedFile(Base):
         unique=True,
         comment="Links to apollo_celery_taskmeta.task_id",
     )
-    filename: Mapped[str] = mapped_column(
+    source: Mapped[str] = mapped_column(
         sa.Text,
         nullable=False,
-        comment="Display name extracted from task kwargs",
+        comment="Display label: filename for user uploads, full fs path for enterprise",
     )
-    path: Mapped[str] = mapped_column(
+    object_type: Mapped[str] = mapped_column(
         sa.Text,
         nullable=False,
-        comment="S3 object key; internal identifier, not shown to users",
+        comment="'file' for user uploads; open-ended for enterprise ingestion",
+    )
+    s3_key: Mapped[str] = mapped_column(
+        sa.Text,
+        nullable=False,
+        comment="S3 object key: {namespace_id}/{obj_id}",
     )
     content_type: Mapped[str] = mapped_column(sa.Text, nullable=False)
     size_bytes: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
@@ -186,7 +192,7 @@ class IngestedFile(Base):
         comment="date_done from Celery result",
     )
 
-    namespace: Mapped[Namespace] = relationship(back_populates="files")
+    namespace: Mapped[Namespace] = relationship(back_populates="objects")
 
 
 # ---------------------------------------------------------------------------

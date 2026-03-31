@@ -249,7 +249,9 @@ class TestGenericPipelineContract:
         if pipeline_type == PipelineType.SIMPLE:
             config = PipelineConfig(
                 pipeline_type=pipeline_type,
-                upserter=SimpleUpserterConfig(cleanup="full", source_id_key=source_id_key),
+                upserter=SimpleUpserterConfig(
+                    cleanup="full", source_id_key=source_id_key
+                ),
             )
             resources: PipelineResources = PipelineResources(
                 vectorstore=vectorstore,
@@ -259,7 +261,9 @@ class TestGenericPipelineContract:
             config = PipelineConfig(
                 pipeline_type=pipeline_type,
                 indexer=SemiStructuredIndexerConfig(),
-                upserter=SemiStructuredUpserterConfig(cleanup="full", source_id_key=source_id_key),
+                upserter=SemiStructuredUpserterConfig(
+                    cleanup="full", source_id_key=source_id_key
+                ),
             )
             resources = SemiStructuredResources(
                 vectorstore=vectorstore,
@@ -311,7 +315,9 @@ class TestGenericPipelineContract:
         config = PipelineConfig(
             pipeline_type=PipelineType.SEMI_STRUCTURED,
             indexer=SemiStructuredIndexerConfig(),
-            upserter=SemiStructuredUpserterConfig(cleanup="full", source_id_key=source_id_key),
+            upserter=SemiStructuredUpserterConfig(
+                cleanup="full", source_id_key=source_id_key
+            ),
         )
         resources = SemiStructuredResources(
             vectorstore=vectorstore,

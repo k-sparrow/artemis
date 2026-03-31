@@ -309,7 +309,10 @@ class TestToParsedChunk:
         assert chunk.type == ChunkType.UNKNOWN
 
     def test_source_and_obj_id_are_distinct(self) -> None:
-        """source (filename/path) and obj_id must be separate, non-equal fields on ParsedChunk."""
+        """
+        source (filename/path) and obj_id must be separate, non-equal fields
+        on ParsedChunk.
+        """
         doc = Document(
             page_content="content",
             metadata={"source": "report.pdf", "type": "text", "obj_id": str(OBJ_ID)},

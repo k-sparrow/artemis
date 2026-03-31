@@ -247,7 +247,10 @@ class TestDeleteDocumentTask:
         namespace_id: uuid.UUID,
         worker_container: DockerContainer,
     ) -> None:
-        """The obj_id derived from (namespace_id, filename) must appear as a query param."""
+        """
+        The obj_id derived from (namespace_id, filename) must appear
+        as a query param.
+        """
         _dispatch_delete_document(dispatch_app, s3_source_bucket, namespace_id)
         wait_until_stub_called(indexing_stub, timeout=60, method="DELETE")
 

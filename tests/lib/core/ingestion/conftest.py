@@ -202,6 +202,11 @@ def sample_documents() -> List[Document]:
         ),
         Document(
             page_content="This is a table with data: | Name | Value | | A | 1 | | B | 2 |",  # noqa: E501
-            metadata={"source": "test2.pdf", "type": "table", "page": 1, "obj_id": _OBJ_ID_TEST2},
+            metadata={
+                "source": "test2.pdf",
+                "type": "table",
+                "page": 1,
+                "obj_id": _OBJ_ID_TEST2,
+            },
         ),
     ]

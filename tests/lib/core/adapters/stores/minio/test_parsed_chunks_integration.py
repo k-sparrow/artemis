@@ -11,12 +11,27 @@ import pytest
 from minio import Minio
 from minio.error import S3Error
 
+import uuid as _uuid
+
 from src.lib.core.adapters.stores.minio.parsed_chunks import ParsedChunkStore
 from src.lib.core.ingestion.types import ChunkType, ParsedChunk
 
+_OBJ_ID_A = _uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+_OBJ_ID_B = _uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+
 _CHUNKS = [
-    ParsedChunk(page_content="hello world", source="test.md", type=ChunkType.TEXT),
-    ParsedChunk(page_content="| a | b |", source="report.pdf", type=ChunkType.TABLE),
+    ParsedChunk(
+        page_content="hello world",
+        source="test.md",
+        type=ChunkType.TEXT,
+        obj_id=_OBJ_ID_A,
+    ),
+    ParsedChunk(
+        page_content="| a | b |",
+        source="report.pdf",
+        type=ChunkType.TABLE,
+        obj_id=_OBJ_ID_B,
+    ),
 ]
 
 

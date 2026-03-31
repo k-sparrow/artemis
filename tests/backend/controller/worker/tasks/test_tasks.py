@@ -47,8 +47,12 @@ _SOURCE = SourceDetails(
 _INFO = IngestionInfo(namespace_id=_NAMESPACE_ID)
 
 _CHUNKS: List[ParsedChunk] = [
-    ParsedChunk(page_content="hello", source="test.md", type=ChunkType.TEXT, obj_id=_OBJ_ID),
-    ParsedChunk(page_content="| a |", source="test.md", type=ChunkType.TABLE, obj_id=_OBJ_ID),
+    ParsedChunk(
+        page_content="hello", source="test.md", type=ChunkType.TEXT, obj_id=_OBJ_ID
+    ),
+    ParsedChunk(
+        page_content="| a |", source="test.md", type=ChunkType.TABLE, obj_id=_OBJ_ID
+    ),
 ]
 
 _UPSERT_RESULT = {"num_added": 2, "num_updated": 0, "num_skipped": 0, "ids": ["x", "y"]}

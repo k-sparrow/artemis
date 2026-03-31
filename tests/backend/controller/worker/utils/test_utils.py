@@ -33,13 +33,27 @@ _INDEXING_URL = "http://test-indexing:10000"
 _OBJ_ID = uuid.UUID("12345678-1234-5678-1234-567812345678")
 
 _SAMPLE_CHUNKS = [
-    ParsedChunk(page_content="chunk one", source="test.md", type=ChunkType.TEXT, obj_id=_OBJ_ID),
-    ParsedChunk(page_content="| col |", source="test.md", type=ChunkType.TABLE, obj_id=_OBJ_ID),
+    ParsedChunk(
+        page_content="chunk one", source="test.md", type=ChunkType.TEXT, obj_id=_OBJ_ID
+    ),
+    ParsedChunk(
+        page_content="| col |", source="test.md", type=ChunkType.TABLE, obj_id=_OBJ_ID
+    ),
 ]
 
 _SAMPLE_CHUNKS_JSON = [
-    {"page_content": "chunk one", "source": "test.md", "type": "text", "obj_id": str(_OBJ_ID)},
-    {"page_content": "| col |", "source": "test.md", "type": "table", "obj_id": str(_OBJ_ID)},
+    {
+        "page_content": "chunk one",
+        "source": "test.md",
+        "type": "text",
+        "obj_id": str(_OBJ_ID),
+    },
+    {
+        "page_content": "| col |",
+        "source": "test.md",
+        "type": "table",
+        "obj_id": str(_OBJ_ID),
+    },
 ]
 
 
@@ -124,7 +138,6 @@ class TestCallParsingService:
     @respx.mock
     def test_obj_id_forwarded_as_metadata_form_field(self) -> None:
         """obj_id must be JSON-encoded in the ``metadata`` form field."""
-        import json as _json
 
         route = respx.post(f"{_PARSING_URL}/v1/parse").mock(
             return_value=Response(200, json=[_SAMPLE_CHUNKS_JSON[0]])

@@ -34,12 +34,13 @@ def _file_bytes(content: bytes = b"hello world") -> dict:
 
 
 def _ingested_file_row() -> dict:
-    """Minimal dict that satisfies IngestedFileResponse.model_validate."""
+    """Minimal dict that satisfies IngestedObjectResponse.model_validate."""
     return {
         "id": uuid.uuid4(),
         "namespace_id": NAMESPACE_ID,
         "task_id": TASK_ID,
-        "filename": "report.pdf",
+        "source": "report.pdf",
+        "object_type": "file",
         "content_type": "application/pdf",
         "size_bytes": 11,
         "status": "SUCCESS",
@@ -54,7 +55,8 @@ def _failed_file_row() -> dict:
         "id": uuid.uuid4(),
         "namespace_id": NAMESPACE_ID,
         "task_id": TASK_ID,
-        "filename": "report.pdf",
+        "source": "report.pdf",
+        "object_type": "file",
         "content_type": "application/pdf",
         "size_bytes": None,
         "status": "FAILURE",
@@ -87,7 +89,7 @@ class TestUploadFile:
         ret = (TASK_ID, f"{NAMESPACE_ID}/{FILE_ID}")
         with patch(f"{_SERVICE}.upload_file", new=AsyncMock(return_value=ret)):
             response = client.post(
-                f"/namespaces/{NAMESPACE_ID}/files",
+                f"/namespaces/{NAMESPACE_ID}/objects",
                 files=_file_bytes(),
             )
         assert response.status_code == 202
@@ -101,18 +103,18 @@ class TestUploadFile:
             new=AsyncMock(side_effect=NamespaceNotFoundError()),
         ):
             response = client.post(
-                f"/namespaces/{NAMESPACE_ID}/files",
+                f"/namespaces/{NAMESPACE_ID}/objects",
                 files=_file_bytes(),
             )
         assert response.status_code == 404
 
     def test_missing_file_body_returns_422(self, client: TestClient) -> None:
-        response = client.post(f"/namespaces/{NAMESPACE_ID}/files")
+        response = client.post(f"/namespaces/{NAMESPACE_ID}/objects")
         assert response.status_code == 422
 
     def test_invalid_namespace_id_returns_422(self, client: TestClient) -> None:
         response = client.post(
-            "/namespaces/not-a-uuid/files",
+            "/namespaces/not-a-uuid/objects",
             files=_file_bytes(),
         )
         assert response.status_code == 422
@@ -128,7 +130,7 @@ class TestReingestFile:
         ret = (TASK_ID, f"{NAMESPACE_ID}/{FILE_ID}")
         with patch(f"{_SERVICE}.reingest_file", new=AsyncMock(return_value=ret)):
             response = client.put(
-                f"/namespaces/{NAMESPACE_ID}/files/{FILE_ID}",
+                f"/namespaces/{NAMESPACE_ID}/objects/{FILE_ID}",
                 files=_file_bytes(),
             )
         assert response.status_code == 202
@@ -140,7 +142,7 @@ class TestReingestFile:
             new=AsyncMock(side_effect=NamespaceNotFoundError()),
         ):
             response = client.put(
-                f"/namespaces/{NAMESPACE_ID}/files/{FILE_ID}",
+                f"/namespaces/{NAMESPACE_ID}/objects/{FILE_ID}",
                 files=_file_bytes(),
             )
         assert response.status_code == 404
@@ -151,7 +153,7 @@ class TestReingestFile:
             new=AsyncMock(side_effect=IngestedFileNotFoundError()),
         ):
             response = client.put(
-                f"/namespaces/{NAMESPACE_ID}/files/{FILE_ID}",
+                f"/namespaces/{NAMESPACE_ID}/objects/{FILE_ID}",
                 files=_file_bytes(),
             )
         assert response.status_code == 404
@@ -165,7 +167,7 @@ class TestReingestFile:
 class TestDeleteFile:
     def test_happy_path_returns_202(self, client: TestClient) -> None:
         with patch(f"{_SERVICE}.delete_file", new=AsyncMock(return_value=None)):
-            response = client.delete(f"/namespaces/{NAMESPACE_ID}/files/{FILE_ID}")
+            response = client.delete(f"/namespaces/{NAMESPACE_ID}/objects/{FILE_ID}")
         assert response.status_code == 202
 
     def test_namespace_not_found_returns_404(self, client: TestClient) -> None:
@@ -173,7 +175,7 @@ class TestDeleteFile:
             f"{_SERVICE}.delete_file",
             new=AsyncMock(side_effect=NamespaceNotFoundError()),
         ):
-            response = client.delete(f"/namespaces/{NAMESPACE_ID}/files/{FILE_ID}")
+            response = client.delete(f"/namespaces/{NAMESPACE_ID}/objects/{FILE_ID}")
         assert response.status_code == 404
 
     def test_file_not_found_returns_404(self, client: TestClient) -> None:
@@ -181,7 +183,7 @@ class TestDeleteFile:
             f"{_SERVICE}.delete_file",
             new=AsyncMock(side_effect=IngestedFileNotFoundError()),
         ):
-            response = client.delete(f"/namespaces/{NAMESPACE_ID}/files/{FILE_ID}")
+            response = client.delete(f"/namespaces/{NAMESPACE_ID}/objects/{FILE_ID}")
         assert response.status_code == 404
 
 
@@ -195,7 +197,7 @@ class TestListFiles:
         file_obj = SimpleNamespace(**_ingested_file_row())
 
         with patch(f"{_SERVICE}.list_files", new=AsyncMock(return_value=[file_obj])):
-            response = client.get(f"/namespaces/{NAMESPACE_ID}/files")
+            response = client.get(f"/namespaces/{NAMESPACE_ID}/objects")
         assert response.status_code == 200
         assert len(response.json()) == 1
         assert response.json()[0]["status"] == "SUCCESS"
@@ -204,7 +206,7 @@ class TestListFiles:
         file_obj = SimpleNamespace(**_failed_file_row())
 
         with patch(f"{_SERVICE}.list_files", new=AsyncMock(return_value=[file_obj])):
-            response = client.get(f"/namespaces/{NAMESPACE_ID}/files")
+            response = client.get(f"/namespaces/{NAMESPACE_ID}/objects")
         assert response.status_code == 200
         body = response.json()[0]
         assert body["status"] == "FAILURE"
@@ -217,7 +219,7 @@ class TestListFiles:
             f"{_SERVICE}.list_files",
             new=AsyncMock(side_effect=NamespaceNotFoundError()),
         ):
-            response = client.get(f"/namespaces/{NAMESPACE_ID}/files")
+            response = client.get(f"/namespaces/{NAMESPACE_ID}/objects")
         assert response.status_code == 404
 
 

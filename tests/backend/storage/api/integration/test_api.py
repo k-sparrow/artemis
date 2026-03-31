@@ -7,6 +7,7 @@ TestClient against real infrastructure containers.  No service mocks.
 from __future__ import annotations
 
 import io  # noqa: F401
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -15,7 +16,7 @@ from fastapi.testclient import TestClient
 from minio import Minio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from src.backend.storage.api.models import IngestedFile, IngestionTaskType
+from src.backend.storage.api.models import IngestedObject, IngestionTaskType
 
 
 # ---------------------------------------------------------------------------
@@ -27,23 +28,24 @@ def _file_bytes(content: bytes = b"hello world") -> dict:
     return {"file": ("report.pdf", content, "application/pdf")}
 
 
-def _seed_ingested_file(
+def _seed_ingested_object(
     session_factory: async_sessionmaker[AsyncSession],
     namespace_id: uuid.UUID,
 ) -> uuid.UUID:
-    """Insert a minimal IngestedFile row and return its id."""
+    """Insert a minimal IngestedObject row and return its id."""
     import asyncio
 
-    file_id = uuid.uuid4()
+    obj_id = uuid.uuid5(namespace_id, "seed.pdf")
 
     async def _insert():
         async with session_factory() as session:
-            row = IngestedFile(
-                id=file_id,
+            row = IngestedObject(
+                id=obj_id,
                 namespace_id=namespace_id,
                 task_id=uuid.uuid4(),
-                filename="seed.pdf",
-                path=f"{namespace_id}/{file_id}",
+                source="seed.pdf",
+                object_type="file",
+                s3_key=f"{namespace_id}/{obj_id}",
                 content_type="application/pdf",
                 size_bytes=0,
                 status="SUCCESS",
@@ -53,7 +55,7 @@ def _seed_ingested_file(
             await session.commit()
 
     asyncio.get_event_loop().run_until_complete(_insert())
-    return file_id
+    return obj_id
 
 
 # ---------------------------------------------------------------------------
@@ -237,12 +239,12 @@ class TestDeleteNamespaceIntegration:
 
 
 # ---------------------------------------------------------------------------
-# POST /namespaces/{id}/files  (upload)
+# POST /namespaces/{id}/objects  (upload)
 # ---------------------------------------------------------------------------
 
 
-class TestUploadFileIntegration:
-    def test_upload_creates_s3_object_with_create_metadata(
+class TestUploadObjectIntegration:
+    def test_upload_creates_s3_object_with_create_contract(
         self,
         client: TestClient,
         owner_id: str,
@@ -255,7 +257,7 @@ class TestUploadFileIntegration:
         ).json()["id"]
 
         response = client.post(
-            f"/namespaces/{ns_id}/files",
+            f"/namespaces/{ns_id}/objects",
             files=_file_bytes(),
         )
         assert response.status_code == 202
@@ -267,7 +269,8 @@ class TestUploadFileIntegration:
         bucket = os.environ["S3_ARTEMIS_BUCKET"]
         stat = test_minio_client.stat_object(bucket, s3_key)
         assert stat.metadata.get("x-amz-meta-task_id") == task_id
-        assert stat.metadata.get("x-amz-meta-task_type") == IngestionTaskType.CREATE
+        contract = json.loads(stat.metadata.get("x-amz-meta-contract"))
+        assert contract["upload_action"] == IngestionTaskType.CREATE
 
     def test_upload_s3_key_uses_namespace_prefix(
         self, client: TestClient, owner_id: str
@@ -278,7 +281,7 @@ class TestUploadFileIntegration:
             headers={"X-Owner-Id": owner_id},
         ).json()["id"]
 
-        response = client.post(f"/namespaces/{ns_id}/files", files=_file_bytes())
+        response = client.post(f"/namespaces/{ns_id}/objects", files=_file_bytes())
         assert response.status_code == 202
         s3_key = response.json()["s3_key"]
 
@@ -288,19 +291,19 @@ class TestUploadFileIntegration:
 
     def test_upload_to_missing_namespace_returns_404(self, client: TestClient) -> None:
         response = client.post(
-            f"/namespaces/{uuid.uuid4()}/files",
+            f"/namespaces/{uuid.uuid4()}/objects",
             files=_file_bytes(),
         )
         assert response.status_code == 404
 
 
 # ---------------------------------------------------------------------------
-# PUT /namespaces/{id}/files/{file_id}  (reingest)
+# PUT /namespaces/{id}/objects/{obj_id}  (reingest)
 # ---------------------------------------------------------------------------
 
 
-class TestReingestFileIntegration:
-    def test_reingest_overwrites_s3_object_with_modify_metadata(
+class TestReingestObjectIntegration:
+    def test_reingest_overwrites_s3_object_with_modify_contract(
         self,
         client: TestClient,
         owner_id: str,
@@ -314,10 +317,10 @@ class TestReingestFileIntegration:
                 headers={"X-Owner-Id": owner_id},
             ).json()["id"]
         )
-        file_id = _seed_ingested_file(storage_session_factory, ns_id)
+        obj_id = _seed_ingested_object(storage_session_factory, ns_id)
 
         response = client.put(
-            f"/namespaces/{ns_id}/files/{file_id}",
+            f"/namespaces/{ns_id}/objects/{obj_id}",
             files=_file_bytes(b"updated content"),
         )
         assert response.status_code == 202
@@ -326,9 +329,10 @@ class TestReingestFileIntegration:
         import os
 
         stat = test_minio_client.stat_object(os.environ["S3_ARTEMIS_BUCKET"], s3_key)
-        assert stat.metadata.get("x-amz-meta-task_type") == IngestionTaskType.MODIFY
+        contract = json.loads(stat.metadata.get("x-amz-meta-contract"))
+        assert contract["upload_action"] == IngestionTaskType.MODIFY
 
-    def test_reingest_missing_file_returns_404(
+    def test_reingest_missing_object_returns_404(
         self, client: TestClient, owner_id: str
     ) -> None:
         ns_id = client.post(
@@ -338,19 +342,19 @@ class TestReingestFileIntegration:
         ).json()["id"]
 
         response = client.put(
-            f"/namespaces/{ns_id}/files/{uuid.uuid4()}",
+            f"/namespaces/{ns_id}/objects/{uuid.uuid4()}",
             files=_file_bytes(),
         )
         assert response.status_code == 404
 
 
 # ---------------------------------------------------------------------------
-# DELETE /namespaces/{id}/files/{file_id}  (tombstone)
+# DELETE /namespaces/{id}/objects/{obj_id}  (tombstone)
 # ---------------------------------------------------------------------------
 
 
-class TestDeleteFileIntegration:
-    def test_delete_creates_zero_byte_tombstone_with_delete_metadata(
+class TestDeleteObjectIntegration:
+    def test_delete_creates_zero_byte_tombstone_with_delete_contract(
         self,
         client: TestClient,
         owner_id: str,
@@ -364,19 +368,20 @@ class TestDeleteFileIntegration:
                 headers={"X-Owner-Id": owner_id},
             ).json()["id"]
         )
-        file_id = _seed_ingested_file(storage_session_factory, ns_id)
-        s3_key = f"{ns_id}/{file_id}"
+        obj_id = _seed_ingested_object(storage_session_factory, ns_id)
+        s3_key = f"{ns_id}/{obj_id}"
 
-        response = client.delete(f"/namespaces/{ns_id}/files/{file_id}")
+        response = client.delete(f"/namespaces/{ns_id}/objects/{obj_id}")
         assert response.status_code == 202
 
         import os
 
         stat = test_minio_client.stat_object(os.environ["S3_ARTEMIS_BUCKET"], s3_key)
         assert stat.size == 0
-        assert stat.metadata.get("x-amz-meta-task_type") == IngestionTaskType.DELETE
+        contract = json.loads(stat.metadata.get("x-amz-meta-contract"))
+        assert contract["upload_action"] == IngestionTaskType.DELETE
 
-    def test_delete_missing_file_returns_404(
+    def test_delete_missing_object_returns_404(
         self, client: TestClient, owner_id: str
     ) -> None:
         ns_id = client.post(
@@ -385,17 +390,17 @@ class TestDeleteFileIntegration:
             headers={"X-Owner-Id": owner_id},
         ).json()["id"]
 
-        response = client.delete(f"/namespaces/{ns_id}/files/{uuid.uuid4()}")
+        response = client.delete(f"/namespaces/{ns_id}/objects/{uuid.uuid4()}")
         assert response.status_code == 404
 
 
 # ---------------------------------------------------------------------------
-# GET /namespaces/{id}/files
+# GET /namespaces/{id}/objects
 # ---------------------------------------------------------------------------
 
 
-class TestListFilesIntegration:
-    def test_list_returns_seeded_files(
+class TestListObjectsIntegration:
+    def test_list_returns_seeded_objects(
         self,
         client: TestClient,
         owner_id: str,
@@ -408,14 +413,13 @@ class TestListFilesIntegration:
                 headers={"X-Owner-Id": owner_id},
             ).json()["id"]
         )
-        _seed_ingested_file(storage_session_factory, ns_id)
-        _seed_ingested_file(storage_session_factory, ns_id)
+        _seed_ingested_object(storage_session_factory, ns_id)
 
-        response = client.get(f"/namespaces/{ns_id}/files")
+        response = client.get(f"/namespaces/{ns_id}/objects")
         assert response.status_code == 200
-        assert len(response.json()) == 2
+        assert len(response.json()) == 1
 
-    def test_list_excludes_other_namespace_files(
+    def test_list_excludes_other_namespace_objects(
         self,
         client: TestClient,
         owner_id: str,
@@ -435,14 +439,14 @@ class TestListFilesIntegration:
                 headers={"X-Owner-Id": owner_id},
             ).json()["id"]
         )
-        _seed_ingested_file(storage_session_factory, ns_a)
-        _seed_ingested_file(storage_session_factory, ns_b)
+        _seed_ingested_object(storage_session_factory, ns_a)
+        _seed_ingested_object(storage_session_factory, ns_b)
 
-        resp_a = client.get(f"/namespaces/{ns_a}/files")
+        resp_a = client.get(f"/namespaces/{ns_a}/objects")
         assert len(resp_a.json()) == 1
         assert resp_a.json()[0]["namespace_id"] == str(ns_a)
 
-    def test_list_files_returns_correct_fields(
+    def test_list_objects_returns_correct_fields(
         self,
         client: TestClient,
         owner_id: str,
@@ -455,25 +459,26 @@ class TestListFilesIntegration:
                 headers={"X-Owner-Id": owner_id},
             ).json()["id"]
         )
-        file_id = _seed_ingested_file(storage_session_factory, ns_id)
+        obj_id = _seed_ingested_object(storage_session_factory, ns_id)
 
-        response = client.get(f"/namespaces/{ns_id}/files")
+        response = client.get(f"/namespaces/{ns_id}/objects")
         assert response.status_code == 200
-        files = response.json()
-        assert len(files) == 1
-        f = files[0]
-        assert f["id"] == str(file_id)
-        assert f["namespace_id"] == str(ns_id)
-        assert f["filename"] == "seed.pdf"
-        assert f["content_type"] == "application/pdf"
-        assert f["size_bytes"] == 0
-        assert f["status"] == "SUCCESS"
-        assert f["failure_reason"] is None
-        assert "task_id" in f
-        assert "completed_at" in f
+        objects = response.json()
+        assert len(objects) == 1
+        o = objects[0]
+        assert o["id"] == str(obj_id)
+        assert o["namespace_id"] == str(ns_id)
+        assert o["source"] == "seed.pdf"
+        assert o["object_type"] == "file"
+        assert o["content_type"] == "application/pdf"
+        assert o["size_bytes"] == 0
+        assert o["status"] == "SUCCESS"
+        assert o["failure_reason"] is None
+        assert "task_id" in o
+        assert "completed_at" in o
 
-    def test_list_files_on_missing_namespace_returns_404(
+    def test_list_objects_on_missing_namespace_returns_404(
         self, client: TestClient
     ) -> None:
-        response = client.get(f"/namespaces/{uuid.uuid4()}/files")
+        response = client.get(f"/namespaces/{uuid.uuid4()}/objects")
         assert response.status_code == 404

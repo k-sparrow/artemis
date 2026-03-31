@@ -161,9 +161,12 @@ py_oci_image(
     visibility = ["//src/backend:__pkg__"],
 )
 
-# $ bazel run //src/backend/indexing/api:tarball
+# $ bazel run //src/backend/storage/api:tarball.dev
 oci_load(
-    name = "image.tarball",
+    name = "tarball.dev",
     image = ":image",
-    repo_tags = ["artemis/backend-storage:latest"],
+    repo_tags = ["artemis/backend-storage:dev"],
+    visibility = [
+        "//src:__pkg__",
+    ],
 )
