@@ -1,0 +1,45 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    visibility = ["//visibility:public"],
+)
+
+py_library(
+    name = "conftest",
+    testonly = True,
+    srcs = ["conftest.py"],
+    deps = [
+        "//tests/lib/testcontainers/kafka",
+        requirement("fastapi"),
+        requirement("httpx"),
+        requirement("minio"),
+        requirement("pytest"),
+        requirement("kafka-python-ng"),
+        requirement("psycopg"),
+        requirement("psycopg-binary"),
+        requirement("sqlalchemy"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_api",
+    srcs = ["test_api.py"],
+    tags = [
+        "container",
+        "integration",
+    ],
+    deps = [
+        ":conftest",
+        "//src/lib/core/ingestion:contract",
+        "//tests/lib/testcontainers/kafka",
+        requirement("httpx"),
+        requirement("kafka-python-ng"),
+        requirement("minio"),
+        requirement("pytest"),
+    ],
+)
