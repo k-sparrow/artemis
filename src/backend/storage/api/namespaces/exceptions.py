@@ -9,6 +9,10 @@ class OnlyPrivateNamespaceCanBeRenamedError(ValueError):
     pass
 
 
+class NamespaceAlreadyExistsError(ValueError):
+    pass
+
+
 def _invalid_owner_id_handler(request: Request, exc: InvalidOwnerIdError):
     return responses.JSONResponse(
         status_code=status.HTTP_400_BAD_REQUEST,
@@ -25,7 +29,17 @@ def _only_private_namespace_can_be_renamed_handler(
     )
 
 
+def _namespace_already_exists_handler(
+    request: Request, exc: NamespaceAlreadyExistsError
+):
+    return responses.JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={"detail": "Namespace already exists"},
+    )
+
+
 EXCEPTION_HANDLER_MAP = {
     InvalidOwnerIdError: _invalid_owner_id_handler,
     OnlyPrivateNamespaceCanBeRenamedError: _only_private_namespace_can_be_renamed_handler,
+    NamespaceAlreadyExistsError: _namespace_already_exists_handler,
 }

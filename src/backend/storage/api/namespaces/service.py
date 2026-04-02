@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.backend.storage.api.namespaces.exceptions import (
     InvalidOwnerIdError,
+    NamespaceAlreadyExistsError,
     OnlyPrivateNamespaceCanBeRenamedError,
 )
 from src.backend.storage.api.models import (
@@ -45,10 +46,9 @@ async def create_namespace(
     else:
         ns_id = uuid.uuid5(ARTEMIS_NS, name)
         ns_name = name
-        # Shared namespaces are idempotent: same name always maps to the same UUID5.
         existing = await session.get(Namespace, ns_id)
         if existing is not None:
-            return existing
+            raise NamespaceAlreadyExistsError()
 
     namespace = Namespace(id=ns_id, name=ns_name, type=type_, owner_id=owner_id)
     session.add(namespace)

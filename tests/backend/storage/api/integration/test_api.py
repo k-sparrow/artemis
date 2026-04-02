@@ -85,13 +85,25 @@ class TestCreateNamespaceIntegration:
     def test_shared_namespace_uses_deterministic_uuid5(
         self, client: TestClient, owner_id: str
     ) -> None:
-        payload = {"type": "shared", "name": "my-project"}
-        r1 = client.post("/namespaces", json=payload, headers={"X-Owner-Id": owner_id})
-        r2 = client.post("/namespaces", json=payload, headers={"X-Owner-Id": owner_id})
+        _ARTEMIS_NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+        name = "my-project"
+        expected_id = str(uuid.uuid5(_ARTEMIS_NS, name))
+
+        r1 = client.post(
+            "/namespaces",
+            json={"type": "shared", "name": name},
+            headers={"X-Owner-Id": owner_id},
+        )
         assert r1.status_code == 201
-        assert r2.status_code == 201
-        # Same name → same UUID5 seed → same ID
-        assert r1.json()["id"] == r2.json()["id"]
+        assert r1.json()["id"] == expected_id
+
+        # Duplicate → 409; the namespace already exists under the deterministic ID.
+        r2 = client.post(
+            "/namespaces",
+            json={"type": "shared", "name": name},
+            headers={"X-Owner-Id": owner_id},
+        )
+        assert r2.status_code == 409
 
     def test_missing_owner_id_header_returns_422(self, client: TestClient) -> None:
         response = client.post("/namespaces", json={"type": "private"})
