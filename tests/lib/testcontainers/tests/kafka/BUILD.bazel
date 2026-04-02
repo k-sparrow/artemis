@@ -17,6 +17,20 @@ py_test(
     tags = ["unit"],
     deps = [
         "//tests/lib/testcontainers/kafka",
+        requirement("kafka-python-ng"),
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_kafka_produce_consume",
+    srcs = ["test_kafka.py"],
+    env = {},
+    tags = ["integration"],
+    deps = [
+        "//tests/lib/testcontainers/kafka",
+        requirement("kafka-python-ng"),
         requirement("pytest"),
         requirement("testcontainers"),
     ],

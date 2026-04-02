@@ -148,16 +148,16 @@ py_library(
 py_oci_image(
     name = "image",
     base = "@ubuntu",
-    binary = ":server",
+    binary = ":server.dev",
     entrypoint = [
-        "/src/backend/storage/api/server",
-        "main:app",
+        "/src/backend/storage/api/server.dev",
+        "src.backend.storage.api.main:app",
         "--host",
-        "0.0.0.0",  # this should allow connections from host
+        "0.0.0.0",
         "--port",
-        "7000",
+        STORAGE_SERVICE_PORT,
     ],
-    exposed_ports = ["7000"],
+    exposed_ports = [STORAGE_SERVICE_PORT],
     visibility = ["//src/backend:__pkg__"],
 )
 
