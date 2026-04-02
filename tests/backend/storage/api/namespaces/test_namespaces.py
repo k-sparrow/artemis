@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from src.backend.storage.api.models import NamespaceType
 from src.backend.storage.api.namespaces.exceptions import (
     InvalidOwnerIdError,
+    NamespaceAlreadyExistsError,
     OnlyPrivateNamespaceCanBeRenamedError,
 )
 from src.backend.storage.api.exceptions import NamespaceNotFoundError
@@ -80,6 +81,18 @@ class TestCreateNamespace:
             headers={"X-Owner-Id": OWNER_ID},
         )
         assert response.status_code == 422
+
+    def test_duplicate_shared_namespace_returns_409(self, client: TestClient) -> None:
+        with patch(
+            f"{_SERVICE}.create_namespace",
+            side_effect=NamespaceAlreadyExistsError(),
+        ):
+            response = client.post(
+                "/namespaces",
+                json={"type": "shared", "name": "acme"},
+                headers={"X-Owner-Id": OWNER_ID},
+            )
+        assert response.status_code == 409
 
     def test_invalid_owner_id_returns_400(self, client: TestClient) -> None:
         with patch(

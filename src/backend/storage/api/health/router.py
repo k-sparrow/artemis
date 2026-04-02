@@ -10,6 +10,7 @@ __all__ = [
 
 
 router = HealthcheckRouter(
+    Probe(name="liveness", checks=[]),
     Probe(
         name="readiness",
         checks=[
@@ -18,5 +19,5 @@ router = HealthcheckRouter(
                 bucket_name=settings.S3_ARTEMIS_BUCKET,
             ),
         ],
-    )
+    ),
 )
