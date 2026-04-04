@@ -1,0 +1,40 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    visibility = ["//visibility:public"],
+)
+
+py_library(
+    name = "conftest",
+    srcs = ["conftest.py"],
+    testonly = True,
+    visibility = ["//visibility:public"],
+    deps = [
+        "//tests/lib/testcontainers/kafka:pkg",
+        requirement("kafka-python-ng"),
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_kafka_connect",
+    srcs = ["test_kafka_connect.py"],
+    tags = [
+        "container",
+        "integration",
+        "local",  # disable Bazel sandbox so Docker volume mounts see the real host filesystem
+    ],
+    deps = [
+        ":conftest",
+        "//src/backend/enterprise/data_sources/api/sources:templates",
+        "//tests/lib/testcontainers/kafka:pkg",
+        requirement("kafka-python-ng"),
+        requirement("kafka-connect-py"),
+        requirement("pytest"),
+    ],
+)

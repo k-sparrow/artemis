@@ -112,8 +112,11 @@ class KafkaConnectContainer(DockerContainer):
         # Allow connectors to override client configs (needed for Kafka HTTP Sink)
         self.with_env("CONNECT_CONNECTOR_CLIENT_CONFIG_OVERRIDE_POLICY", "All")
 
-        # Plugin discovery path
-        self.with_env("CONNECT_PLUGIN_PATH", "/usr/share/java")
+        # Plugin discovery path — include confluent-hub-components for Camel connectors
+        self.with_env(
+            "CONNECT_PLUGIN_PATH",
+            "/usr/share/java,/usr/share/confluent-hub-components",
+        )
 
         # JVM heap — keep modest for test environments
         self.with_env("KAFKA_HEAP_OPTS", "-Xmx1G -Xms512M")
