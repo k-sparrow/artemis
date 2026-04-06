@@ -33,9 +33,7 @@ def _kc_client(kafka_connect_url: str) -> KafkaConnect:
     return KafkaConnect(url=kafka_connect_url)
 
 
-def _wait_connector_running(
-    client: KafkaConnect, name: str, timeout: int = 60
-) -> None:
+def _wait_connector_running(client: KafkaConnect, name: str, timeout: int = 60) -> None:
     from requests.exceptions import HTTPError
 
     deadline = time.monotonic() + timeout
@@ -62,23 +60,28 @@ def _wait_connector_running(
     )
 
 
-@pytest.mark.parametrize("connector_class", [
-    pytest.param(
-        "org.apache.camel.kafkaconnector.file.CamelFileSourceConnector",
-        id="CamelFileSource",
-    ),
-    pytest.param(
-        "org.apache.camel.kafkaconnector.filewatchsource.CamelFilewatchsourceSourceConnector",
-        id="CamelFileWatchSource",
-    ),
-])
-def test_connector_plugin_installed(kafka_connect_url: str, connector_class: str) -> None:
+@pytest.mark.parametrize(
+    "connector_class",
+    [
+        pytest.param(
+            "org.apache.camel.kafkaconnector.file.CamelFileSourceConnector",
+            id="CamelFileSource",
+        ),
+        pytest.param(
+            "org.apache.camel.kafkaconnector.filewatchsource.CamelFilewatchsourceSourceConnector",  # noqa: E501
+            id="CamelFileWatchSource",
+        ),
+    ],
+)
+def test_connector_plugin_installed(
+    kafka_connect_url: str, connector_class: str
+) -> None:
     """artemis/cp-kafka-connect must ship the required Camel connector plugins."""
     plugins = _kc_client(kafka_connect_url).list_connector_plugins()
     classes = {p["class"] for p in plugins}
-    assert connector_class in classes, (
-        f"{connector_class} not found. Installed: {sorted(classes)}"
-    )
+    assert (
+        connector_class in classes
+    ), f"{connector_class} not found. Installed: {sorted(classes)}"
 
 
 class TestFilesourceConnector:
@@ -117,15 +120,16 @@ class TestFilesourceConnector:
         c.close()
         return msgs
 
-    def test_connector_reaches_running_state(
-        self, connector: KafkaConnect
-    ) -> None:
+    def test_connector_reaches_running_state(self, connector: KafkaConnect) -> None:
         _wait_connector_running(connector, self._connector_name)
 
-    @pytest.mark.parametrize("header,expected_value", [
-        pytest.param("artemis.namespace", _NAMESPACE, id="namespace"),
-        pytest.param("artemis.org_name", _ORG_NAME, id="org_name"),
-    ])
+    @pytest.mark.parametrize(
+        "header,expected_value",
+        [
+            pytest.param("artemis.namespace", _NAMESPACE, id="namespace"),
+            pytest.param("artemis.org_name", _ORG_NAME, id="org_name"),
+        ],
+    )
     def test_static_header_present_and_correct(
         self,
         connector: KafkaConnect,
@@ -138,9 +142,7 @@ class TestFilesourceConnector:
         assert len(msgs) >= 1, "Expected ≥1 message from pre-seeded files"
         for msg in msgs:
             headers = dict(msg.headers)
-            assert header in headers, (
-                f"{header!r} header missing. headers={headers}"
-            )
+            assert header in headers, f"{header!r} header missing. headers={headers}"
             assert headers[header].decode() == expected_value
 
     def test_file_path_header_present_and_correct(
@@ -151,10 +153,10 @@ class TestFilesourceConnector:
         assert len(msgs) >= 1
         for msg in msgs:
             headers = dict(msg.headers)
-            assert "CamelHeader.CamelFileAbsolutePath" in headers, (
-                f"CamelHeader.CamelFileAbsolutePath missing. headers={headers}"
-            )
+            assert (
+                "CamelHeader.CamelFileAbsolutePath" in headers
+            ), f"CamelHeader.CamelFileAbsolutePath missing. headers={headers}"
             path = headers["CamelHeader.CamelFileAbsolutePath"].decode()
-            assert path.startswith("/watch/"), (
-                f"Expected path under /watch/, got: {path}"
-            )
+            assert path.startswith(
+                "/watch/"
+            ), f"Expected path under /watch/, got: {path}"

@@ -15,15 +15,22 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//tests/lib/testcontainers/kafka:pkg",
+        requirement("asyncpg"),
+        requirement("fastapi"),
+        requirement("httpx"),
         requirement("kafka-python-ng"),
+        requirement("psycopg"),
+        requirement("psycopg-binary"),
         requirement("pytest"),
+        requirement("sqlalchemy"),
         requirement("testcontainers"),
+        requirement("wiremock"),
     ],
 )
 
 py_test(
-    name = "test_kafka_connect",
-    srcs = ["test_kafka_connect.py"],
+    name = "test_api",
+    srcs = ["test_api.py"],
     tags = [
         "container",
         "integration",
@@ -31,10 +38,11 @@ py_test(
     ],
     deps = [
         ":conftest",
-        "//src/backend/enterprise/data_sources/api/sources:templates",
         "//tests/lib/testcontainers/kafka:pkg",
+        requirement("fastapi"),
+        requirement("httpx"),
         requirement("kafka-python-ng"),
-        requirement("kafka-connect-py"),
         requirement("pytest"),
+        requirement("wiremock"),
     ],
 )

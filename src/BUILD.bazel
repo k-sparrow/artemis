@@ -7,6 +7,8 @@ multirun(
         "//src/backend/parsing/api:tarball.dev",
         "//src/backend/indexing/api:tarball.dev",
         "//src/backend/controller/worker:image.tarball",
+        "//src/backend/enterprise/intake/api:tarball.dev",
+        "//src/backend/enterprise/data_sources/api:tarball.dev",
     ],
     jobs = 1,  # sequential — docker load is not safe to parallelize
     visibility = ["//visibility:public"],

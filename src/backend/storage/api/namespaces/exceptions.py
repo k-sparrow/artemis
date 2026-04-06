@@ -10,7 +10,9 @@ class OnlyPrivateNamespaceCanBeRenamedError(ValueError):
 
 
 class NamespaceAlreadyExistsError(ValueError):
-    pass
+    def __init__(self, namespace_data: dict) -> None:
+        super().__init__("Namespace already exists")
+        self.namespace_data = namespace_data
 
 
 def _invalid_owner_id_handler(request: Request, exc: InvalidOwnerIdError):
@@ -34,7 +36,7 @@ def _namespace_already_exists_handler(
 ):
     return responses.JSONResponse(
         status_code=status.HTTP_409_CONFLICT,
-        content={"detail": "Namespace already exists"},
+        content=exc.namespace_data,
     )
 
 

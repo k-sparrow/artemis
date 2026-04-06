@@ -1,0 +1,30 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+package(
+    default_visibility = [
+        "//src/backend/enterprise/data_sources/api:__pkg__",
+        "//tests/backend/enterprise/data_sources:__subpackages__",
+    ],
+)
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    deps = [":router"],
+)
+
+py_library(
+    name = "router",
+    srcs = ["router.py"],
+    deps = [
+        "//src/backend/enterprise/data_sources/api:config",
+        requirement("aiohttp"),
+        requirement("fastapi"),
+        requirement("fastapi-healthchecks"),
+    ],
+)

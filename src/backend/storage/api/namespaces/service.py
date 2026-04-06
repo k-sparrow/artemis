@@ -48,7 +48,16 @@ async def create_namespace(
         ns_name = name
         existing = await session.get(Namespace, ns_id)
         if existing is not None:
-            raise NamespaceAlreadyExistsError()
+            raise NamespaceAlreadyExistsError(
+                {
+                    "id": str(existing.id),
+                    "name": existing.name,
+                    "type": existing.type.value,
+                    "owner_id": str(existing.owner_id),
+                    "created_at": existing.created_at.isoformat(),
+                    "updated_at": existing.updated_at.isoformat(),
+                }
+            )
 
     namespace = Namespace(id=ns_id, name=ns_name, type=type_, owner_id=owner_id)
     session.add(namespace)
@@ -62,6 +71,15 @@ async def get_namespace(
     namespace_id: uuid.UUID,
 ) -> Namespace:
     return await _fetch_namespace(session=session, namespace_id=namespace_id)
+
+
+async def get_namespace_by_name(
+    session: AsyncSession,
+    name: str,
+) -> Namespace:
+    """Look up a SHARED namespace by name, computing UUID5 server-side."""
+    ns_id = uuid.uuid5(ARTEMIS_NS, name)
+    return await _fetch_namespace(session=session, namespace_id=ns_id)
 
 
 async def list_namespaces(

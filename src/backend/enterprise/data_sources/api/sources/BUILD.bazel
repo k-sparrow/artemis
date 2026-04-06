@@ -1,0 +1,70 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+package(
+    default_visibility = [
+        "//src/backend/enterprise/data_sources/api:__pkg__",
+        "//tests/backend/enterprise/data_sources:__subpackages__",
+    ],
+)
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    deps = [":router"],
+)
+
+py_library(
+    name = "router",
+    srcs = ["router.py"],
+    deps = [
+        ":schemas",
+        ":service",
+        "//src/backend/enterprise/data_sources/api:dependencies",
+        "//src/lib/backend/logging:pkg",
+        requirement("fastapi"),
+        requirement("httpx"),
+    ],
+)
+
+py_library(
+    name = "service",
+    srcs = ["service.py"],
+    deps = [
+        ":exceptions",
+        ":schemas",
+        ":templates",
+        "//src/backend/enterprise/data_sources/api:config",
+        "//src/backend/enterprise/data_sources/api:models",
+        requirement("httpx"),
+        requirement("kafka-connect-py"),
+        requirement("requests"),
+        requirement("sqlalchemy"),
+    ],
+)
+
+py_library(
+    name = "templates",
+    srcs = ["templates.py"],
+    deps = [],
+)
+
+py_library(
+    name = "exceptions",
+    srcs = ["exceptions.py"],
+    deps = [
+        requirement("fastapi"),
+    ],
+)
+
+py_library(
+    name = "schemas",
+    srcs = ["schemas.py"],
+    deps = [
+        requirement("pydantic"),
+    ],
+)

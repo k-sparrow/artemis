@@ -85,7 +85,13 @@ class TestCreateNamespace:
     def test_duplicate_shared_namespace_returns_409(self, client: TestClient) -> None:
         with patch(
             f"{_SERVICE}.create_namespace",
-            side_effect=NamespaceAlreadyExistsError(),
+            side_effect=NamespaceAlreadyExistsError(
+                {
+                    "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                    "name": "acme",
+                    "type": "shared",
+                }
+            ),
         ):
             response = client.post(
                 "/namespaces",

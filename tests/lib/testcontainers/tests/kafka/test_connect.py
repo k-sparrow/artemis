@@ -68,7 +68,10 @@ class TestKafkaConnectContainerDefaults:
 
     def test_plugin_path_set(self):
         c = KafkaConnectContainer(bootstrap_servers=BOOTSTRAP)
-        assert c.env["CONNECT_PLUGIN_PATH"] == "/usr/share/java"
+        assert (
+            c.env["CONNECT_PLUGIN_PATH"]
+            == "/usr/share/java,/usr/share/confluent-hub-components"
+        )
 
     def test_client_config_override_policy(self):
         c = KafkaConnectContainer(bootstrap_servers=BOOTSTRAP)

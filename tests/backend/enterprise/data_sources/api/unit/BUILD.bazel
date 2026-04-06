@@ -1,0 +1,61 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    visibility = ["//visibility:public"],
+)
+
+py_library(
+    name = "conftest",
+    srcs = ["conftest.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/backend/enterprise/data_sources/api:dependencies",
+        "//src/backend/enterprise/data_sources/api:main",
+        "//src/backend/enterprise/data_sources/api:models",
+        "//src/lib/backend/db:session",
+        requirement("fastapi"),
+        requirement("httpx"),
+        requirement("pytest"),
+        requirement("sqlalchemy"),
+        requirement("aiosqlite"),
+    ],
+)
+
+py_test(
+    name = "test_sources",
+    srcs = ["test_sources.py"],
+    deps = [
+        ":conftest",
+        "//src/backend/enterprise/data_sources/api:dependencies",
+        "//src/backend/enterprise/data_sources/api:main",
+        "//src/backend/enterprise/data_sources/api:models",
+        "//src/backend/enterprise/data_sources/api/sources:exceptions",
+        "//src/backend/enterprise/data_sources/api/sources:schemas",
+        "//src/backend/enterprise/data_sources/api/sources:service",
+        "//src/lib/backend/db:session",
+        requirement("fastapi"),
+        requirement("httpx"),
+        requirement("kafka-connect-py"),
+        requirement("pytest"),
+        requirement("requests"),
+        requirement("sqlalchemy"),
+        requirement("aiosqlite"),
+    ],
+)
+
+py_test(
+    name = "test_health",
+    srcs = ["test_health.py"],
+    deps = [
+        "//src/backend/enterprise/data_sources/api:main",
+        requirement("aioresponses"),
+        requirement("aiosqlite"),
+        requirement("fastapi"),
+        requirement("httpx"),
+        requirement("pytest"),
+    ],
+)

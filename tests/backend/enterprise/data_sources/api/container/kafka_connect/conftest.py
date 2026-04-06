@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Iterator
 
 import pytest
-from kafka import KafkaConsumer
 from kafka.admin import KafkaAdminClient, NewTopic
 from kafka.errors import TopicAlreadyExistsError
 from testcontainers.core.network import Network
@@ -76,6 +75,7 @@ def watch_dir() -> Iterator[Path]:
     """
     import shutil
     import tempfile
+
     d = Path(tempfile.mkdtemp(prefix="kc-test-watch-"))
     (d / "doc1.txt").write_text("first document")
     (d / "doc2.txt").write_text("second document")

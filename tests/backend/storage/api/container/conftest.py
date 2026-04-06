@@ -39,7 +39,7 @@ import httpx
 import pytest
 import sqlalchemy as sa
 from fastapi import status
-from kafka import KafkaConsumer
+from kafka import KafkaConsumer, TopicPartition
 from kafka.admin import KafkaAdminClient, NewTopic
 from kafka.errors import TopicAlreadyExistsError
 from minio import Minio
@@ -272,21 +272,29 @@ def kafka_consumer(
 ) -> Iterator[KafkaConsumer]:
     """A consumer pinned to the current end of the topic.
 
-    Uses auto_offset_reset='latest' + a warm-up poll() to pin the read
-    position to the topic's current end before the test action runs.
-    Messages produced by prior tests are never visible to this consumer.
+    Uses assign()+seek_to_end() rather than subscribe()+auto_offset_reset
+    because auto_offset_reset is unreliable: MinIO emits S3 events
+    asynchronously, so a message from a previous test can land in Kafka after
+    this consumer is created, causing the 'latest' pin to land before it and
+    the stale message to bleed into this test.  seek_to_end() resolves the
+    actual high-water mark and positions the consumer exactly there.
     """
+    tp = TopicPartition(kafka_topic, 0)
     consumer = KafkaConsumer(
-        kafka_topic,
-        bootstrap_servers=kafka_bootstrap_server,
-        auto_offset_reset="latest",
+        bootstrap_servers=[kafka_bootstrap_server],
         enable_auto_commit=False,
         consumer_timeout_ms=30_000,
         group_id=None,
     )
-    # Warm-up: trigger partition assignment so 'latest' offset is pinned now,
-    # before the test action produces any messages.
-    consumer.poll(timeout_ms=2000)
+    consumer.assign([tp])
+    consumer.poll(timeout_ms=1000)  # establish connection and fetch metadata
+    # seek_to_end() is lazy — it resolves on the NEXT poll() inside list().
+    # If the test action produces a message before that poll() runs, the HWM
+    # resolves past it and the message is missed.  end_offsets() is a
+    # synchronous broker round-trip that returns the real HWM now, so seek()
+    # pins us to exactly the right offset before any test action fires.
+    hwm = consumer.end_offsets([tp])[tp]
+    consumer.seek(tp, hwm)
     yield consumer
     consumer.close()
 

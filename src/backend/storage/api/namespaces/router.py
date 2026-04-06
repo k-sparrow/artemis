@@ -55,6 +55,15 @@ async def list_namespaces_endpoint(
     return [NamespaceResponse.model_validate(n) for n in namespaces]
 
 
+@router.get("/by-name/{name}", response_model=NamespaceResponse)
+async def get_namespace_by_name_endpoint(
+    name: str,
+    session: db_session_dependency,
+) -> NamespaceResponse:
+    namespace = await service.get_namespace_by_name(session=session, name=name)
+    return NamespaceResponse.model_validate(namespace)
+
+
 @router.get("/{namespace_id}", response_model=NamespaceResponse)
 async def get_namespace_endpoint(
     namespace_id: uuid.UUID,

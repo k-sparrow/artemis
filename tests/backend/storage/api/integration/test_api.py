@@ -97,13 +97,15 @@ class TestCreateNamespaceIntegration:
         assert r1.status_code == 201
         assert r1.json()["id"] == expected_id
 
-        # Duplicate → 409; the namespace already exists under the deterministic ID.
+        # Duplicate → 409; body contains the existing namespace so callers don't
+        # need to re-derive the UUID5 themselves.
         r2 = client.post(
             "/namespaces",
             json={"type": "shared", "name": name},
             headers={"X-Owner-Id": owner_id},
         )
         assert r2.status_code == 409
+        assert r2.json()["id"] == expected_id
 
     def test_missing_owner_id_header_returns_422(self, client: TestClient) -> None:
         response = client.post("/namespaces", json={"type": "private"})
@@ -137,6 +139,25 @@ class TestGetNamespaceIntegration:
     def test_get_missing_namespace_returns_404(self, client: TestClient) -> None:
         response = client.get(f"/namespaces/{uuid.uuid4()}")
         assert response.status_code == 404
+
+    def test_get_by_name_returns_shared_namespace(
+        self, client: TestClient, owner_id: str
+    ) -> None:
+        name = "lookup-by-name"
+        created = client.post(
+            "/namespaces",
+            json={"type": "shared", "name": name},
+            headers={"X-Owner-Id": owner_id},
+        ).json()
+
+        resp = client.get(f"/namespaces/by-name/{name}")
+        assert resp.status_code == 200
+        assert resp.json()["id"] == created["id"]
+        assert resp.json()["name"] == name
+
+    def test_get_by_name_missing_returns_404(self, client: TestClient) -> None:
+        resp = client.get("/namespaces/by-name/nonexistent-namespace")
+        assert resp.status_code == 404
 
     def test_list_returns_only_owner_namespaces(self, client: TestClient) -> None:
         owner_a = str(uuid.uuid4())
