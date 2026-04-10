@@ -47,6 +47,26 @@ class KafkaContainer(_UpstreamKafkaContainer):
     # host-port-mapped and returned by get_bootstrap_server().
     KAFKA_INTERNAL_PORT = 9092
 
+    def with_kraft(self):
+        """Enable KRaft mode and apply single-broker-safe replication settings.
+
+        Extends the upstream with_kraft() to add env vars required for
+        ksqlDB (and other transactional clients) on single-broker clusters:
+
+          KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+
+        Without these, ksqlDB times out initialising its transaction producer
+        on the KSQL command topic with:
+          "Timeout while initializing transaction to the KSQL command topic."
+        """
+        super().with_kraft()
+        self.with_env("KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR", "1")
+        self.with_env("KAFKA_TRANSACTION_STATE_LOG_MIN_ISR", "1")
+        self.with_env("KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR", "1")
+        return self
+
     def get_internal_bootstrap_server(self) -> str:
         """Return the Kafka bootstrap address reachable from within the Docker network.
 

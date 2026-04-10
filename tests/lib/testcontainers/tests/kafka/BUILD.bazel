@@ -87,3 +87,17 @@ py_test(
         requirement("testcontainers"),
     ],
 )
+
+py_test(
+    name = "test_ksqldb_streams",
+    srcs = ["test_ksqldb_streams.py"],
+    env = {},
+    tags = ["integration"],
+    deps = [
+        "//tests/lib/testcontainers/kafka:pkg",
+        requirement("httpx"),
+        requirement("kafka-python-ng"),
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)

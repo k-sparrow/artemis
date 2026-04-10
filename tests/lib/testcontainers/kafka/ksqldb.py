@@ -83,8 +83,22 @@ class KSQLDbContainer(DockerContainer):
         # Disable in-memory row buffering — simplifies test teardown
         self.with_env("KSQL_CACHE_MAX_BYTES_BUFFERING", "0")
 
-        # Block until ksqlDB reports it is ready
-        self.waiting_for(HttpWaitStrategy(self.HTTP_PORT, "/").for_status_code(200))
+        # Required on single-broker clusters: ksqlDB creates an internal
+        # processing log stream at startup and needs replication factor 1.
+        # Without these the server hangs waiting for ISR to be satisfied.
+        self.with_env("KSQL_KSQL_LOGGING_PROCESSING_TOPIC_REPLICATION_FACTOR", "1")
+        self.with_env("KSQL_KSQL_LOGGING_PROCESSING_TOPIC_AUTO_CREATE", "true")
+        self.with_env("KSQL_KSQL_LOGGING_PROCESSING_STREAM_AUTO_CREATE", "true")
+
+        # /healthcheck returns {"isHealthy": true} only after ksqlDB has
+        # connected to Kafka and its command topic consumer group is ready.
+        # It returns 503 during startup (while the processing-log stream is
+        # being created), so we need a generous timeout.
+        self.waiting_for(
+            HttpWaitStrategy(self.HTTP_PORT, "/healthcheck")
+            .for_status_code(200)
+            .with_startup_timeout(120)
+        )
 
     def with_service_id(self, service_id: str) -> Self:
         """Set the ksqlDB service ID (used to namespace internal topics).
