@@ -35,7 +35,9 @@ py_library(
     srcs = ["service.py"],
     deps = [
         ":exceptions",
+        ":schemas",
         requirement("httpx"),
+        requirement("filetype"),
     ],
 )
 

@@ -19,6 +19,9 @@ import uuid
 from pathlib import Path
 
 import httpx
+import mimetypes
+
+import filetype
 from fastapi import status
 
 from src.backend.enterprise.intake.api.intake.exceptions import (
@@ -47,18 +50,34 @@ async def _verify_namespace(http: httpx.AsyncClient, namespace_id: uuid.UUID) ->
         raise StorageServiceError(resp.status_code, resp.text)
 
 
-async def _resolve_bytes(source: FilesystemSource | InlineSource | UrlSource) -> bytes:
-    """Materialise the document bytes from whichever source type was provided."""
+def _infer_mime(data: bytes, name: str = "") -> str:
+    """Infer MIME type from file bytes, falling back to filename extension."""
+    kind = filetype.guess(data)
+    if kind is not None:
+        return kind.mime
+    guessed, _ = mimetypes.guess_type(name)
+    return guessed or "application/octet-stream"
+
+
+async def _resolve_bytes(
+    source: FilesystemSource | InlineSource | UrlSource,
+) -> tuple[bytes, str]:
+    """Materialise the document bytes and infer MIME type from the source.
+
+    Returns ``(data, content_type)``.
+    """
     if isinstance(source, FilesystemSource):
         path = Path(source.path)
         if not path.exists():
             raise PathNotFoundError(source.path)
-        return path.read_bytes()
+        data = path.read_bytes()
+        return data, _infer_mime(data, source.path)
 
     if isinstance(source, InlineSource):
-        return source.content.encode(source.encoding)
+        data = source.content.encode(source.encoding)
+        return data, _infer_mime(data)
 
-    # UrlSource — fetch over HTTP.
+    # UrlSource — fetch over HTTP; prefer the response Content-Type header.
     async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
         try:
             resp = await client.get(source.url)
@@ -67,27 +86,31 @@ async def _resolve_bytes(source: FilesystemSource | InlineSource | UrlSource) ->
             raise UrlFetchError(source.url, exc.response.status_code) from exc
         except httpx.RequestError as exc:
             raise UrlFetchError(source.url, None) from exc
-    return resp.content
+    data = resp.content
+    content_type = resp.headers.get("content-type", "").split(";")[0].strip()
+    if not content_type or content_type == "application/octet-stream":
+        content_type = _infer_mime(data, source.url)
+    return data, content_type
 
 
 async def intake_file(
     http: httpx.AsyncClient,
     request: IntakeRequest,
 ) -> tuple[uuid.UUID, str]:
-    """Verify namespace → resolve bytes → upload to storage service.
+    """Verify namespace → resolve bytes → infer content type → upload to storage.
 
     Returns ``(task_id, s3_key)``.
     """
     # 1. Verify the namespace exists.
     await _verify_namespace(http, request.namespace_id)
 
-    # 2. Materialise bytes from the source.
-    data = await _resolve_bytes(request.source)
+    # 2. Materialise bytes and infer content type from the source.
+    data, content_type = await _resolve_bytes(request.source)
 
     # 3. Upload to the storage service.
     upload_resp = await http.post(
         f"/namespaces/{request.namespace_id}/objects",
-        files={"file": (request.display_name, data, request.content_type)},
+        files={"file": (request.display_name, data, content_type)},
     )
     if upload_resp.status_code != status.HTTP_202_ACCEPTED:
         raise StorageServiceError(upload_resp.status_code, upload_resp.text)

@@ -25,7 +25,6 @@ from tests.backend.enterprise.intake.api.intake.conftest import (
 
 _COMMON = {
     "display_name": "doc.pdf",
-    "content_type": "application/pdf",
     "namespace_id": str(_NAMESPACE_ID),
 }
 
@@ -76,6 +75,8 @@ class TestFilesystemSource:
         files = upload_call.kwargs["files"]
         assert files["file"][0] == "doc.pdf"
         assert files["file"][1] == b"pdf content"
+        # filetype cannot identify arbitrary bytes -
+        # falls back to mimetypes (filename ext)
         assert files["file"][2] == "application/pdf"
 
     def test_missing_file_returns_404(self, client: TestClient) -> None:
@@ -108,7 +109,8 @@ class TestInlineSource:
 
         files = mock_http.post.call_args_list[0].kwargs["files"]
         assert files["file"][1] == b"Hello world"
-        assert files["file"][2] == "application/pdf"
+        # filetype cannot identify plain text — falls back to application/octet-stream
+        assert files["file"][2] == "application/octet-stream"
 
     def test_custom_encoding_used(
         self, client: TestClient, mock_http: MagicMock
@@ -133,9 +135,12 @@ class TestInlineSource:
 
 
 class TestUrlSource:
-    def _patch_url_client(self, content: bytes, side_effect=None) -> MagicMock:
+    def _patch_url_client(
+        self, content: bytes, content_type: str = "", side_effect=None
+    ) -> MagicMock:
         url_resp = MagicMock()
         url_resp.content = content
+        url_resp.headers = {"content-type": content_type} if content_type else {}
         url_resp.raise_for_status = MagicMock()
 
         mock_ctx = AsyncMock()
@@ -165,7 +170,9 @@ class TestUrlSource:
     def test_fetched_bytes_uploaded_to_storage(
         self, client: TestClient, mock_http: MagicMock
     ) -> None:
-        mock_cls = self._patch_url_client(b"<html>page content</html>")
+        mock_cls = self._patch_url_client(
+            b"<html>page content</html>", content_type="text/html"
+        )
 
         with patch(
             "src.backend.enterprise.intake.api.intake.service.httpx.AsyncClient",
@@ -175,7 +182,7 @@ class TestUrlSource:
 
         files = mock_http.post.call_args_list[0].kwargs["files"]
         assert files["file"][1] == b"<html>page content</html>"
-        assert files["file"][2] == "application/pdf"
+        assert files["file"][2] == "text/html"
 
     def test_http_error_from_url_returns_502(self, client: TestClient) -> None:
         import httpx as _httpx
@@ -272,23 +279,11 @@ class TestRequestValidation:
         resp = _post(client, {"type": "unknown"})
         assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
-    def test_missing_content_type_returns_422(self, client: TestClient) -> None:
-        resp = client.post(
-            "/intake",
-            json={
-                "source": {"type": "inline", "content": "text"},
-                "display_name": "doc.txt",
-                "namespace_id": str(_NAMESPACE_ID),
-            },
-        )
-        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-
     def test_missing_display_name_returns_422(self, client: TestClient) -> None:
         resp = client.post(
             "/intake",
             json={
                 "source": {"type": "inline", "content": "text"},
-                "content_type": "text/plain",
                 "namespace_id": str(_NAMESPACE_ID),
             },
         )
@@ -300,7 +295,6 @@ class TestRequestValidation:
             json={
                 "source": {"type": "inline", "content": "text"},
                 "display_name": "doc.txt",
-                "content_type": "text/plain",
             },
         )
         assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY

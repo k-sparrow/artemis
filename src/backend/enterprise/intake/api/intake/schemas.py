@@ -39,7 +39,6 @@ class IntakeRequest(BaseModel):
     display_name: str = Field(
         description="Display name for the document (e.g. 'spec.pdf', 'pr-123.md')."
     )
-    content_type: str = Field(description="MIME type of the document.")
     namespace_id: uuid.UUID = Field(
         description="Namespace UUID issued by the storage service."
     )

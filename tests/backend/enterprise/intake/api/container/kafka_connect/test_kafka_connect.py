@@ -5,7 +5,7 @@ Verifies that the artemis/cp-kafka-connect image:
   2. Can deploy our HTTP sink connector template and reach RUNNING.
   3. Delivers a message from ``artemis.datasource.filesystem.intake``
      (the ksqlDB-shaped topic) to the intake endpoint verbatim:
-       - JSON body contains source, display_name, content_type, namespace_id
+       - JSON body contains source, display_name, namespace_id
        - Body matches the IntakeRequest schema expected by POST /intake
 
 Pre-requisite:
@@ -31,7 +31,6 @@ _INTAKE_TOPIC = "artemis.datasource.filesystem.intake"
 _NAMESPACE_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 _FILE_PATH = "/watch/doc1.txt"
 _FILE_NAME = "doc1.txt"
-_CONTENT_TYPE = "text/plain"
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +176,6 @@ class TestHttpSinkConnector:
         payload = {
             "source": {"type": "filesystem", "path": _FILE_PATH},
             "display_name": _FILE_NAME,
-            "content_type": _CONTENT_TYPE,
             "namespace_id": _NAMESPACE_ID,
         }
 
@@ -194,7 +192,6 @@ class TestHttpSinkConnector:
 
         assert body["source"] == {"type": "filesystem", "path": _FILE_PATH}
         assert body["display_name"] == _FILE_NAME
-        assert body["content_type"] == _CONTENT_TYPE
         assert body["namespace_id"] == _NAMESPACE_ID
 
     def test_multiple_messages_each_delivered(
@@ -217,7 +214,6 @@ class TestHttpSinkConnector:
                 value={
                     "source": {"type": "filesystem", "path": f"/watch/{filename}"},
                     "display_name": filename,
-                    "content_type": "text/plain",
                     "namespace_id": _NAMESPACE_ID,
                 },
             )

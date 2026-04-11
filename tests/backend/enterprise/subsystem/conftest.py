@@ -113,12 +113,6 @@ AS SELECT
         `path` := FROM_BYTES(`path`, 'utf8')
     ) AS `source`,
     FROM_BYTES(`display_name`, 'utf8') AS `display_name`,
-    CASE
-        WHEN FROM_BYTES(`display_name`, 'utf8') LIKE '%.pdf'  THEN 'application/pdf'
-        WHEN FROM_BYTES(`display_name`, 'utf8') LIKE '%.txt'  THEN 'text/plain'
-        WHEN FROM_BYTES(`display_name`, 'utf8') LIKE '%.json' THEN 'application/json'
-        ELSE 'application/octet-stream'
-    END AS `content_type`,
     FROM_BYTES(`namespace_id`, 'utf8') AS `namespace_id`
 FROM `artemis-enterprise-datasource-filesystem`
 EMIT CHANGES;
