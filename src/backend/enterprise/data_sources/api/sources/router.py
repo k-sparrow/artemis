@@ -32,6 +32,7 @@ async def create_data_source(
         path=body.path,
         namespace=body.namespace,
         org_name=body.org_name,
+        recursive=body.recursive,
     )
     log.info(
         "data_source_created",

@@ -16,6 +16,10 @@ class DataSourceCreate(BaseModel):
         description="Artemis namespace name (UUID5 seed for SHARED namespace)."
     )
     org_name: str = Field(description="Organisation name (UUID5 seed for owner_id).")
+    recursive: bool = Field(
+        default=True,
+        description="Watch subdirectories recursively.",
+    )
 
 
 class ConnectorTaskStatus(BaseModel):

@@ -171,6 +171,7 @@ async def create_data_source(
     path: str,
     namespace: str,
     org_name: str,
+    recursive: bool = True,
 ) -> DataSourceResponse:
     owner_id = uuid.uuid5(ARTEMIS_NS, org_name)
     record_id = uuid.uuid4()
@@ -184,6 +185,7 @@ async def create_data_source(
         namespace=namespace,
         namespace_id=str(namespace_id),
         org_name=org_name,
+        recursive=recursive,
     )
 
     kc = _make_kafka_client()
@@ -242,6 +244,16 @@ async def delete_data_source(
 ) -> None:
     row = await _fetch_row(session, source_id)
 
+    # Only soft-delete the namespace when no other active data source shares it.
+    sibling_result = await session.execute(
+        sa.select(sa.func.count()).where(
+            DataSource.namespace_id == row.namespace_id,
+            DataSource.deleted_at.is_(None),
+            DataSource.id != source_id,
+        )
+    )
+    has_siblings = sibling_result.scalar_one() > 0
+
     kc = _make_kafka_client()
     try:
         await asyncio.to_thread(kc.delete_connector, row.connector_name)
@@ -249,7 +261,8 @@ async def delete_data_source(
         if "404" not in str(exc):
             raise KafkaConnectError(str(exc)) from exc
 
-    await _soft_delete_namespace(http, row.namespace_id)
+    if not has_siblings:
+        await _soft_delete_namespace(http, row.namespace_id)
 
     row.deleted_at = datetime.now(timezone.utc)
     await session.commit()

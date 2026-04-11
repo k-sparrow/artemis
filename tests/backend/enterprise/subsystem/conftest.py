@@ -65,6 +65,7 @@ from tests.lib.testcontainers.kafka.kafka import KafkaContainer
 
 _NAMESPACE = "pipeline-test-ns"
 _NAMESPACE_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+_LIFECYCLE_NAMESPACE_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 _ORG_NAME = "pipeline-test-org"
 
 _FILESYSTEM_TOPIC = "artemis.datasource.filesystem"
@@ -307,11 +308,37 @@ def wiremock(
     wm.with_mapping(
         "namespace-create.json",
         {
-            "request": {"method": "POST", "url": "/namespaces"},
+            # Priority 1: matches only the session-scoped namespace by name.
+            "priority": 1,
+            "request": {
+                "method": "POST",
+                "url": "/namespaces",
+                "bodyPatterns": [
+                    {"matchesJsonPath": f"$[?(@.name == '{_NAMESPACE}')]"}
+                ],
+            },
             "response": {
                 "status": 201,
                 "headers": {"Content-Type": "application/json"},
                 "jsonBody": {"id": _NAMESPACE_ID, "type": "shared", "name": _NAMESPACE},
+            },
+        },
+    )
+    wm.with_mapping(
+        "namespace-create-lifecycle.json",
+        {
+            # Priority 2: catch-all for lifecycle connectors — returns a distinct ID
+            # so they don't appear as siblings of the session-scoped connector in the DB.
+            "priority": 2,
+            "request": {"method": "POST", "url": "/namespaces"},
+            "response": {
+                "status": 201,
+                "headers": {"Content-Type": "application/json"},
+                "jsonBody": {
+                    "id": _LIFECYCLE_NAMESPACE_ID,
+                    "type": "shared",
+                    "name": "lifecycle-ns",
+                },
             },
         },
     )
@@ -501,6 +528,7 @@ def data_source(
                 "path": "/watch",
                 "namespace": _NAMESPACE,
                 "org_name": _ORG_NAME,
+                "recursive": False,
             },
         )
         assert resp.status_code == status.HTTP_201_CREATED, resp.text
