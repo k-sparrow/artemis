@@ -16,6 +16,7 @@ import time
 import uuid
 from typing import Iterator
 
+import httpx
 import pytest
 from kafka import KafkaConsumer, TopicPartition
 from kafka_connect import KafkaConnect
@@ -26,11 +27,27 @@ from src.backend.enterprise.data_sources.api.sources.templates import (
 
 _TOPIC = "artemis.datasource.filesystem"
 _NAMESPACE = "test-ns"
+_NAMESPACE_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 _ORG_NAME = "test-org"
 
 
 def _kc_client(kafka_connect_url: str) -> KafkaConnect:
     return KafkaConnect(url=kafka_connect_url)
+
+
+def _list_all_plugins(kafka_connect_url: str) -> set[str]:
+    """Return all plugin classes including SMTs and converters.
+
+    The kafka-connect-py client calls GET /connector-plugins without
+    connectorsOnly=false, which omits SMTs. We call the endpoint directly.
+    """
+    resp = httpx.get(
+        f"{kafka_connect_url}/connector-plugins",
+        params={"connectorsOnly": "false"},
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+    return {p["class"] for p in resp.json()}
 
 
 def _wait_connector_running(client: KafkaConnect, name: str, timeout: int = 60) -> None:
@@ -61,8 +78,9 @@ def _wait_connector_running(client: KafkaConnect, name: str, timeout: int = 60) 
 
 
 @pytest.mark.parametrize(
-    "connector_class",
+    "plugin_class",
     [
+        # ── Connector plugins ────────────────────────────────────────────────
         pytest.param(
             "org.apache.camel.kafkaconnector.file.CamelFileSourceConnector",
             id="CamelFileSource",
@@ -71,17 +89,41 @@ def _wait_connector_running(client: KafkaConnect, name: str, timeout: int = 60) 
             "org.apache.camel.kafkaconnector.filewatchsource.CamelFilewatchsourceSourceConnector",  # noqa: E501
             id="CamelFileWatchSource",
         ),
+        # ── SMTs used by the FileSource connector template ───────────────────
+        # Key transforms
+        pytest.param(
+            "org.apache.kafka.connect.transforms.HoistField$Key",
+            id="HoistFieldKey",
+        ),
+        pytest.param(
+            "org.apache.kafka.connect.transforms.InsertField$Key",
+            id="InsertFieldKey",
+        ),
+        pytest.param(
+            "org.apache.kafka.connect.transforms.ReplaceField$Key",
+            id="ReplaceFieldKey",
+        ),
+        pytest.param(
+            "org.apache.kafka.connect.transforms.ExtractField$Key",
+            id="ExtractFieldKey",
+        ),
+        # Header manipulation
+        pytest.param(
+            "org.apache.kafka.connect.transforms.DropHeaders",
+            id="DropHeaders",
+        ),
+        pytest.param(
+            "org.apache.kafka.connect.transforms.InsertHeader",
+            id="InsertHeader",
+        ),
     ],
 )
-def test_connector_plugin_installed(
-    kafka_connect_url: str, connector_class: str
-) -> None:
-    """artemis/cp-kafka-connect must ship the required Camel connector plugins."""
-    plugins = _kc_client(kafka_connect_url).list_connector_plugins()
-    classes = {p["class"] for p in plugins}
+def test_required_plugin_installed(kafka_connect_url: str, plugin_class: str) -> None:
+    """artemis/cp-kafka-connect must ship all required connector plugins and SMTs."""
+    classes = _list_all_plugins(kafka_connect_url)
     assert (
-        connector_class in classes
-    ), f"{connector_class} not found. Installed: {sorted(classes)}"
+        plugin_class in classes
+    ), f"{plugin_class} not found. Installed: {sorted(classes)}"
 
 
 class TestFilesourceConnector:
@@ -96,6 +138,7 @@ class TestFilesourceConnector:
             connector_name=connector_name,
             watch_path="/watch",
             namespace=_NAMESPACE,
+            namespace_id=_NAMESPACE_ID,
             org_name=_ORG_NAME,
         )
         client.create_connector(config)
@@ -127,6 +170,7 @@ class TestFilesourceConnector:
         "header,expected_value",
         [
             pytest.param("artemis.namespace", _NAMESPACE, id="namespace"),
+            pytest.param("artemis.namespace_id", _NAMESPACE_ID, id="namespace_id"),
             pytest.param("artemis.org_name", _ORG_NAME, id="org_name"),
         ],
     )

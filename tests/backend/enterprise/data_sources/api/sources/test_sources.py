@@ -6,14 +6,24 @@ All external I/O (KafkaConnect, storage service, Postgres) is mocked — see con
 from __future__ import annotations
 
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest  # noqa: F401
 from fastapi import status
 from fastapi.testclient import TestClient
 from requests.exceptions import HTTPError
 
+from src.backend.enterprise.data_sources.api.dependencies import (
+    get_db_session,
+    get_storage_client,
+)
 from src.backend.enterprise.data_sources.api.main import app
+from src.backend.enterprise.data_sources.api.models import Base
+from src.lib.backend.db.session import get_session
+from tests.backend.enterprise.data_sources.api.sources.conftest import _NAMESPACE_ID
+
+import asyncio  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine  # noqa: E402, E501
 
 _CREATE_PAYLOAD = {
     "display_name": "Acme Docs",
@@ -21,6 +31,24 @@ _CREATE_PAYLOAD = {
     "namespace": "acme",
     "org_name": "acme-corp",
 }
+
+
+async def _create_all(engine):
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
+def _make_client(mock_kc, mock_storage=None):
+    """Helper: build a fresh TestClient with given mocks and isolated SQLite DB."""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    asyncio.get_event_loop().run_until_complete(_create_all(engine))
+    factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+    async def _get_session():
+        async for s in get_session(factory):
+            yield s
+
+    return engine, factory, _get_session
 
 
 class TestCreateDataSource:
@@ -60,59 +88,39 @@ class TestCreateDataSource:
         assert config["name"].startswith("artemis-")
         assert config["config"]["camel.source.path.directoryName"] == "/data/acme"
         assert config["config"]["camel.source.endpoint.noop"] == "true"
+        ns_id_literal = config["config"][
+            "transforms.InjectNamespaceIdHeader.value.literal"
+        ]
+        assert ns_id_literal == str(_NAMESPACE_ID)
 
     def test_namespace_409_resolves_existing(
         self, mock_kafka_connect: MagicMock, db_factory
     ) -> None:
-        from fastapi import status as http_status
-
         existing_ns_id = uuid.uuid5(
             uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8"), "acme"
         )
 
         conflict_resp = MagicMock()
-        conflict_resp.status_code = http_status.HTTP_409_CONFLICT
+        conflict_resp.status_code = status.HTTP_409_CONFLICT
         conflict_resp.json.return_value = {
             "id": str(existing_ns_id),
             "type": "shared",
             "name": "acme",
         }
 
-        from unittest.mock import AsyncMock
-
         conflict_client = MagicMock()
         conflict_client.post = AsyncMock(return_value=conflict_resp)
         conflict_client.delete = AsyncMock()
 
-        import asyncio
-        from sqlalchemy.ext.asyncio import (
-            async_sessionmaker,
-            create_async_engine,
-            AsyncSession,
-        )
-        from src.backend.enterprise.data_sources.api.dependencies import get_db_session
-        from src.backend.enterprise.data_sources.api.models import Base  # noqa: F401
-        from src.lib.backend.db.session import get_session
-
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-        asyncio.get_event_loop().run_until_complete(_create_all(engine))
-        factory = async_sessionmaker(
-            engine, expire_on_commit=False, class_=AsyncSession
-        )
-
-        async def _get_session():
-            async for session in get_session(factory):
-                yield session
-
-        from fastapi.testclient import TestClient
+        engine, _, _get_session = _make_client(mock_kafka_connect)
 
         with patch(
             "src.backend.enterprise.data_sources.api.sources.service.KafkaConnect",
             return_value=mock_kafka_connect,
         ):
             app.dependency_overrides[get_db_session] = _get_session
+            app.dependency_overrides[get_storage_client] = lambda: conflict_client
             with TestClient(app) as c:
-                app.state.storage_client = conflict_client
                 resp = c.post("/data-sources", json=_CREATE_PAYLOAD)
             app.dependency_overrides.clear()
 
@@ -123,18 +131,6 @@ class TestCreateDataSource:
     def test_kafka_connect_error_returns_502(
         self, mock_storage_client: MagicMock, db_factory
     ) -> None:
-        from unittest.mock import AsyncMock  # noqa: F401
-        from fastapi.testclient import TestClient
-        from sqlalchemy.ext.asyncio import (
-            async_sessionmaker,
-            create_async_engine,
-            AsyncSession,
-        )
-        from src.backend.enterprise.data_sources.api.dependencies import get_db_session
-        from src.backend.enterprise.data_sources.api.models import Base  # noqa: F401
-        from src.lib.backend.db.session import get_session
-        import asyncio
-
         failing_kc = MagicMock()
         failing_kc.create_connector.side_effect = HTTPError("500 Server Error")
         failing_kc.get_connector_status.return_value = {
@@ -142,23 +138,15 @@ class TestCreateDataSource:
             "tasks": [],
         }
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-        asyncio.get_event_loop().run_until_complete(_create_all(engine))
-        factory = async_sessionmaker(
-            engine, expire_on_commit=False, class_=AsyncSession
-        )
-
-        async def _get_session():
-            async for s in get_session(factory):
-                yield s
+        engine, _, _get_session = _make_client(failing_kc)
 
         with patch(
             "src.backend.enterprise.data_sources.api.sources.service.KafkaConnect",
             return_value=failing_kc,
         ):
             app.dependency_overrides[get_db_session] = _get_session
+            app.dependency_overrides[get_storage_client] = lambda: mock_storage_client
             with TestClient(app) as c:
-                app.state.storage_client = mock_storage_client
                 resp = c.post("/data-sources", json=_CREATE_PAYLOAD)
             app.dependency_overrides.clear()
 
@@ -168,18 +156,6 @@ class TestCreateDataSource:
     def test_storage_service_error_returns_502(
         self, mock_kafka_connect: MagicMock, db_factory
     ) -> None:
-        from unittest.mock import AsyncMock
-        from fastapi.testclient import TestClient
-        from sqlalchemy.ext.asyncio import (
-            async_sessionmaker,
-            create_async_engine,
-            AsyncSession,
-        )
-        from src.backend.enterprise.data_sources.api.dependencies import get_db_session
-        from src.backend.enterprise.data_sources.api.models import Base  # noqa: F401
-        from src.lib.backend.db.session import get_session
-        import asyncio
-
         error_resp = MagicMock()
         error_resp.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
         error_resp.text = "Internal Server Error"
@@ -187,23 +163,15 @@ class TestCreateDataSource:
         failing_storage = MagicMock()
         failing_storage.post = AsyncMock(return_value=error_resp)
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-        asyncio.get_event_loop().run_until_complete(_create_all(engine))
-        factory = async_sessionmaker(
-            engine, expire_on_commit=False, class_=AsyncSession
-        )
-
-        async def _get_session():
-            async for s in get_session(factory):
-                yield s
+        engine, _, _get_session = _make_client(mock_kafka_connect)
 
         with patch(
             "src.backend.enterprise.data_sources.api.sources.service.KafkaConnect",
             return_value=mock_kafka_connect,
         ):
             app.dependency_overrides[get_db_session] = _get_session
+            app.dependency_overrides[get_storage_client] = lambda: failing_storage
             with TestClient(app) as c:
-                app.state.storage_client = failing_storage
                 resp = c.post("/data-sources", json=_CREATE_PAYLOAD)
             app.dependency_overrides.clear()
 
@@ -321,15 +289,3 @@ class TestPauseResumeRestart:
     def test_pause_unknown_id_returns_404(self, client: TestClient) -> None:
         resp = client.post(f"/data-sources/{uuid.uuid4()}/pause")
         assert resp.status_code == status.HTTP_404_NOT_FOUND
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-async def _create_all(engine):
-    from src.backend.enterprise.data_sources.api.models import Base
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)

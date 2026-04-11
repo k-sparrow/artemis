@@ -3,7 +3,8 @@
 All external I/O is mocked — no real filesystem paths, HTTP servers, or storage service.
 Tests cover:
   - Happy path for each source type (filesystem, inline, url)
-  - Error paths: missing file (404), URL fetch failure (502), storage service error (502)
+  - Error paths: missing file (404), URL fetch failure (502), storage service error (502),
+    namespace not found (422)
   - Request validation (missing fields → 422)
 """
 
@@ -16,8 +17,7 @@ import pytest  # noqa: F401
 from fastapi import status
 from fastapi.testclient import TestClient
 
-from tests.backend.enterprise.intake.conftest import (
-    NAMESPACE_RESPONSE,
+from tests.backend.enterprise.intake.api.intake.conftest import (
     _NAMESPACE_ID,
     _S3_KEY,
     _TASK_ID,
@@ -26,8 +26,7 @@ from tests.backend.enterprise.intake.conftest import (
 _COMMON = {
     "display_name": "doc.pdf",
     "content_type": "application/pdf",
-    "namespace": "acme",
-    "org_name": "acme-corp",
+    "namespace_id": str(_NAMESPACE_ID),
 }
 
 
@@ -53,7 +52,7 @@ class TestFilesystemSource:
         assert body["s3_key"] == _S3_KEY
         assert body["namespace_id"] == str(_NAMESPACE_ID)
 
-    def test_namespace_upserted_with_correct_payload(
+    def test_namespace_verified_on_storage(
         self, client: TestClient, mock_http: MagicMock, tmp_path: Path
     ) -> None:
         f = tmp_path / "doc.pdf"
@@ -61,9 +60,8 @@ class TestFilesystemSource:
 
         _post(client, {"type": "filesystem", "path": str(f)})
 
-        ns_call = mock_http.post.call_args_list[0]
-        assert ns_call.args[0] == "/namespaces"
-        assert ns_call.kwargs["json"] == {"type": "shared", "name": "acme"}
+        mock_http.get.assert_called_once()
+        assert mock_http.get.call_args.args[0] == f"/namespaces/{_NAMESPACE_ID}"
 
     def test_file_bytes_uploaded_to_storage(
         self, client: TestClient, mock_http: MagicMock, tmp_path: Path
@@ -73,11 +71,12 @@ class TestFilesystemSource:
 
         _post(client, {"type": "filesystem", "path": str(f)})
 
-        upload_call = mock_http.post.call_args_list[1]
+        upload_call = mock_http.post.call_args_list[0]
         assert f"/namespaces/{_NAMESPACE_ID}/objects" in upload_call.args[0]
         files = upload_call.kwargs["files"]
         assert files["file"][0] == "doc.pdf"
         assert files["file"][1] == b"pdf content"
+        assert files["file"][2] == "application/pdf"
 
     def test_missing_file_returns_404(self, client: TestClient) -> None:
         resp = _post(
@@ -99,6 +98,7 @@ class TestInlineSource:
         assert resp.status_code == status.HTTP_202_ACCEPTED
         body = resp.json()
         assert body["task_id"] == str(_TASK_ID)
+        assert body["s3_key"] == _S3_KEY
         assert body["namespace_id"] == str(_NAMESPACE_ID)
 
     def test_content_encoded_to_bytes(
@@ -106,17 +106,16 @@ class TestInlineSource:
     ) -> None:
         _post(client, {"type": "inline", "content": "Hello world"})
 
-        upload_call = mock_http.post.call_args_list[1]
-        files = upload_call.kwargs["files"]
+        files = mock_http.post.call_args_list[0].kwargs["files"]
         assert files["file"][1] == b"Hello world"
+        assert files["file"][2] == "application/pdf"
 
     def test_custom_encoding_used(
         self, client: TestClient, mock_http: MagicMock
     ) -> None:
         _post(client, {"type": "inline", "content": "café", "encoding": "latin-1"})
 
-        upload_call = mock_http.post.call_args_list[1]
-        files = upload_call.kwargs["files"]
+        files = mock_http.post.call_args_list[0].kwargs["files"]
         assert files["file"][1] == "café".encode("latin-1")
 
     def test_default_encoding_is_utf8(
@@ -124,8 +123,7 @@ class TestInlineSource:
     ) -> None:
         _post(client, {"type": "inline", "content": "café"})
 
-        upload_call = mock_http.post.call_args_list[1]
-        files = upload_call.kwargs["files"]
+        files = mock_http.post.call_args_list[0].kwargs["files"]
         assert files["file"][1] == "café".encode("utf-8")
 
 
@@ -135,64 +133,62 @@ class TestInlineSource:
 
 
 class TestUrlSource:
-    def test_happy_path_returns_202(self, client: TestClient) -> None:
+    def _patch_url_client(self, content: bytes, side_effect=None) -> MagicMock:
         url_resp = MagicMock()
-        url_resp.content = b"<html>page</html>"
+        url_resp.content = content
         url_resp.raise_for_status = MagicMock()
 
-        with patch(
-            "src.backend.enterprise.intake.api.intake.service.httpx.AsyncClient"
-        ) as mock_cls:
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
-            mock_ctx.__aexit__ = AsyncMock(return_value=False)
-            mock_ctx.get = AsyncMock(return_value=url_resp)
-            mock_cls.return_value = mock_ctx
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_ctx.get = AsyncMock(return_value=url_resp if not side_effect else None)
+        if side_effect:
+            mock_ctx.get = AsyncMock(side_effect=side_effect)
 
+        mock_cls = MagicMock(return_value=mock_ctx)
+        return mock_cls
+
+    def test_happy_path_returns_202(self, client: TestClient) -> None:
+        mock_cls = self._patch_url_client(b"<html>page</html>")
+
+        with patch(
+            "src.backend.enterprise.intake.api.intake.service.httpx.AsyncClient",
+            mock_cls,
+        ):
             resp = _post(client, {"type": "url", "url": "https://example.com/doc"})
 
         assert resp.status_code == status.HTTP_202_ACCEPTED
+        body = resp.json()
+        assert body["task_id"] == str(_TASK_ID)
+        assert body["s3_key"] == _S3_KEY
 
     def test_fetched_bytes_uploaded_to_storage(
         self, client: TestClient, mock_http: MagicMock
     ) -> None:
-        url_resp = MagicMock()
-        url_resp.content = b"<html>page content</html>"
-        url_resp.raise_for_status = MagicMock()
+        mock_cls = self._patch_url_client(b"<html>page content</html>")
 
         with patch(
-            "src.backend.enterprise.intake.api.intake.service.httpx.AsyncClient"
-        ) as mock_cls:
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
-            mock_ctx.__aexit__ = AsyncMock(return_value=False)
-            mock_ctx.get = AsyncMock(return_value=url_resp)
-            mock_cls.return_value = mock_ctx
-
+            "src.backend.enterprise.intake.api.intake.service.httpx.AsyncClient",
+            mock_cls,
+        ):
             _post(client, {"type": "url", "url": "https://example.com/doc"})
 
-        upload_call = mock_http.post.call_args_list[1]
-        assert upload_call.kwargs["files"]["file"][1] == b"<html>page content</html>"
+        files = mock_http.post.call_args_list[0].kwargs["files"]
+        assert files["file"][1] == b"<html>page content</html>"
+        assert files["file"][2] == "application/pdf"
 
     def test_http_error_from_url_returns_502(self, client: TestClient) -> None:
         import httpx as _httpx
 
         error_resp = MagicMock()
         error_resp.status_code = status.HTTP_403_FORBIDDEN
+        exc = _httpx.HTTPStatusError("403", request=MagicMock(), response=error_resp)
+        mock_cls = self._patch_url_client(b"", side_effect=exc)
 
         with patch(
-            "src.backend.enterprise.intake.api.intake.service.httpx.AsyncClient"
-        ) as mock_cls:
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
-            mock_ctx.__aexit__ = AsyncMock(return_value=False)
-            mock_ctx.get = AsyncMock(
-                side_effect=_httpx.HTTPStatusError(
-                    "403", request=MagicMock(), response=error_resp
-                )
-            )
-            mock_cls.return_value = mock_ctx
-
+            "src.backend.enterprise.intake.api.intake.service.httpx.AsyncClient",
+            mock_cls,
+        ):
             resp = _post(client, {"type": "url", "url": "https://example.com/secret"})
 
         assert resp.status_code == status.HTTP_502_BAD_GATEWAY
@@ -200,19 +196,13 @@ class TestUrlSource:
     def test_connection_error_from_url_returns_502(self, client: TestClient) -> None:
         import httpx as _httpx
 
-        with patch(
-            "src.backend.enterprise.intake.api.intake.service.httpx.AsyncClient"
-        ) as mock_cls:
-            mock_ctx = AsyncMock()
-            mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
-            mock_ctx.__aexit__ = AsyncMock(return_value=False)
-            mock_ctx.get = AsyncMock(
-                side_effect=_httpx.RequestError(
-                    "connection refused", request=MagicMock()
-                )
-            )
-            mock_cls.return_value = mock_ctx
+        exc = _httpx.RequestError("connection refused", request=MagicMock())
+        mock_cls = self._patch_url_client(b"", side_effect=exc)
 
+        with patch(
+            "src.backend.enterprise.intake.api.intake.service.httpx.AsyncClient",
+            mock_cls,
+        ):
             resp = _post(client, {"type": "url", "url": "https://unreachable.example"})
 
         assert resp.status_code == status.HTTP_502_BAD_GATEWAY
@@ -224,43 +214,46 @@ class TestUrlSource:
 
 
 class TestStorageServiceErrors:
-    def test_namespace_upsert_failure_returns_502(
-        self, mock_http: MagicMock, tmp_path: Path
+    def test_namespace_not_found_returns_422(
+        self, client: TestClient, mock_http: MagicMock, tmp_path: Path
     ) -> None:
-        from src.backend.enterprise.intake.api.main import app
+        not_found = MagicMock()
+        not_found.status_code = status.HTTP_404_NOT_FOUND
+        mock_http.get = AsyncMock(return_value=not_found)
 
+        f = tmp_path / "doc.pdf"
+        f.write_bytes(b"content")
+        resp = _post(client, {"type": "filesystem", "path": str(f)})
+
+        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert str(_NAMESPACE_ID) in resp.json()["detail"]
+
+    def test_namespace_check_storage_error_returns_502(
+        self, client: TestClient, mock_http: MagicMock, tmp_path: Path
+    ) -> None:
         err_resp = MagicMock()
         err_resp.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
         err_resp.text = "internal error"
-        mock_http.post = AsyncMock(return_value=err_resp)
+        mock_http.get = AsyncMock(return_value=err_resp)
 
-        with TestClient(app) as c:
-            app.state.http_client = mock_http
-            f = tmp_path / "doc.pdf"
-            f.write_bytes(b"content")
-            resp = _post(c, {"type": "filesystem", "path": str(f)})
+        f = tmp_path / "doc.pdf"
+        f.write_bytes(b"content")
+        resp = _post(client, {"type": "filesystem", "path": str(f)})
 
         assert resp.status_code == status.HTTP_502_BAD_GATEWAY
         assert "Storage service error" in resp.json()["detail"]
 
     def test_upload_failure_returns_502(
-        self, mock_http: MagicMock, tmp_path: Path
+        self, client: TestClient, mock_http: MagicMock, tmp_path: Path
     ) -> None:
-        from src.backend.enterprise.intake.api.main import app
-
-        ns_resp = MagicMock()
-        ns_resp.status_code = status.HTTP_201_CREATED
-        ns_resp.json.return_value = NAMESPACE_RESPONSE
         upload_err = MagicMock()
         upload_err.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         upload_err.text = "service unavailable"
-        mock_http.post = AsyncMock(side_effect=[ns_resp, upload_err])
+        mock_http.post = AsyncMock(return_value=upload_err)
 
-        with TestClient(app) as c:
-            app.state.http_client = mock_http
-            f = tmp_path / "doc.pdf"
-            f.write_bytes(b"content")
-            resp = _post(c, {"type": "filesystem", "path": str(f)})
+        f = tmp_path / "doc.pdf"
+        f.write_bytes(b"content")
+        resp = _post(client, {"type": "filesystem", "path": str(f)})
 
         assert resp.status_code == status.HTTP_502_BAD_GATEWAY
 
@@ -279,14 +272,46 @@ class TestRequestValidation:
         resp = _post(client, {"type": "unknown"})
         assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
+    def test_missing_content_type_returns_422(self, client: TestClient) -> None:
+        resp = client.post(
+            "/intake",
+            json={
+                "source": {"type": "inline", "content": "text"},
+                "display_name": "doc.txt",
+                "namespace_id": str(_NAMESPACE_ID),
+            },
+        )
+        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
     def test_missing_display_name_returns_422(self, client: TestClient) -> None:
         resp = client.post(
             "/intake",
             json={
                 "source": {"type": "inline", "content": "text"},
                 "content_type": "text/plain",
-                "namespace": "acme",
-                "org_name": "acme-corp",
+                "namespace_id": str(_NAMESPACE_ID),
+            },
+        )
+        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    def test_missing_namespace_id_returns_422(self, client: TestClient) -> None:
+        resp = client.post(
+            "/intake",
+            json={
+                "source": {"type": "inline", "content": "text"},
+                "display_name": "doc.txt",
+                "content_type": "text/plain",
+            },
+        )
+        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    def test_invalid_namespace_id_uuid_returns_422(self, client: TestClient) -> None:
+        resp = client.post(
+            "/intake",
+            json={
+                **_COMMON,
+                "namespace_id": "not-a-uuid",
+                "source": {"type": "inline", "content": "x"},
             },
         )
         assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY

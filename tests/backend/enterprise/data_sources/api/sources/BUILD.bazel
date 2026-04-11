@@ -46,16 +46,3 @@ py_test(
         requirement("aiosqlite"),
     ],
 )
-
-py_test(
-    name = "test_health",
-    srcs = ["test_health.py"],
-    deps = [
-        "//src/backend/enterprise/data_sources/api:main",
-        requirement("aioresponses"),
-        requirement("aiosqlite"),
-        requirement("fastapi"),
-        requirement("httpx"),
-        requirement("pytest"),
-    ],
-)

@@ -1,5 +1,6 @@
 from typing import Annotated
 
+import httpx
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -10,12 +11,18 @@ __all__ = [
     "get_db_session",
     "session_factory",
     "db_session_dependency",
+    "get_storage_client",
+    "storage_client_dependency",
 ]
 
 # Module-level factory; initialised once at import time.
 # Tests may replace this with a test-scoped factory.
 session_factory: async_sessionmaker[AsyncSession] = make_session_factory(
     settings.SQL_DB_URL
+)
+
+storage_client: httpx.AsyncClient = httpx.AsyncClient(
+    base_url=settings.STORAGE_SERVICE_URL
 )
 
 
@@ -25,3 +32,10 @@ async def get_db_session():
 
 
 db_session_dependency = Annotated[AsyncSession, Depends(get_db_session)]
+
+
+async def get_storage_client() -> httpx.AsyncClient:
+    return storage_client
+
+
+storage_client_dependency = Annotated[httpx.AsyncClient, Depends(get_storage_client)]

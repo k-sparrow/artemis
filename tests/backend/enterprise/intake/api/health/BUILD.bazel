@@ -10,31 +10,27 @@ py_library(
 
 py_library(
     name = "conftest",
-    testonly = True,
     srcs = ["conftest.py"],
     visibility = ["//visibility:public"],
     deps = [
-        "//tests/lib/testcontainers/kafka:pkg",
-        requirement("kafka-python-ng"),
+        "//src/backend/enterprise/intake/api:dependencies",
+        "//src/backend/enterprise/intake/api:main",
+        requirement("fastapi"),
+        requirement("httpx"),
+        requirement("kafka-connect-py"),
         requirement("pytest"),
-        requirement("testcontainers"),
     ],
 )
 
 py_test(
-    name = "test_kafka_connect",
-    srcs = ["test_kafka_connect.py"],
-    tags = [
-        "container",
-        "integration",
-        "local",  # disable Bazel sandbox so Docker volume mounts see the real host filesystem
-    ],
+    name = "test_health",
+    srcs = ["test_health.py"],
     deps = [
         ":conftest",
-        "//src/backend/enterprise/data_sources/api/sources:templates",
-        "//tests/lib/testcontainers/kafka:pkg",
+        "//src/backend/enterprise/intake/api:main",
+        requirement("aioresponses"),
+        requirement("fastapi"),
         requirement("httpx"),
-        requirement("kafka-python-ng"),
         requirement("kafka-connect-py"),
         requirement("pytest"),
     ],

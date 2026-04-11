@@ -1,0 +1,36 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    visibility = ["//visibility:public"],
+)
+
+py_library(
+    name = "conftest",
+    srcs = ["conftest.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/backend/enterprise/data_sources/api:main",
+        requirement("fastapi"),
+        requirement("httpx"),
+        requirement("pytest"),
+        requirement("aiosqlite"),
+    ],
+)
+
+py_test(
+    name = "test_health",
+    srcs = ["test_health.py"],
+    deps = [
+        ":conftest",
+        "//src/backend/enterprise/data_sources/api:main",
+        requirement("aioresponses"),
+        requirement("aiosqlite"),
+        requirement("fastapi"),
+        requirement("httpx"),
+        requirement("pytest"),
+    ],
+)

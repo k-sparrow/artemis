@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import uuid
 
-import httpx
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, status
 
-from src.backend.enterprise.data_sources.api.dependencies import db_session_dependency
+from src.backend.enterprise.data_sources.api.dependencies import (
+    db_session_dependency,
+    storage_client_dependency,
+)
 from src.backend.enterprise.data_sources.api.sources import service
 from src.backend.enterprise.data_sources.api.sources.schemas import (
     DataSourceCreate,
@@ -17,19 +19,15 @@ router = APIRouter(prefix="/data-sources", tags=["data-sources"])
 log = get_logger(__name__)
 
 
-def _storage_client(request: Request) -> httpx.AsyncClient:
-    return request.app.state.storage_client
-
-
 @router.post("", response_model=DataSourceResponse, status_code=status.HTTP_201_CREATED)
 async def create_data_source(
     body: DataSourceCreate,
-    request: Request,
     session: db_session_dependency,
+    http: storage_client_dependency,
 ) -> DataSourceResponse:
     result = await service.create_data_source(
         session=session,
-        http=_storage_client(request),
+        http=http,
         display_name=body.display_name,
         path=body.path,
         namespace=body.namespace,
@@ -63,12 +61,12 @@ async def get_data_source(
 )
 async def delete_data_source(
     source_id: uuid.UUID,
-    request: Request,
     session: db_session_dependency,
+    http: storage_client_dependency,
 ) -> None:
     await service.delete_data_source(
         session=session,
-        http=_storage_client(request),
+        http=http,
         source_id=source_id,
     )
     log.info("data_source_deleted", id=str(source_id))

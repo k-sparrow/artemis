@@ -26,6 +26,7 @@ from typing import Any
 
 import httpx
 import sqlalchemy as sa
+from fastapi import status as http_status
 from kafka_connect import KafkaConnect
 from requests.exceptions import HTTPError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -97,11 +98,9 @@ async def _upsert_namespace(
 ) -> uuid.UUID:
     """Upsert a SHARED namespace on the storage service.
 
-    Returns the namespace_id. Handles 409 by resolving via the deterministic
-    UUID5 (storage service computes it the same way).
+    Returns the namespace_id. On 409 the existing UUID is read from the
+    response body — the storage service is the sole authority on namespace IDs.
     """
-    from fastapi import status as http_status
-
     resp = await http.post(
         "/namespaces",
         json={"type": "shared", "name": namespace},
@@ -122,8 +121,6 @@ async def _soft_delete_namespace(
     http: httpx.AsyncClient,
     namespace_id: uuid.UUID,
 ) -> None:
-    from fastapi import status as http_status
-
     resp = await http.delete(f"/namespaces/{namespace_id}")
     if resp.status_code not in (
         http_status.HTTP_202_ACCEPTED,
@@ -185,6 +182,7 @@ async def create_data_source(
         connector_name=connector_name,
         watch_path=path,
         namespace=namespace,
+        namespace_id=str(namespace_id),
         org_name=org_name,
     )
 

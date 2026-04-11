@@ -20,6 +20,7 @@ def render_filesystem_connector(
     connector_name: str,
     watch_path: str,
     namespace: str,
+    namespace_id: str,
     org_name: str,
     recursive: bool = True,
 ) -> dict[str, Any]:
@@ -55,7 +56,8 @@ def render_filesystem_connector(
     Args:
         connector_name: Kafka Connect connector name (``artemis-{id}``).
         watch_path: Absolute path to the directory to watch (container path).
-        namespace: Artemis namespace name.
+        namespace: Artemis namespace display name.
+        namespace_id: Artemis namespace UUID (from storage service POST /namespaces).
         org_name: Organisation name.
         recursive: Whether to watch subdirectories recursively.
 
@@ -92,6 +94,7 @@ def render_filesystem_connector(
                     "DropCamelHeaders",
                     # Header-only metadata injection
                     "InjectNamespaceHeader",
+                    "InjectNamespaceIdHeader",
                     "InjectOrgNameHeader",
                 ]
             ),
@@ -137,6 +140,11 @@ def render_filesystem_connector(
             ),
             "transforms.InjectNamespaceHeader.header": "artemis.namespace",
             "transforms.InjectNamespaceHeader.value.literal": namespace,
+            "transforms.InjectNamespaceIdHeader.type": (
+                "org.apache.kafka.connect.transforms.InsertHeader"
+            ),
+            "transforms.InjectNamespaceIdHeader.header": "artemis.namespace_id",
+            "transforms.InjectNamespaceIdHeader.value.literal": namespace_id,
             "transforms.InjectOrgNameHeader.type": (
                 "org.apache.kafka.connect.transforms.InsertHeader"
             ),

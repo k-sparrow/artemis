@@ -2,7 +2,6 @@ import logging
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-import httpx
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -27,15 +26,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await conn.run_sync(Base.metadata.create_all)
     await engine.dispose()
 
-    async with httpx.AsyncClient(
-        base_url=settings.STORAGE_SERVICE_URL
-    ) as storage_client:
-        app.state.storage_client = storage_client
-        logger.info(
-            "lifespan_ready",
-            storage_url=settings.STORAGE_SERVICE_URL,
-            kafka_connect_url=settings.KAFKA_CONNECT_URL,
-        )
-        yield
+    logger.info(
+        "lifespan_ready",
+        storage_url=settings.STORAGE_SERVICE_URL,
+        kafka_connect_url=settings.KAFKA_CONNECT_URL,
+    )
+    yield
 
     logger.info("lifespan_ended")

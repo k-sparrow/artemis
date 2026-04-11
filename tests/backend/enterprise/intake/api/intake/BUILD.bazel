@@ -1,0 +1,37 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    visibility = ["//visibility:public"],
+)
+
+py_library(
+    name = "conftest",
+    srcs = ["conftest.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/backend/enterprise/intake/api:dependencies",
+        "//src/backend/enterprise/intake/api:main",
+        requirement("fastapi"),
+        requirement("httpx"),
+        requirement("kafka-connect-py"),
+        requirement("pytest"),
+    ],
+)
+
+py_test(
+    name = "test_intake",
+    srcs = ["test_intake.py"],
+    deps = [
+        ":conftest",
+        "//src/backend/enterprise/intake/api:main",
+        "//src/backend/enterprise/intake/api/intake:exceptions",
+        "//src/backend/enterprise/intake/api/intake:schemas",
+        "//src/backend/enterprise/intake/api/intake:service",
+        requirement("httpx"),
+        requirement("pytest"),
+    ],
+)

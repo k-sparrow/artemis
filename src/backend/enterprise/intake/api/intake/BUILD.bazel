@@ -7,8 +7,8 @@ load("@pip//:requirements.bzl", "requirement")
 
 package(
     default_visibility = [
-        "//src/backend/enterprise/data_sources/api:__pkg__",
-        "//tests/backend/enterprise/data_sources:__subpackages__",
+        "//src/backend/enterprise/intake/api:__pkg__",
+        "//tests/backend/enterprise/intake:__subpackages__",
     ],
 )
 
@@ -24,7 +24,7 @@ py_library(
     deps = [
         ":schemas",
         ":service",
-        "//src/backend/enterprise/data_sources/api:dependencies",
+        "//src/backend/enterprise/intake/api:dependencies",
         "//src/lib/backend/logging:pkg",
         requirement("fastapi"),
     ],
@@ -35,20 +35,8 @@ py_library(
     srcs = ["service.py"],
     deps = [
         ":exceptions",
-        ":schemas",
-        ":templates",
-        "//src/backend/enterprise/data_sources/api:config",
-        "//src/backend/enterprise/data_sources/api:models",
         requirement("httpx"),
-        requirement("kafka-connect-py"),
-        requirement("requests"),
-        requirement("sqlalchemy"),
     ],
-)
-
-py_library(
-    name = "templates",
-    srcs = ["templates.py"],
 )
 
 py_library(

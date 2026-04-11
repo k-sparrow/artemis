@@ -15,9 +15,11 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//tests/lib/testcontainers/kafka:pkg",
+        requirement("httpx"),
         requirement("kafka-python-ng"),
         requirement("pytest"),
         requirement("testcontainers"),
+        requirement("wiremock"),
     ],
 )
 
@@ -27,15 +29,16 @@ py_test(
     tags = [
         "container",
         "integration",
-        "local",  # disable Bazel sandbox so Docker volume mounts see the real host filesystem
+        "local",
     ],
     deps = [
         ":conftest",
-        "//src/backend/enterprise/data_sources/api/sources:templates",
+        "//src/backend/enterprise/intake/api:templates",
         "//tests/lib/testcontainers/kafka:pkg",
         requirement("httpx"),
         requirement("kafka-python-ng"),
         requirement("kafka-connect-py"),
         requirement("pytest"),
+        requirement("wiremock"),
     ],
 )

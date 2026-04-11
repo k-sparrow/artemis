@@ -1,4 +1,4 @@
-"""Fixtures for data_sources unit tests.
+"""Fixtures for data_sources sources unit tests.
 
 All external I/O is replaced:
   - storage service   → httpx mock (AsyncMock)
@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
 
 from src.backend.enterprise.data_sources.api.dependencies import (  # noqa: E402
     get_db_session,
+    get_storage_client,
 )
 from src.backend.enterprise.data_sources.api.main import app  # noqa: E402
 from src.backend.enterprise.data_sources.api.models import Base  # noqa: E402
@@ -121,8 +122,8 @@ def client(
         return_value=mock_kafka_connect,
     ):
         app.dependency_overrides[get_db_session] = _get_session
+        app.dependency_overrides[get_storage_client] = lambda: mock_storage_client
         with TestClient(app) as c:
-            app.state.storage_client = mock_storage_client
             yield c
         app.dependency_overrides.clear()
 

@@ -201,9 +201,9 @@ def header_streams(ksqldb_url: str, topics: None) -> None:
         ksqldb_url,
         f"""
         CREATE OR REPLACE STREAM `{_HEADERS_INPUT_TOPIC}` (
-            payload  BYTES,
-            doc_id   BYTES HEADER('doc.id'),
-            filename BYTES HEADER('doc.filename')
+            `payload`  BYTES,
+            `doc_id`   BYTES HEADER('doc.id'),
+            `filename` BYTES HEADER('doc.filename')
         )
         WITH (
             KAFKA_TOPIC  = '{_HEADERS_INPUT_TOPIC}',
@@ -223,8 +223,8 @@ def header_streams(ksqldb_url: str, topics: None) -> None:
             PARTITIONS   = 1
         )
         AS SELECT
-            FROM_BYTES(doc_id,   'utf8') AS `doc_id`,
-            FROM_BYTES(filename, 'utf8') AS `filename`
+            FROM_BYTES(`doc_id`,   'utf8') AS `doc_id`,
+            FROM_BYTES(`filename`, 'utf8') AS `filename`
         FROM `{_HEADERS_INPUT_TOPIC}`
         EMIT CHANGES;
         """,

@@ -94,9 +94,13 @@ class TestDataSourceContainer:
                 "artemis.namespace" in headers
             ), f"artemis.namespace missing. headers={headers}"
             assert (
+                "artemis.namespace_id" in headers
+            ), f"artemis.namespace_id missing. headers={headers}"
+            assert (
                 "artemis.org_name" in headers
             ), f"artemis.org_name missing. headers={headers}"
             assert headers["artemis.namespace"].decode() == _PAYLOAD["namespace"]
+            assert headers["artemis.namespace_id"].decode() == created["namespace_id"]
             assert headers["artemis.org_name"].decode() == _PAYLOAD["org_name"]
             assert (
                 "CamelHeader.CamelFileAbsolutePath" in headers

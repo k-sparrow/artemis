@@ -2,26 +2,12 @@
 
 from __future__ import annotations
 
-import os
-
-os.environ.setdefault("SQL_DB_URL", "sqlite+aiosqlite:///:memory:")
-os.environ.setdefault("STORAGE_SERVICE_URL", "http://localhost:7000")
-os.environ.setdefault("KAFKA_CONNECT_URL", "http://localhost:8083")
-
-import pytest  # noqa: E402
-from aioresponses import aioresponses  # noqa: E402
-from fastapi import status  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
-
-from src.backend.enterprise.data_sources.api.main import app  # noqa: E402
+from aioresponses import aioresponses
+from fastapi import status
+from fastapi.testclient import TestClient
 
 _STORAGE_READINESS_URL = "http://localhost:7000/health/readiness"
 _KAFKA_CONNECT_URL = "http://localhost:8083/"
-
-
-@pytest.fixture
-def client() -> TestClient:
-    return TestClient(app)
 
 
 class TestLiveness:

@@ -15,15 +15,18 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//tests/lib/testcontainers/kafka:pkg",
+        requirement("fastapi"),
+        requirement("httpx"),
         requirement("kafka-python-ng"),
         requirement("pytest"),
         requirement("testcontainers"),
+        requirement("wiremock"),
     ],
 )
 
 py_test(
-    name = "test_kafka_connect",
-    srcs = ["test_kafka_connect.py"],
+    name = "test_pipeline",
+    srcs = ["test_pipeline.py"],
     tags = [
         "container",
         "integration",
@@ -31,11 +34,7 @@ py_test(
     ],
     deps = [
         ":conftest",
-        "//src/backend/enterprise/data_sources/api/sources:templates",
-        "//tests/lib/testcontainers/kafka:pkg",
         requirement("httpx"),
-        requirement("kafka-python-ng"),
-        requirement("kafka-connect-py"),
         requirement("pytest"),
     ],
 )

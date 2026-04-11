@@ -57,7 +57,6 @@ py_library(
         ":models",
         "//src/lib/backend/logging:pkg",
         requirement("fastapi"),
-        requirement("httpx"),
         requirement("sqlalchemy"),
     ],
 )
@@ -88,6 +87,7 @@ py_library(
         "//src/lib/backend/db:session",
         requirement("asyncpg"),
         requirement("fastapi"),
+        requirement("httpx"),
         requirement("sqlalchemy"),
     ],
 )
