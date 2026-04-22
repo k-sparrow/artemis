@@ -8,7 +8,7 @@ Stack (all session-scoped, wired in conftest.py):
       → artemis.datasource.filesystem
       → ksqlDB (header extraction → IntakeRequest JSON)
       → artemis.datasource.filesystem.intake
-      → HTTP sink (deployed by intake service lifespan)
+      → HTTP sink (deployed by http_sink_connector fixture)
       → POST /intake  [real intake service container]
       → GET  /namespaces/{id}          [WireMock — storage stub]
       → POST /namespaces/{id}/objects  [WireMock — storage stub]

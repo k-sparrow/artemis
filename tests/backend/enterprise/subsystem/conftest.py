@@ -8,7 +8,7 @@ Full pipeline (all containers session-scoped):
       → artemis.datasource.filesystem          [Kafka topic, flat message + headers]
       → ksqlDB transformation                  [reads headers, shapes IntakeRequest JSON]
       → artemis.datasource.filesystem.intake   [Kafka topic, IntakeRequest-shaped JSON]
-      → HTTP sink (Aiven)                      [deployed by intake service lifespan]
+      → HTTP sink (Aiven)                      [deployed by http_sink_connector fixture]
       → POST /intake                           [intake service container]
       → GET /namespaces/{id}                   [WireMock — storage service stub]
       → POST /namespaces/{id}/objects          [WireMock — storage service stub]
@@ -168,10 +168,23 @@ def _post_ksql(ksqldb_url: str, statement: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _clear_dir(d: Path) -> None:
+    """Remove all contents of *d* without deleting the directory itself."""
+    if not d.exists():
+        return
+    for child in d.iterdir():
+        if child.is_file():
+            child.unlink()
+        else:
+            shutil.rmtree(child)
+
+
 @pytest.fixture(scope="session")
 def session_watch_dir(request: pytest.FixtureRequest) -> Path:
     """Persistent temp directory mounted into KafkaConnect and the intake container."""
     d = Path(tempfile.mkdtemp(prefix="intake-subsystem-watch-"))
+    _clear_dir(d)
+    request.addfinalizer(lambda: _clear_dir(d))
     request.addfinalizer(lambda: shutil.rmtree(d, ignore_errors=True))
     return d
 
@@ -467,7 +480,6 @@ def data_sources_base_url(data_sources_container: DockerContainer) -> str:
 
 # ---------------------------------------------------------------------------
 # Intake service container — session-scoped
-# Lifespan deploys the HTTP sink connector automatically.
 # ---------------------------------------------------------------------------
 
 
@@ -475,7 +487,6 @@ def data_sources_base_url(data_sources_container: DockerContainer) -> str:
 def intake_container(
     request: pytest.FixtureRequest,
     docker_network: Network,
-    kafka_connect: KafkaConnectContainer,
     ksqldb_transformation: None,
     wiremock: WireMockContainer,
     session_watch_dir: Path,
@@ -485,8 +496,6 @@ def intake_container(
         .with_network(docker_network)
         .with_network_aliases("intake")
         .with_exposed_ports(_INTAKE_PORT)
-        .with_env("KAFKA_CONNECT_URL", "http://kafka-connect:8083")
-        .with_env("INTAKE_URL", f"http://intake:{_INTAKE_PORT}/intake")
         .with_env("STORAGE_SERVICE_URL", f"http://wiremock:{_WIREMOCK_INTERNAL_PORT}")
         .with_env("DEBUG", "true")
         .with_volume_mapping(str(session_watch_dir), "/watch", "ro")
@@ -506,17 +515,71 @@ def intake_container(
 
 
 # ---------------------------------------------------------------------------
+# HTTP sink connector — deployed after intake is healthy so the consumer group
+# commits its ``latest`` offset before any file is produced.
+# ---------------------------------------------------------------------------
+
+_HTTP_SINK_CONNECTOR_NAME = "AivenHttpSinkConnector__FilesystemIntake"
+_INTAKE_TOPIC = "artemis.datasource.filesystem.intake"
+
+
+@pytest.fixture(scope="session")
+def http_sink_connector(
+    kafka_connect: KafkaConnectContainer,
+    intake_container: DockerContainer,
+) -> None:
+    """Deploy the Aiven HTTP sink connector via the Kafka Connect REST API."""
+    intake_internal_url = f"http://intake:{_INTAKE_PORT}/intake"
+    config = {
+        "connector.class": "io.aiven.kafka.connect.http.HttpSinkConnector",
+        "tasks.max": "1",
+        "topics": _INTAKE_TOPIC,
+        "http.url": intake_internal_url,
+        "http.authorization.type": "none",
+        "batching.enabled": "false",
+        "consumer.override.auto.offset.reset": "latest",
+        "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+        "key.converter.schemas.enable": "false",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter.schemas.enable": "false",
+        "errors.tolerance": "all",
+        "errors.deadletterqueue.topic.name": f"{_INTAKE_TOPIC}.dlq",
+        "errors.deadletterqueue.topic.replication.factor": "1",
+        "errors.deadletterqueue.context.headers.enable": "true",
+    }
+    kc_url = kafka_connect.get_url()
+    with httpx.Client(base_url=kc_url, timeout=15.0) as client:
+        resp = client.put(
+            f"/connectors/{_HTTP_SINK_CONNECTOR_NAME}/config", json=config
+        )
+        resp.raise_for_status()
+
+    # Wait for RUNNING before tests produce any messages.
+    deadline = time.monotonic() + 60
+    with httpx.Client(base_url=kc_url, timeout=10.0) as client:
+        while time.monotonic() < deadline:
+            r = client.get(f"/connectors/{_HTTP_SINK_CONNECTOR_NAME}/status")
+            if r.is_success:
+                s = r.json()
+                tasks = s.get("tasks", [])
+                if (
+                    s.get("connector", {}).get("state") == "RUNNING"
+                    and tasks
+                    and all(t["state"] == "RUNNING" for t in tasks)
+                ):
+                    return
+            time.sleep(2)
+    pytest.fail("HTTP sink connector did not reach RUNNING within 60s")
+
+
+# ---------------------------------------------------------------------------
 # Data source — session-scoped, created via data_sources REST API
-#
-# Deployed AFTER intake_container is healthy so the HTTP sink consumer group
-# has committed its ``latest`` offset on
-# ``artemis.datasource.filesystem.intake`` before any file is produced.
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="session")
 def data_source(
-    intake_container: DockerContainer,
+    http_sink_connector: None,
     data_sources_base_url: str,
 ) -> Iterator[dict]:
     """Create one data source via the control plane; wait for connector RUNNING."""
