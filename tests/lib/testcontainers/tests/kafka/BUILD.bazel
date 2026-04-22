@@ -4,10 +4,22 @@
 #
 
 load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
 load("@pip//:requirements.bzl", "requirement")
 
 package(
     default_visibility = ["//visibility:private"],
+)
+
+py_library(
+    name = "conftest",
+    testonly = True,
+    srcs = ["conftest.py"],
+    deps = [
+        "//tests/lib/testcontainers/kafka:pkg",
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
 )
 
 py_test(
@@ -74,14 +86,11 @@ py_test(
 
 py_test(
     name = "test_integration_kafka_stack",
-    srcs = [
-        "conftest.py",
-        "test_integration_kafka_stack.py",
-    ],
+    srcs = ["test_integration_kafka_stack.py"],
     env = {},
     tags = ["integration"],
     deps = [
-        "//tests/lib/testcontainers/kafka:pkg",
+        ":conftest",
         requirement("pytest"),
         requirement("requests"),
         requirement("testcontainers"),
@@ -95,6 +104,23 @@ py_test(
     tags = ["integration"],
     deps = [
         "//tests/lib/testcontainers/kafka:pkg",
+        requirement("httpx"),
+        requirement("kafka-python-ng"),
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_ksqldb_init_sidecar",
+    srcs = ["test_ksqldb_init_sidecar.py"],
+    env = {},
+    tags = [
+        "integration",
+        "local",  # Docker bind-mounts a host temp .ksql file — sandbox must be off
+    ],
+    deps = [
+        ":conftest",
         requirement("httpx"),
         requirement("kafka-python-ng"),
         requirement("pytest"),
