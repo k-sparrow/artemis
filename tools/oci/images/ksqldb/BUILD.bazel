@@ -5,6 +5,7 @@ Creates a custom KSQLDB image with the necessary initialization scripts and conf
 """
 
 load("@aspect_bazel_lib//lib:tar.bzl", "mtree_mutate", "mtree_spec", "tar")  # @unused
+load("@rules_multirun//:defs.bzl", "multirun")
 load("@rules_oci//oci:defs.bzl", "oci_image", oci_load = "oci_tarball")  #@unused
 
 # This script contains the KSQL code that creates and manipulates Kafka streams
@@ -97,4 +98,154 @@ oci_load(
     # use this tag as image name for KSQLDB in docker-compose.yaml
     repo_tags = ["apollo/ksqldb-cli:latest"],
     visibility = ["//tools/oci/images:__pkg__"],
+)
+
+# ---------------------------------------------------------------------------
+# Artemis (non-enterprise) ksqlDB init image
+# One-shot container: runs artemis_init.ksql then exits cleanly.
+# ---------------------------------------------------------------------------
+
+_ARTEMIS_KSQL = "artemis_init.ksql"
+
+_ARTEMIS_KSQL_PATH = "/" + KSQLDB_INIT_SCRIPT_DIR + "/" + _ARTEMIS_KSQL
+
+_ARTEMIS_SH = "ksqldb-init.sh"
+
+_ARTEMIS_SH_PATH = "/" + KSQLDB_SHELL_INIT_SCRIPT_DIR + "/" + _ARTEMIS_SH
+
+mtree_spec(
+    name = "artemis_init.ksql.spec",
+    srcs = [":" + _ARTEMIS_KSQL],
+)
+
+mtree_mutate(
+    name = "artemis_init.ksql.mtree",
+    mtree = ":artemis_init.ksql.spec",
+    package_dir = KSQLDB_INIT_SCRIPT_DIR,
+    strip_prefix = package_name(),
+)
+
+tar(
+    name = "artemis_init.ksql.pkg",
+    srcs = [":" + _ARTEMIS_KSQL],
+    mtree = ":artemis_init.ksql.mtree",
+)
+
+mtree_spec(
+    name = "artemis_init.sh.spec",
+    srcs = [":" + _ARTEMIS_SH],
+)
+
+mtree_mutate(
+    name = "artemis_init.sh.mtree",
+    mtree = ":artemis_init.sh.spec",
+    package_dir = KSQLDB_SHELL_INIT_SCRIPT_DIR,
+    strip_prefix = package_name(),
+)
+
+tar(
+    name = "artemis_init.sh.pkg",
+    srcs = [":" + _ARTEMIS_SH],
+    mtree = ":artemis_init.sh.mtree",
+)
+
+oci_image(
+    name = "artemis_init_image",
+    base = "@cp-ksqldb-cli",
+    entrypoint = [
+        "bash",
+        _ARTEMIS_SH_PATH,
+    ],
+    tars = [
+        ":artemis_init.ksql.pkg",
+        ":artemis_init.sh.pkg",
+    ],
+    visibility = ["//tools/oci/images:__pkg__"],
+)
+
+oci_load(
+    name = "artemis_init_tarball",
+    image = ":artemis_init_image",
+    repo_tags = ["artemis/ksqldb-init:latest"],
+    visibility = ["//tools/oci/images:__pkg__"],
+)
+
+# ---------------------------------------------------------------------------
+# Enterprise ksqlDB init image
+# One-shot container: runs artemis_enterprise_init.ksql then exits cleanly.
+# ---------------------------------------------------------------------------
+
+_ENTERPRISE_KSQL = "artemis_enterprise_init.ksql"
+
+_ENTERPRISE_KSQL_PATH = "/" + KSQLDB_INIT_SCRIPT_DIR + "/" + _ENTERPRISE_KSQL
+
+_ENTERPRISE_SH = "ksqldb-enterprise-init.sh"
+
+_ENTERPRISE_SH_PATH = "/" + KSQLDB_SHELL_INIT_SCRIPT_DIR + "/" + _ENTERPRISE_SH
+
+mtree_spec(
+    name = "enterprise_init.ksql.spec",
+    srcs = [":" + _ENTERPRISE_KSQL],
+)
+
+mtree_mutate(
+    name = "enterprise_init.ksql.mtree",
+    mtree = ":enterprise_init.ksql.spec",
+    package_dir = KSQLDB_INIT_SCRIPT_DIR,
+    strip_prefix = package_name(),
+)
+
+tar(
+    name = "enterprise_init.ksql.pkg",
+    srcs = [":" + _ENTERPRISE_KSQL],
+    mtree = ":enterprise_init.ksql.mtree",
+)
+
+mtree_spec(
+    name = "enterprise_init.sh.spec",
+    srcs = [":" + _ENTERPRISE_SH],
+)
+
+mtree_mutate(
+    name = "enterprise_init.sh.mtree",
+    mtree = ":enterprise_init.sh.spec",
+    package_dir = KSQLDB_SHELL_INIT_SCRIPT_DIR,
+    strip_prefix = package_name(),
+)
+
+tar(
+    name = "enterprise_init.sh.pkg",
+    srcs = [":" + _ENTERPRISE_SH],
+    mtree = ":enterprise_init.sh.mtree",
+)
+
+oci_image(
+    name = "enterprise_init_image",
+    base = "@cp-ksqldb-cli",
+    entrypoint = [
+        "bash",
+        _ENTERPRISE_SH_PATH,
+    ],
+    tars = [
+        ":enterprise_init.ksql.pkg",
+        ":enterprise_init.sh.pkg",
+    ],
+    visibility = ["//tools/oci/images:__pkg__"],
+)
+
+oci_load(
+    name = "enterprise_init_tarball",
+    image = ":enterprise_init_image",
+    repo_tags = ["artemis/ksqldb-enterprise-init:latest"],
+    visibility = ["//tools/oci/images:__pkg__"],
+)
+
+multirun(
+    name = "load.all",
+    commands = [
+        ":artemis_init_tarball",
+        ":enterprise_init_tarball",
+    ],
+    jobs = 1,
+    visibility = ["//visibility:public"],
 )

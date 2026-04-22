@@ -1,0 +1,66 @@
+-- Artemis enterprise ingestion pipeline — ksqlDB stream processing
+--
+-- Topology
+-- --------
+--   Camel FileSource connector
+--       → artemis.datasource.filesystem  (raw file event + Kafka headers)
+--       → [this file] promote headers + reshape into IntakeRequest JSON
+--       → artemis.datasource.filesystem.intake  (IntakeRequest JSON)
+--       → Aiven HTTP Sink Connector (deployed by intake service lifespan)
+--       → POST /intake
+--
+-- Kafka headers injected by the FileSource connector + artemis SMT
+-- ----------------------------------------------------------------
+--   CamelHeader.CamelFileAbsolutePath  : absolute path on the watched filesystem
+--   CamelHeader.CamelFileName          : filename (display name)
+--   artemis.namespace                  : namespace name
+--   artemis.namespace_id               : namespace UUID
+--   artemis.org_name                   : organisation name
+--
+-- IntakeRequest JSON schema (output)
+-- -----------------------------------
+--   source       : { type: "filesystem", path: str }
+--   display_name : str
+--   namespace_id : str (UUID)
+
+SET 'auto.offset.reset' = 'earliest';
+
+
+-- ---------------------------------------------------------------------------
+-- 1. Source stream — raw FileSource messages with promoted headers
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE STREAM `artemis-enterprise-datasource-filesystem` (
+    `payload`      BYTES,
+    `path`         BYTES HEADER('CamelHeader.CamelFileAbsolutePath'),
+    `display_name` BYTES HEADER('CamelHeader.CamelFileName'),
+    `namespace`    BYTES HEADER('artemis.namespace'),
+    `namespace_id` BYTES HEADER('artemis.namespace_id'),
+    `org_name`     BYTES HEADER('artemis.org_name')
+)
+WITH (
+    KAFKA_TOPIC  = 'artemis.datasource.filesystem',
+    VALUE_FORMAT = 'KAFKA',
+    PARTITIONS   = 1
+);
+
+
+-- ---------------------------------------------------------------------------
+-- 2. Reshape into IntakeRequest JSON consumed by POST /intake
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE STREAM `artemis-enterprise-datasource-filesystem-intake`
+WITH (
+    KAFKA_TOPIC  = 'artemis.datasource.filesystem.intake',
+    VALUE_FORMAT = 'JSON',
+    PARTITIONS   = 1
+)
+AS SELECT
+    STRUCT(
+        `type` := 'filesystem',
+        `path` := FROM_BYTES(`path`, 'utf8')
+    ) AS `source`,
+    FROM_BYTES(`display_name`, 'utf8') AS `display_name`,
+    FROM_BYTES(`namespace_id`, 'utf8') AS `namespace_id`
+FROM `artemis-enterprise-datasource-filesystem`
+EMIT CHANGES;

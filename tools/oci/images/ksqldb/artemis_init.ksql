@@ -1,0 +1,219 @@
+-- Artemis ingestion pipeline — KSQLDB stream processing
+--
+-- Topology
+-- --------
+--   MinIO S3 bucket notification
+--       → artemis.ingestion.storage.s3  (raw S3 event, JSON)
+--       → [this file] flatten + reshape
+--       → artemis.ingestion.celery.tasks  (Celery v2 task message, JSON, key=namespace_id)
+--       → [this file] re-partition by task_id
+--       → artemis.ingestion.celery.tasks.routed  (JSON, key=task_id)
+--       → Camel Spring RabbitMQ Sink Connector
+--           SMT: HeaderFrom$Key   {task_id: <uuid>} key → Kafka header `CamelHeader.id`
+--           SMT: InsertHeader adds `CamelHeader.task` = "tasks.ingest"
+--           SMT: InsertHeader adds `CamelHeader.CamelSpringRabbitmqContentType` = "application/json"
+--       → RabbitMQ → Celery worker `tasks.ingest`
+--
+-- Why two CSAS hops instead of one?
+--   The first CSAS (`artemis-ingestion-celery-tasks`) partitions by namespace_id so
+--   that all events for the same namespace land on the same partition, preserving
+--   relative ordering of CREATE / MODIFY / DELETE for a given namespace.
+--   The second CSAS (`artemis-ingestion-celery-tasks-routed`) re-partitions by
+--   task_id so that task_id becomes the Kafka record KEY.
+--
+-- Why is task_id in the KEY (not the VALUE)?
+--   ksqlDB cannot write Kafka record headers in CSAS output.  Promoting task_id
+--   into CamelHeader.id (Celery v2 task UUID) requires HeaderFrom$Key on the
+--   RabbitMQ sink connector, which reads from the Kafka record KEY.  PARTITION BY
+--   task_id makes task_id the KEY and strips it from the VALUE, so the message
+--   body is clean args+kwargs only (exact Celery v2 format).  ByteArrayConverter
+--   on the value avoids the JsonConverter → HashMap → byte[] conversion error.
+--
+-- MinIO metadata keys written by the storage service
+-- ---------------------------------------------------
+--   X-Amz-Meta-Task_id  : str(uuid4)   — Celery task UUID (top-level for HeaderFrom SMT)
+--   X-Amz-Meta-Contract : JSON string  — full IngestionTaskDetails (see contract.py)
+--
+-- Contract JSON structure (IngestionTaskDetails)
+-- -----------------------------------------------
+--   upload_action  : "create" | "modify" | "delete"
+--   s3             : { bucket, object }
+--   source         : { source, content_type, obj_id, object_type }
+--   info           : { namespace_id }
+--
+-- Celery v2 kwargs contract (tasks.ingest)
+-- -----------------------------------------
+--   s3           : S3Details       { bucket, object }
+--   source       : SourceDetails   { source, content_type, obj_id, object_type }
+--   upload_action: UploadAction    "CREATE" | "MODIFY" | "DELETE"
+--   info         : IngestionInfo   { namespace_id }
+--
+-- Note: task_id does NOT appear in kwargs — it travels as the Kafka header
+-- `CamelHeader.id`, promoted by HeaderFrom$Key on the RabbitMQ sink connector
+-- reading from artemis.ingestion.celery.tasks.routed (whose key is task_id).
+-- Celery reads this header as the task UUID (protocol v2).
+--
+-- Note: UploadAction values are uppercase; IngestionTaskDetails.upload_action
+-- (storage service) writes lowercase. UCASE() normalises the value.
+--
+-- Note: EXTRACTJSONFIELD returns STRING for all nested contract fields.
+-- Celery worker deserialises these via Pydantic (UUID, str coercions).
+
+-- consume from the earliest available offset
+SET 'auto.offset.reset' = 'earliest';
+
+
+-- ---------------------------------------------------------------------------
+-- 1. Raw S3 event stream
+--
+-- MinIO publishes one event record per PUT/DELETE operation.
+-- Only the fields required downstream are declared; the rest are ignored.
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE STREAM `artemis-ingestion-storage-s3` (
+  EventName  STRING,
+  Records    ARRAY<STRUCT<
+    s3 STRUCT<
+      bucket STRUCT<name STRING>,
+      object STRUCT<
+        key          STRING,
+        userMetadata STRUCT<
+          `X-Amz-Meta-Task_id`   STRING,
+          `X-Amz-Meta-Contract`  STRING
+        >
+      >
+    >
+  >>
+)
+WITH (
+  KAFKA_TOPIC  = 'artemis.ingestion.storage.s3',
+  VALUE_FORMAT = 'JSON',
+  PARTITIONS   = 1
+);
+
+
+-- ---------------------------------------------------------------------------
+-- 2. Flatten and reshape into the Celery v2 task message format
+--
+-- Output topic: artemis.ingestion.celery.tasks
+--
+-- The message value matches the kwargs structure expected by tasks.ingest.
+-- `task_id` is included as a top-level field so the HeaderFrom SMT on the
+-- Camel RabbitMQ Sink Connector can promote it to the `CamelHeader.id`
+-- Kafka message header (Celery v2 protocol requirement).
+--
+-- All contract fields are extracted from the JSON string stored in
+-- `X-Amz-Meta-Contract` using EXTRACTJSONFIELD. This avoids the MinIO
+-- flat-metadata limitation: the storage service serialises the entire
+-- IngestionTaskDetails as a single JSON value.
+--
+-- ARRAY_REMOVE(ARRAY[0], 0) is the only way to produce an empty ARRAY in
+-- ksqlDB — required by the Celery v2 message envelope (`args` must be []).
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE STREAM `artemis-ingestion-celery-tasks`
+WITH (
+  KAFKA_TOPIC  = 'artemis.ingestion.celery.tasks',
+  VALUE_FORMAT = 'JSON',
+  KEY_FORMAT   = 'JSON'
+)
+AS SELECT
+  -- task_id as top-level field: extracted by HeaderFrom SMT → CamelHeader.id
+  Records[1]->s3->object->userMetadata->`X-Amz-Meta-Task_id` AS `task_id`,
+
+  -- Celery v2 envelope: args must be an empty array
+  ARRAY_REMOVE(ARRAY[0], 0) AS `args`,
+
+  -- ksqlDB requires the PARTITION BY expression to appear in the SELECT projection.
+  -- It is then used only as the Kafka record key; ksqlDB strips it from the value.
+  EXTRACTJSONFIELD(
+    Records[1]->s3->object->userMetadata->`X-Amz-Meta-Contract`,
+    '$.info.namespace_id'
+  ) AS `namespace_id`,
+
+  -- kwargs: matches tasks.ingest(s3, source, upload_action, info) signature
+  STRUCT(
+    `s3` := STRUCT(
+      `bucket` := EXTRACTJSONFIELD(
+                    Records[1]->s3->object->userMetadata->`X-Amz-Meta-Contract`,
+                    '$.s3.bucket'
+                  ),
+      `object` := EXTRACTJSONFIELD(
+                    Records[1]->s3->object->userMetadata->`X-Amz-Meta-Contract`,
+                    '$.s3.object'
+                  )
+    ),
+    `source` := STRUCT(
+      `source`       := EXTRACTJSONFIELD(
+                          Records[1]->s3->object->userMetadata->`X-Amz-Meta-Contract`,
+                          '$.source.source'
+                        ),
+      `content_type` := EXTRACTJSONFIELD(
+                          Records[1]->s3->object->userMetadata->`X-Amz-Meta-Contract`,
+                          '$.source.content_type'
+                        ),
+      `obj_id`       := EXTRACTJSONFIELD(
+                          Records[1]->s3->object->userMetadata->`X-Amz-Meta-Contract`,
+                          '$.source.obj_id'
+                        ),
+      `object_type`  := EXTRACTJSONFIELD(
+                          Records[1]->s3->object->userMetadata->`X-Amz-Meta-Contract`,
+                          '$.source.object_type'
+                        )
+    ),
+    `upload_action` := UCASE(EXTRACTJSONFIELD(
+                          Records[1]->s3->object->userMetadata->`X-Amz-Meta-Contract`,
+                          '$.upload_action'
+                        )),
+    `info` := STRUCT(
+      `namespace_id` := EXTRACTJSONFIELD(
+                          Records[1]->s3->object->userMetadata->`X-Amz-Meta-Contract`,
+                          '$.info.namespace_id'
+                        )
+    )
+  ) AS `kwargs`
+
+FROM `artemis-ingestion-storage-s3`
+
+-- Partition by namespace_id: all events for the same namespace land on the same
+-- partition, preserving relative ordering of CREATE / MODIFY / DELETE for a given
+-- namespace. This sets the Kafka record key to namespace_id.
+--
+-- HeaderFrom$Value on the sink connector reads task_id from the message *value*,
+-- not from the key, so it is unaffected by this partitioning choice.
+PARTITION BY EXTRACTJSONFIELD(
+  Records[1]->s3->object->userMetadata->`X-Amz-Meta-Contract`,
+  '$.info.namespace_id'
+)
+
+EMIT CHANGES;
+
+
+-- ---------------------------------------------------------------------------
+-- 3. Re-partition by task_id → task_id becomes the Kafka record KEY
+--
+-- Output topic: artemis.ingestion.celery.tasks.routed
+--
+-- PARTITION BY STRUCT produces a named key {"task_id": "<uuid>"} directly,
+-- so the RabbitMQ sink connector needs no HoistField$Key transform:
+--   key.converter   = JsonConverter (deserialises the struct key)
+--   value.converter = ByteArrayConverter (raw JSON bytes — no HashMap issue)
+--   HeaderFrom$Key  extracts task_id directly → Kafka header CamelHeader.id
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE STREAM `artemis-ingestion-celery-tasks-routed`
+WITH (
+  KAFKA_TOPIC  = 'artemis.ingestion.celery.tasks.routed',
+  VALUE_FORMAT = 'JSON',
+  KEY_FORMAT   = 'JSON',
+  PARTITIONS   = 1
+)
+AS SELECT
+  -- PARTITION BY expression must appear in SELECT; ksqlDB strips it from the value.
+  STRUCT(`task_id` := `task_id`) as `task_key`,
+  `args`,
+  `kwargs`
+FROM `artemis-ingestion-celery-tasks`
+PARTITION BY STRUCT(`task_id` := `task_id`)
+
+EMIT CHANGES;
