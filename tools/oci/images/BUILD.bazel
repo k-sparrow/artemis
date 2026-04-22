@@ -656,6 +656,98 @@ kafka_connect_connector_instance(
     connector_name = "CamelHttpSinkConnector__PrivateFilesAutoDelete",
 )
 
+# ---------------------------------------------------------------------------
+# Artemis enterprise system connectors (owned by kafka-connect-init sidecar)
+# ---------------------------------------------------------------------------
+
+kafka_connect_connector_instance(
+    name = "artemis-http-sink-connector-intake",
+    connector_config = {
+        "connector.class": "io.aiven.kafka.connect.http.HttpSinkConnector",
+        "tasks.max": "1",
+        "topics": "artemis.datasource.filesystem.intake",
+        "http.url": "http://backend-enterprise-intake:9000/intake",
+        "http.authorization.type": "none",
+        "batching.enabled": "false",
+        "consumer.override.auto.offset.reset": "latest",
+        "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+        "key.converter.schemas.enable": "false",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter.schemas.enable": "false",
+        "errors.tolerance": "all",
+        "errors.deadletterqueue.topic.name": "artemis.datasource.filesystem.intake.dlq",
+        "errors.deadletterqueue.topic.replication.factor": "1",
+        "errors.deadletterqueue.context.headers.enable": "true",
+    },
+    connector_name = "AivenHttpSinkConnector__FilesystemIntake",
+)
+
+kafka_connect_connector_instance(
+    name = "artemis-rabbitmq-sink-connector-celery",
+    connector_config = {
+        "connector.class": "org.apache.camel.kafkaconnector.springrabbitmqsink.CamelSpringrabbitmqsinkSinkConnector",
+        "tasks.max": "1",
+        "topics": "artemis.ingestion.celery.tasks.routed",
+        # RabbitMQ connection — matches backend-indexing-controller-celery-worker env in compose
+        "camel.kamelet.spring-rabbitmq-sink.host": "rabbitmq",
+        "camel.kamelet.spring-rabbitmq-sink.port": "5672",
+        "camel.kamelet.spring-rabbitmq-sink.username": "artemis",
+        "camel.kamelet.spring-rabbitmq-sink.password": "artemis",
+        "camel.kamelet.spring-rabbitmq-sink.vhost": "artemis",
+        # Direct exchange + routing key matching Celery queue artemis.ingestion.fetch-and-parse
+        "camel.kamelet.spring-rabbitmq-sink.exchangeName": "ingestion_test0",
+        "camel.kamelet.spring-rabbitmq-sink.routingKey": "fetch-and-parse",
+        "camel.kamelet.spring-rabbitmq-sink.queues": "artemis.ingestion.fetch-and-parse",
+        # Queue is declared by the Celery worker (durable=true) — connector only publishes
+        "camel.kamelet.spring-rabbitmq-sink.autoDeclareProducer": "false",
+        # key.converter=JsonConverter deserialises the struct key {"task_id": "<uuid>"}
+        # emitted by ksqlDB PARTITION BY STRUCT(`task_id` := `task_id`)
+        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "key.converter.schemas.enable": "false",
+        # ByteArrayConverter passes raw JSON bytes to Camel without HashMap deserialisation
+        "value.converter": "org.apache.kafka.connect.converters.ByteArrayConverter",
+        "consumer.override.auto.offset.reset": "latest",
+        # SMT chain: extract task_id from struct key → Celery v2 protocol headers
+        "transforms": "moveTaskId,insertTaskNameHeader,insertContentTypeHeader",
+        # HeaderFrom$Key: {"task_id": "<uuid>"} → CamelHeader.id (Celery task UUID)
+        "transforms.moveTaskId.type": "org.apache.kafka.connect.transforms.HeaderFrom$Key",
+        "transforms.moveTaskId.fields": "task_id",
+        "transforms.moveTaskId.headers": "CamelHeader.id",
+        "transforms.moveTaskId.operation": "move",
+        "transforms.insertTaskNameHeader.type": "org.apache.kafka.connect.transforms.InsertHeader",
+        "transforms.insertTaskNameHeader.header": "CamelHeader.task",
+        "transforms.insertTaskNameHeader.value.literal": "tasks.ingest",
+        "transforms.insertContentTypeHeader.type": "org.apache.kafka.connect.transforms.InsertHeader",
+        "transforms.insertContentTypeHeader.header": "CamelHeader.CamelSpringRabbitmqContentType",
+        "transforms.insertContentTypeHeader.value.literal": "application/json",
+    },
+    connector_name = "CamelRabbitMQSinkConnector__CeleryTasksIngestion",
+)
+
+kafka_connect_init_image(
+    name = "artemis-kafka-connect-init",
+    base = "@curl",
+    connector_config_dir = "config",
+    connectors = [
+        # ksqlDB-shaped intake messages → enterprise intake service
+        ":artemis-http-sink-connector-intake",
+        # ksqlDB-routed Celery tasks → RabbitMQ → Celery worker
+        ":artemis-rabbitmq-sink-connector-celery",
+    ],
+    exec_dir = "etc/bin",
+)
+
+oci_load(
+    name = "artemis-kafka-connect-init.tarball",
+    image = ":artemis-kafka-connect-init",
+    repo_tags = ["artemis/cp-kafka-connect-init:latest"],
+)
+
+command(
+    name = "artemis-kafka-connect-init.cmd",
+    command = ":artemis-kafka-connect-init.tarball",
+)
+
 kafka_connect_init_image(
     name = "kafka-connect-init",
     # we use curl to configure connectors to Kafka Connect via its REST API
@@ -729,6 +821,7 @@ filegroup(
             "postgres",
         ]
     ] + [
+        ":artemis-kafka-connect-init",
         ":kafka-connect",
         ":kafka-connect-init",
     ],
@@ -754,6 +847,7 @@ multirun(
         for tool in [
             "kafka-connect",
             "kafka-connect-init",
+            "artemis-kafka-connect-init",
             "kong",
             "ksqldb",
             "postgres",
