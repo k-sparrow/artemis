@@ -1,0 +1,15 @@
+load("@aspect_bazel_lib//lib:write_source_files.bzl", "write_source_files")
+
+# bazel run  //deployment/docker:docker_compose.update
+#   → copies the generated compose file into this directory
+# bazel test //deployment/docker:docker_compose.update_test
+#   → fails if the checked-in file drifts from the generated output;
+#     run the target above to fix
+write_source_files(
+    name = "docker_compose.update",
+    check_that_out_file_exists = True,
+    files = {
+        "docker-compose.dev.yaml": "//tools/docker:docker_compose_dev",
+    },
+    suggested_update_target = "//deployment/docker:docker_compose.update",
+)
