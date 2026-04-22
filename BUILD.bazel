@@ -6,6 +6,7 @@
 load("@bazel_gazelle//:def.bzl", "gazelle")
 load("@buildifier_prebuilt//:rules.bzl", "buildifier")
 load("@pip//:requirements.bzl", "all_whl_requirements", "requirement")
+load("@rules_multirun//:defs.bzl", "multirun")
 load("@rules_python//python:defs.bzl", "py_binary", "py_library")
 load("@rules_python//python:pip.bzl", "compile_pip_requirements")
 load("@rules_python_gazelle_plugin//manifest:defs.bzl", "gazelle_python_manifest")
@@ -73,6 +74,18 @@ exports_files(
 alias(
     name = "format",
     actual = "//tools/format",
+)
+
+# Load all dev Docker images into the local daemon.
+# Add //src:load.prod.all + a load.images.prod counterpart once prod images exist.
+multirun(
+    name = "load.images.dev",
+    commands = [
+        "//src:load.dev.all",
+        "//tools/oci/images/ksqldb:load.all",
+    ],
+    jobs = 1,  # sequential — docker load is not safe to parallelize
+    visibility = ["//visibility:public"],
 )
 
 # linting for .bzl and BUILD files

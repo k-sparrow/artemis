@@ -1,0 +1,32 @@
+load("@rules_python//python:defs.bzl", "py_binary")
+
+# Base generator binary — used as a tool in the genrules below.
+py_binary(
+    name = "compose_generator",
+    srcs = ["compose_generator.py"],
+    data = ["docker-compose.tmpl.yaml"],
+    visibility = ["//visibility:public"],
+)
+
+# Dev compose artifact — consumed by //deployment/docker:docker_compose.update.
+genrule(
+    name = "docker_compose_dev",
+    srcs = ["docker-compose.tmpl.yaml"],
+    outs = ["docker-compose.dev.yaml"],
+    cmd = "$(location :compose_generator) --mode dev --template $(location :docker-compose.tmpl.yaml) --output $@",
+    tools = [":compose_generator"],
+    visibility = ["//deployment/docker:__pkg__"],
+)
+
+# Test artifact — CPU Docling, no GPU mounts, TEI as a container.
+# Used by e2e tests via testcontainers.compose.DockerCompose.
+#
+#   bazel build //tools/docker:docker_compose_test
+genrule(
+    name = "docker_compose_test",
+    srcs = ["docker-compose.tmpl.yaml"],
+    outs = ["docker-compose.test.yaml"],
+    cmd = "$(location :compose_generator) --mode test --template $(location :docker-compose.tmpl.yaml) --output $@",
+    tools = [":compose_generator"],
+    visibility = ["//tests:__subpackages__"],
+)
