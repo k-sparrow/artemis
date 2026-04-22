@@ -17,7 +17,6 @@ py_library(
         "//src/backend/enterprise/intake/api:main",
         requirement("fastapi"),
         requirement("httpx"),
-        requirement("kafka-connect-py"),
         requirement("pytest"),
     ],
 )

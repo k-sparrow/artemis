@@ -24,9 +24,31 @@ import pytest
 from kafka import KafkaProducer
 from kafka_connect import KafkaConnect
 
-from src.backend.enterprise.intake.api.templates import render_http_sink_connector
-
 _INTAKE_TOPIC = "artemis.datasource.filesystem.intake"
+
+
+def _render_http_sink_connector(*, connector_name: str, intake_url: str) -> dict:
+    return {
+        "name": connector_name,
+        "config": {
+            "connector.class": "io.aiven.kafka.connect.http.HttpSinkConnector",
+            "tasks.max": "1",
+            "topics": _INTAKE_TOPIC,
+            "http.url": intake_url,
+            "http.authorization.type": "none",
+            "batching.enabled": "false",
+            "consumer.override.auto.offset.reset": "latest",
+            "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+            "key.converter.schemas.enable": "false",
+            "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+            "value.converter.schemas.enable": "false",
+            "errors.tolerance": "all",
+            "errors.deadletterqueue.topic.name": "artemis.datasource.filesystem.intake.dlq",  # noqa: E501
+            "errors.deadletterqueue.topic.replication.factor": "1",
+            "errors.deadletterqueue.context.headers.enable": "true",
+        },
+    }
+
 
 _NAMESPACE_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 _FILE_PATH = "/watch/doc1.txt"
@@ -145,7 +167,7 @@ class TestHttpSinkConnector:
     ) -> Iterator[KafkaConnect]:
         client = _kc_client(kafka_connect_url)
         connector_name = f"test-http-sink-{uuid.uuid4().hex[:8]}"
-        config = render_http_sink_connector(
+        config = _render_http_sink_connector(
             connector_name=connector_name,
             intake_url=f"{wiremock_internal_url}/intake",
         )

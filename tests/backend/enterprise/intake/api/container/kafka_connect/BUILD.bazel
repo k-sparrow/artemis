@@ -33,7 +33,6 @@ py_test(
     ],
     deps = [
         ":conftest",
-        "//src/backend/enterprise/intake/api:templates",
         "//tests/lib/testcontainers/kafka:pkg",
         requirement("httpx"),
         requirement("kafka-python-ng"),
