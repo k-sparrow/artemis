@@ -1,0 +1,47 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    visibility = ["//visibility:public"],
+)
+
+# artemis/ksqldb-init:latest — ingestion streams (artemis_init.ksql)
+#
+# Prerequisite: bazel run //tools/oci/images/ksqldb:artemis_init_tarball
+py_test(
+    name = "test_ksqldb_init",
+    srcs = [
+        "conftest.py",
+        "test_ksqldb_init.py",
+    ],
+    tags = ["integration"],
+    deps = [
+        "//tests/lib/testcontainers/kafka:pkg",
+        requirement("httpx"),
+        requirement("kafka-python-ng"),
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)
+
+# artemis/ksqldb-enterprise-init:latest — enterprise filesystem streams
+#
+# Prerequisite: bazel run //tools/oci/images/ksqldb:enterprise_init_tarball
+py_test(
+    name = "test_enterprise_ksqldb_init",
+    srcs = [
+        "conftest.py",
+        "test_enterprise_ksqldb_init.py",
+    ],
+    tags = ["integration"],
+    deps = [
+        "//tests/lib/testcontainers/kafka:pkg",
+        requirement("httpx"),
+        requirement("kafka-python-ng"),
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)

@@ -1,0 +1,45 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    visibility = ["//visibility:public"],
+)
+
+py_library(
+    name = "conftest",
+    testonly = True,
+    srcs = ["conftest.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//tests/lib/testcontainers/tei:pkg",
+        requirement("httpx"),
+        requirement("pytest"),
+        requirement("qdrant-client"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_full_pipeline",
+    srcs = ["test_full_pipeline.py"],
+    args = [
+        "--compose-file",
+        "$(location //tools/docker:docker_compose_test)",
+    ],
+    data = ["//tools/docker:docker_compose_test"],
+    tags = [
+        "e2e",
+        "local",  # disable Bazel sandbox — Docker volume mounts need real host paths
+    ],
+    deps = [
+        ":conftest",
+        requirement("fastapi"),
+        requirement("httpx"),
+        requirement("pytest"),
+        requirement("qdrant-client"),
+        requirement("testcontainers"),
+    ],
+)

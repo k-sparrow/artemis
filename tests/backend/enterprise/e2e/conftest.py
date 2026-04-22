@@ -1,0 +1,283 @@
+"""Session fixtures for the enterprise → ingestion full e2e test.
+
+Full pipeline under test:
+  POST /data-sources              [backend-enterprise-data-sources]
+      → KafkaConnect deploys FileSource connector
+      → FileSource (Camel) watches a host directory mounted into kafka-connect
+      → artemis.datasource.filesystem          [Kafka]
+      → ksqlDB transformation
+      → artemis.datasource.filesystem.intake   [Kafka]
+      → HTTP sink                              [deployed by artemis-kafka-connect-init]
+      → POST /intake                           [backend-enterprise-intake]
+      → POST /namespaces/{id}/objects          [backend-storage]
+      → Celery task (controller worker)
+      → Docling parse + TEI embed
+      → Qdrant vectors
+
+The docker-compose.test.yaml artefact is produced by:
+    bazel build //tools/docker:docker_compose_test
+
+and passed to this conftest via the --compose-file pytest argument, set in
+BUILD.bazel using $(location //tools/docker:docker_compose_test).
+
+Profiles started: infra, enterprise, ai
+(ai profile covers docling-serve; TEI is managed as a testcontainer fixture
+ so the model cache is mounted from the host with no download required)
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import tempfile
+import time
+from pathlib import Path
+
+import httpx
+import pytest
+from qdrant_client import QdrantClient
+from testcontainers.compose import DockerCompose
+from tests.lib.testcontainers.tei import TEIContainer
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _clear_dir(d: Path) -> None:
+    """Remove all contents of *d* without deleting the directory itself."""
+    if not d.exists():
+        return
+    for child in d.iterdir():
+        if child.is_file():
+            child.unlink()
+        else:
+            shutil.rmtree(child)
+
+
+def _wait_for_http(base_url: str, path: str, timeout: int = 300) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            resp = httpx.get(f"{base_url}{path}", timeout=5.0)
+            if resp.is_success:
+                return
+        except httpx.RequestError:
+            pass
+        time.sleep(3)
+    raise TimeoutError(f"{base_url}{path} did not become ready within {timeout}s")
+
+
+def _wait_connector_running(
+    data_sources_url: str, source_id: str, timeout: int = 120
+) -> None:
+    deadline = time.monotonic() + timeout
+    with httpx.Client(base_url=data_sources_url, timeout=10.0) as client:
+        while time.monotonic() < deadline:
+            resp = client.get(f"/data-sources/{source_id}")
+            if resp.is_success:
+                if resp.json().get("kafka_status", {}).get("state") == "RUNNING":
+                    return
+            time.sleep(3)
+    raise TimeoutError(
+        f"Connector for data source {source_id} did not reach RUNNING within {timeout}s"
+    )
+
+
+def _wait_kc_connector_running(
+    kc_url: str, connector_name: str, timeout: int = 120
+) -> None:
+    """Poll Kafka Connect REST API until a connector reaches RUNNING state."""
+    deadline = time.monotonic() + timeout
+    with httpx.Client(base_url=kc_url, timeout=10.0) as client:
+        while time.monotonic() < deadline:
+            try:
+                resp = client.get(f"/connectors/{connector_name}/status")
+                if resp.is_success:
+                    s = resp.json()
+                    tasks = s.get("tasks", [])
+                    if (
+                        s.get("connector", {}).get("state") == "RUNNING"
+                        and tasks
+                        and all(t["state"] == "RUNNING" for t in tasks)
+                    ):
+                        return
+            except httpx.RequestError:
+                pass
+            time.sleep(3)
+    raise TimeoutError(
+        f"Kafka Connect connector {connector_name!r} "
+        f"did not reach RUNNING within {timeout}s"
+    )
+
+
+# ---------------------------------------------------------------------------
+# pytest option
+# ---------------------------------------------------------------------------
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--compose-file",
+        required=True,
+        help=(
+            "Absolute path to the generated docker-compose.test.yaml "
+            "(provided by Bazel via $(location))."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Session fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def compose_file(pytestconfig: pytest.Config) -> Path:
+    return Path(pytestconfig.getoption("--compose-file"))
+
+
+@pytest.fixture(scope="session")
+def tei(request: pytest.FixtureRequest) -> str:
+    """Starts a TEI container and returns its base URL (http://localhost:{port}).
+
+    Mounts the local HuggingFace cache so no model download is required.
+    Sets TEI_HOST_URL in the process environment before the compose stack
+    starts, so docker-compose substitutes it into service env vars at startup.
+    Must be requested before the ``compose`` fixture.
+    """
+    hf_cache = Path.home() / ".cache/huggingface"
+    container = TEIContainer("sentence-transformers/all-MiniLM-L6-v2")
+    container.with_hf_cache(str(hf_cache))
+    container.start()
+    request.addfinalizer(container.stop)
+
+    port = container.get_exposed_port(TEIContainer.HTTP_PORT)
+    # Compose services reach TEI via the host network bridge.
+    os.environ["TEI_HOST_URL"] = f"http://host.docker.internal:{port}"
+    return container.get_url()
+
+
+@pytest.fixture(scope="session")
+def watch_dir(request: pytest.FixtureRequest) -> Path:
+    """Host directory mounted into kafka-connect and intake as /watch.
+
+    Uses tempfile.mkdtemp() (resolves to a real /tmp path) rather than
+    pytest's tmp_path_factory, which creates directories inside Bazel's
+    sandbox that Docker cannot reach as volume mounts.
+
+    Sets ARTEMIS_WATCH_DIR before the compose stack starts so Docker Compose
+    substitutes it into the volume declarations in docker-compose.test.yaml.
+    Must be requested before the ``compose`` fixture.
+    """
+    d = Path(tempfile.mkdtemp(prefix="artemis-e2e-watch-"))
+    _clear_dir(d)
+    request.addfinalizer(lambda: _clear_dir(d))
+    request.addfinalizer(lambda: shutil.rmtree(d, ignore_errors=True))
+    os.environ["ARTEMIS_WATCH_DIR"] = str(d)
+    return d
+
+
+_DIAGNOSTIC_SERVICES = [
+    "backend-storage",
+    "backend-enterprise-data-sources",
+    "backend-enterprise-intake",
+    "backend-indexing-ingestion",
+    "backend-indexing-controller-celery-worker",
+    "backend-parsing",
+    "kafka-connect",
+    "artemis-kafka-connect-init",
+    "ksqldb-server",
+    "artemis-ksqldb-init",
+    "ksqldb-enterprise-init",
+    "tei",
+]
+
+
+@pytest.fixture(scope="session")
+def compose(
+    compose_file: Path, watch_dir: Path, tei: str, request: pytest.FixtureRequest
+):  # tei and watch_dir set env vars first
+    dc = DockerCompose(
+        context=str(compose_file.parent),
+        compose_file_name=[compose_file.name],
+        profiles=["infra", "enterprise", "ai"],
+        pull=False,
+        build=False,
+    )
+    try:
+        dc.start()
+    except Exception:
+        # docker compose up --wait exits 1 when any container exits, even
+        # successfully-completed init containers (e.g. ksqldb-init exits 0).
+        # We verify actual readiness ourselves via HTTP health checks below.
+        pass
+
+    # Wait for the services the test actively drives.
+    # Docling and TEI are included in the ai profile and can be slow to start.
+    host_storage, port_storage = dc.get_service_host_and_port("backend-storage", 7000)
+    host_ds, port_ds = dc.get_service_host_and_port(
+        "backend-enterprise-data-sources", 9500
+    )
+    host_intake, port_intake = dc.get_service_host_and_port(
+        "backend-enterprise-intake", 9000
+    )
+    host_ingestion, port_ingestion = dc.get_service_host_and_port(
+        "backend-indexing-ingestion", 10000
+    )
+
+    host_kc, port_kc = dc.get_service_host_and_port("kafka-connect", 8083)
+    kc_url = f"http://{host_kc}:{port_kc}"
+
+    try:
+        _wait_for_http(f"http://{host_storage}:{port_storage}", "/health/readiness")
+        _wait_for_http(f"http://{host_ds}:{port_ds}", "/health/liveness")
+        _wait_for_http(f"http://{host_intake}:{port_intake}", "/health/liveness")
+        _wait_for_http(f"http://{host_ingestion}:{port_ingestion}", "/health/readiness")
+        # Both system connectors must be RUNNING before any file is dropped.
+        # auto.offset.reset=latest means messages produced before the connector
+        # is up would be lost.
+        _wait_kc_connector_running(kc_url, "AivenHttpSinkConnector__FilesystemIntake")
+        _wait_kc_connector_running(
+            kc_url, "CamelRabbitMQSinkConnector__CeleryTasksIngestion"
+        )
+    except Exception:
+        _dump_service_logs(dc)
+        dc.stop()
+        raise
+
+    yield dc
+
+    _dump_service_logs(dc)
+    dc.stop()
+
+
+def _dump_service_logs(dc: DockerCompose) -> None:
+    for svc in _DIAGNOSTIC_SERVICES:
+        try:
+            stdout, stderr = dc.get_logs(svc)
+            if stdout.strip() or stderr.strip():
+                print(f"\n=== {svc} ===\n{stdout}\n{stderr}")
+        except Exception as e:
+            print(f"\n=== {svc}: could not retrieve logs: {e} ===")
+
+
+@pytest.fixture(scope="session")
+def storage_url(compose: DockerCompose) -> str:
+    host, port = compose.get_service_host_and_port("backend-storage", 7000)
+    return f"http://{host}:{port}"
+
+
+@pytest.fixture(scope="session")
+def data_sources_url(compose: DockerCompose) -> str:
+    host, port = compose.get_service_host_and_port(
+        "backend-enterprise-data-sources", 9500
+    )
+    return f"http://{host}:{port}"
+
+
+@pytest.fixture(scope="session")
+def qdrant_client(compose: DockerCompose) -> QdrantClient:
+    host, port = compose.get_service_host_and_port("vectorstore", 6333)
+    return QdrantClient(host=host, port=int(port))

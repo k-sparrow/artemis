@@ -1,0 +1,30 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    visibility = ["//visibility:public"],
+)
+
+# Contract tests: artemis.ingestion.storage.s3 → artemis.ingestion.celery.tasks
+#
+# Validates the ksqlDB stream logic (artemis_init.ksql) against real Kafka +
+# ksqlDB containers.  Streams are created via REST API, not the init OCI image.
+#
+# Infrastructure: KafkaContainer + KSQLDbContainer only (no host mounts).
+py_test(
+    name = "test_s3_to_celery",
+    srcs = [
+        "conftest.py",
+        "test_s3_to_celery.py",
+    ],
+    tags = ["integration"],
+    deps = [
+        "//tests/lib/testcontainers/kafka:pkg",
+        requirement("kafka-python-ng"),
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)
