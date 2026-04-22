@@ -5,7 +5,11 @@ from src.backend.controller.worker.config import settings
 
 __all__ = ["app"]
 
-app = Celery(broker=settings.MESSAGE_BROKER_URL)
+app = Celery(
+    broker=settings.MESSAGE_BROKER_URL,
+    # Result backend is declared per-task (backend=_db_backend in tasks.py)
+    # using our custom DatabaseBackend. No app-level backend is set here.
+)
 
 app.conf.result_serializer = "json"
 app.conf.database_create_tables_at_setup = True

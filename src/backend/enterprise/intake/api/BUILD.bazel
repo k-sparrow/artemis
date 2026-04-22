@@ -43,7 +43,6 @@ py_library(
     srcs = ["main.py"],
     deps = [
         ":dependencies",
-        ":templates",
         ":utils",
         "//src/backend/enterprise/intake/api/intake:exceptions",
         "//src/lib/backend/api:exceptions",
@@ -58,14 +57,7 @@ py_library(
         ":config",
         requirement("fastapi"),
         requirement("httpx"),
-        requirement("kafka-connect-py"),
     ],
-)
-
-py_library(
-    name = "templates",
-    srcs = ["templates.py"],
-    deps = [],
 )
 
 py_library(
@@ -73,12 +65,8 @@ py_library(
     srcs = ["utils.py"],
     deps = [
         ":config",
-        ":dependencies",
-        ":templates",
         "//src/lib/backend/logging:pkg",
         requirement("fastapi"),
-        requirement("kafka-connect-py"),
-        requirement("requests"),
     ],
 )
 

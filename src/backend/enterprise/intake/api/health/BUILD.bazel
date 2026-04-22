@@ -22,21 +22,9 @@ py_library(
     name = "router",
     srcs = ["router.py"],
     deps = [
-        ":checks",
         "//src/backend/enterprise/intake/api:config",
-        "//src/backend/enterprise/intake/api:dependencies",
         requirement("aiohttp"),
         requirement("fastapi"),
         requirement("fastapi-healthchecks"),
-        requirement("kafka-connect-py"),
-    ],
-)
-
-py_library(
-    name = "checks",
-    srcs = ["checks.py"],
-    deps = [
-        requirement("fastapi-healthchecks"),
-        requirement("kafka-connect-py"),
     ],
 )
