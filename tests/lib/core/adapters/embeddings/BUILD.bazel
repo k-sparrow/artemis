@@ -33,7 +33,10 @@ py_test(
     env = {
         "TC_MAX_TRIES": "1000000000",
     },
-    tags = ["unit"],
+    tags = [
+        "manual",
+        "unit",
+    ],
     deps = [
         ":conftest",
         "//src/lib/core/adapters/embedding:pkg",

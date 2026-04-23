@@ -42,7 +42,7 @@ def _dispatch_delete_document(dispatch_app, s3_bucket: str, namespace_id: uuid.U
     return dispatch_app.send_task(
         "tasks.ingest",
         kwargs={
-            "s3": {"bucket": s3_bucket, "object": "test.md"},
+            "s3": {"bucket": s3_bucket, "object": "test.md", "size": 1},
             "source": _source_dict(namespace_id),
             "upload_action": "DELETE",
             "info": {"namespace_id": str(namespace_id)},
@@ -65,7 +65,7 @@ def _dispatch_ingest(dispatch_app, s3_bucket: str, namespace_id: uuid.UUID):
     return dispatch_app.send_task(
         "tasks.ingest",
         kwargs={
-            "s3": {"bucket": s3_bucket, "object": "test.md"},
+            "s3": {"bucket": s3_bucket, "object": "test.md", "size": 1},
             "source": _source_dict(namespace_id),
             "upload_action": "CREATE",
             "info": {"namespace_id": str(namespace_id)},

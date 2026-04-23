@@ -142,7 +142,7 @@ async def test_delete_single_object_removes_only_target(
         count_filter=Filter(
             must=[
                 FieldCondition(
-                    key="metadata.namespace", match=MatchValue(value=str(namespace))
+                    key="metadata.namespace_id", match=MatchValue(value=str(namespace))
                 ),
                 FieldCondition(
                     key="metadata.obj_id", match=MatchValue(value=str(obj_id_a))
@@ -158,7 +158,7 @@ async def test_delete_single_object_removes_only_target(
         count_filter=Filter(
             must=[
                 FieldCondition(
-                    key="metadata.namespace", match=MatchValue(value=str(namespace))
+                    key="metadata.namespace_id", match=MatchValue(value=str(namespace))
                 ),
                 FieldCondition(
                     key="metadata.obj_id", match=MatchValue(value=str(obj_id_b))
@@ -195,7 +195,7 @@ async def test_delete_namespace_removes_all_chunks(
         count_filter=Filter(
             must=[
                 FieldCondition(
-                    key="metadata.namespace", match=MatchValue(value=str(namespace))
+                    key="metadata.namespace_id", match=MatchValue(value=str(namespace))
                 )
             ]
         ),

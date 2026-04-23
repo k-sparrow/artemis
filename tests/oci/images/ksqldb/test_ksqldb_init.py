@@ -101,11 +101,13 @@ def _show_streams(ksqldb_url: str) -> set[str]:
     return {s["name"] for s in resp.json()[0]["streams"]}
 
 
-def _make_s3_event(task_id: str, namespace_id: str, bucket: str, obj_key: str) -> dict:
+def _make_s3_event(
+    task_id: str, namespace_id: str, bucket: str, obj_key: str, size: int = 1024
+) -> dict:
     contract = json.dumps(
         {
             "upload_action": "create",
-            "s3": {"bucket": bucket, "object": obj_key},
+            "s3": {"bucket": bucket, "object": obj_key, "size": size},
             "source": {
                 "source": "storage",
                 "content_type": "text/plain",
@@ -310,6 +312,7 @@ class TestArtemisKsqlDbInit:
         s3 = record["kwargs"]["s3"]
         assert s3["bucket"] == "artemis"
         assert s3["object"] == obj_key
+        assert s3["size"] == 1024
 
     def test_s3_event_namespace_id_in_info(
         self, bootstrap_server: str, init_exit_code: int

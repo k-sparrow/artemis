@@ -5,6 +5,7 @@ py_test(
     name = "test_tasks",
     srcs = ["test_tasks.py"],
     deps = [
+        "//src/backend/controller/worker:exceptions",
         "//src/backend/controller/worker:tasks",
         "//src/lib/core/ingestion:types",
         "//tests/backend/controller/worker:conftest",

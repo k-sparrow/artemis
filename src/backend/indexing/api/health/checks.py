@@ -26,7 +26,8 @@ class QdrantHealthcheck(Check):
     Verifies:
     1. Qdrant connection is alive
     2. Collection exists
-    3. Schema has the namespace partition index (metadata.namespace with is_tenant=True)
+    3. Schema has the namespace partition index
+         (metadata.namespace_id with is_tenant=True)
     """
 
     def __init__(self, client: AsyncQdrantClient, collection_name: str):
@@ -50,13 +51,13 @@ class QdrantHealthcheck(Check):
 
             # Check for namespace partition index
             payload_schema = collection_info.payload_schema
-            namespace_field = payload_schema.get("metadata.namespace")
+            namespace_field = payload_schema.get("metadata.namespace_id")
 
             if namespace_field is None:
                 return CheckResult(
                     name=self._name,
                     passed=False,
-                    details="Missing 'metadata.namespace' index in collection schema",
+                    details="Missing 'metadata.namespace_id' index in collection schema",
                 )
 
             # Verify it's a tenant index (UUID type with is_tenant=True)
@@ -65,7 +66,7 @@ class QdrantHealthcheck(Check):
                 return CheckResult(
                     name=self._name,
                     passed=False,
-                    details="'metadata.namespace' index has no params configured",
+                    details="'metadata.namespace_id' index has no params configured",
                 )
 
             # Check if is_tenant is set
@@ -75,7 +76,7 @@ class QdrantHealthcheck(Check):
                     name=self._name,
                     passed=False,
                     details=(
-                        "'metadata.namespace' index is not configured "
+                        "'metadata.namespace_id' index is not configured "
                         "as tenant partition"
                     ),
                 )

@@ -64,7 +64,7 @@ _SAMPLE_CHUNKS_JSON = [
 
 class TestFetchFromS3:
     def _s3(self) -> S3Details:
-        return S3Details(bucket="my-bucket", object="docs/test.pdf")
+        return S3Details(bucket="my-bucket", object="docs/test.pdf", size=100)
 
     def test_returns_raw_bytes(self) -> None:
         mock_response = MagicMock()

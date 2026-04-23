@@ -50,7 +50,7 @@ class QdrantVectorStoreHandler(BaseVectorHandler):
                 # create a multi-tenancy index on namespace (UUID) for tenant isolation
                 self.client.create_payload_index(
                     collection_name=self._collection_name,
-                    field_name="metadata.namespace",
+                    field_name="metadata.namespace_id",
                     field_schema=models.UuidIndexParams(
                         type=models.UuidIndexType.UUID,
                         is_tenant=True,

@@ -67,7 +67,7 @@ def qdrant_client_with_index_no_tenant(
     )
     sync_client.create_payload_index(
         collection_name=COLLECTION_NAME,
-        field_name="metadata.namespace",
+        field_name="metadata.namespace_id",
         field_schema=models.PayloadSchemaType.KEYWORD,
     )
 
@@ -94,7 +94,7 @@ def qdrant_client_with_tenant_index(
     )
     sync_client.create_payload_index(
         collection_name=COLLECTION_NAME,
-        field_name="metadata.namespace",
+        field_name="metadata.namespace_id",
         field_schema=models.UuidIndexParams(
             type=models.UuidIndexType.UUID,
             is_tenant=True,

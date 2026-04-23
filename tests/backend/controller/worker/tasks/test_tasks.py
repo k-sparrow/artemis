@@ -24,6 +24,11 @@ from src.backend.controller.lib.schemas import (
     S3Details,
     UploadAction,
 )
+from src.backend.controller.worker.exceptions import (
+    ChunkIntegrityError,
+    EmptyObjectError,
+    S3IntegrityError,
+)
 
 # ----- module under test (imported after conftest patches the app) ----------
 from src.backend.controller.worker.tasks import (
@@ -37,7 +42,8 @@ from src.backend.controller.worker.tasks import (
 _NAMESPACE_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 _OBJ_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaab")
 
-_S3 = S3Details(bucket="docs", object="files/test.md")
+_S3 = S3Details(bucket="docs", object="files/test.md", size=10)
+_S3_EMPTY = S3Details(bucket="docs", object="files/empty.md", size=0)
 _SOURCE = SourceDetails(
     source="test.md",
     content_type="text/markdown",
@@ -354,6 +360,56 @@ class TestFetchAndParse:
         assert mock_parse.call_args[1]["file_bytes"] == b"file bytes"
         assert mock_parse.call_args[1]["source"].source == "test.md"
 
+    def test_empty_object_raises_empty_object_error(self) -> None:
+        """size=0 in the contract must raise EmptyObjectError before touching MinIO."""
+        with pytest.raises(EmptyObjectError):
+            fetch_and_parse.run(_S3_EMPTY, _SOURCE, _NAMESPACE_ID)
+
+    def test_s3_integrity_error_when_zero_bytes_fetched(self) -> None:
+        """size>0 in contract but MinIO returns 0 bytes must raise S3IntegrityError.
+
+        When called via .run() (no broker), self.retry() immediately re-raises
+        the wrapped exception rather than enqueuing a retry.
+        """
+        mock_fetch = MagicMock(return_value=b"")
+
+        with (
+            patch("src.backend.controller.worker.tasks.fetch_from_s3", mock_fetch),
+            patch(
+                "src.backend.controller.worker.tasks.get_s3_client",
+                return_value=MagicMock(),
+            ),
+        ):
+            with pytest.raises(S3IntegrityError):
+                fetch_and_parse.run(_S3, _SOURCE, _NAMESPACE_ID)
+
+    def test_chunk_integrity_error_when_multiple_obj_ids(self) -> None:
+        """Chunks with more than one obj_id must raise ChunkIntegrityError."""
+        other_obj_id = uuid.uuid4()
+        mixed_chunks = [
+            ParsedChunk(
+                page_content="a", source="f", type=ChunkType.TEXT, obj_id=_OBJ_ID
+            ),
+            ParsedChunk(
+                page_content="b", source="f", type=ChunkType.TEXT, obj_id=other_obj_id
+            ),
+        ]
+        mock_fetch = MagicMock(return_value=b"bytes")
+        mock_parse = MagicMock(return_value=mixed_chunks)
+
+        with (
+            patch("src.backend.controller.worker.tasks.fetch_from_s3", mock_fetch),
+            patch(
+                "src.backend.controller.worker.tasks.call_parsing_service", mock_parse
+            ),
+            patch(
+                "src.backend.controller.worker.tasks.get_s3_client",
+                return_value=MagicMock(),
+            ),
+        ):
+            with pytest.raises(ChunkIntegrityError):
+                fetch_and_parse.run(_S3, _SOURCE, _NAMESPACE_ID)
+
     def test_chunks_saved_to_store(self) -> None:
         """The chunks returned by the parsing service must be persisted to MinIO."""
         mock_fetch = MagicMock(return_value=b"bytes")
@@ -419,10 +475,12 @@ class TestIndex:
         ):
             return index.run(self._KEY, _NAMESPACE_ID)
 
-    def test_returns_upsert_result(self) -> None:
-        """The task must return the upsert result dict from the indexing service."""
+    def test_returns_upsert_result_with_obj_id(self) -> None:
+        """
+        The task must return the upsert result dict extended with obj_id from chunks.
+        """
         result = self._run(MagicMock(), MagicMock())
-        assert result == _UPSERT_RESULT
+        assert result == {**_UPSERT_RESULT, "obj_id": str(_OBJ_ID)}
 
     def test_loads_chunks_from_store(self) -> None:
         """
@@ -491,6 +549,11 @@ class TestIndex:
             index.run(self._KEY, _NAMESPACE_ID)
 
         mock_store_instance.delete.assert_called_once_with(self._KEY)
+
+    def test_includes_obj_id_from_chunks_in_result(self) -> None:
+        """The result dict must include obj_id extracted from the loaded chunks."""
+        result = self._run(MagicMock(), MagicMock())
+        assert result["obj_id"] == str(_OBJ_ID)
 
     def test_minio_key_not_deleted_on_indexing_failure(self) -> None:
         """On failure the object must be left in MinIO for dead-letter replay."""

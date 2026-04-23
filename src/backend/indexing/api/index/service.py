@@ -37,8 +37,8 @@ async def a_index_and_ingest(
 ) -> UpsertResult:
     """Index pre-parsed chunks into the vectorstore.
 
-    1. Convert each ParsedChunk to a LangChain Document
-    2. Stamp namespace metadata onto every document
+    1. Convert each ParsedChunk to a LangChain Document, carrying obj_id from the chunk
+    2. Stamp namespace_id metadata onto every document
     3. Run the pipeline (embed + upsert to Qdrant / record manager)
     """
     from langchain_core.documents import Document
@@ -55,7 +55,7 @@ async def a_index_and_ingest(
         for chunk in chunks
     ]
 
-    normalizer = MetadataFieldNormalizer(fields={"namespace": str(namespace)})
+    normalizer = MetadataFieldNormalizer(fields={"namespace_id": str(namespace)})
     docs = await normalizer.anormalize(docs)
 
     return await pipeline.aprocess(docs)

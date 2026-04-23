@@ -81,7 +81,7 @@ class TestSingleNamespaceFullPipeline:
                 scroll_filter=Filter(
                     must=[
                         FieldCondition(
-                            key="metadata.namespace",
+                            key="metadata.namespace_id",
                             match=MatchValue(value=namespace_id),
                         )
                     ]
@@ -106,7 +106,7 @@ class TestSingleNamespaceFullPipeline:
     ) -> None:
         namespace_id: str = data_source["namespace_id"]
         for pt in qdrant_points:
-            assert pt.payload.get("metadata", {}).get("namespace") == namespace_id
+            assert pt.payload.get("metadata", {}).get("namespace_id") == namespace_id
 
     def test_object_not_leaked_to_other_namespaces(
         self, qdrant_points: list, qdrant_client: QdrantClient, data_source: dict
@@ -133,7 +133,7 @@ class TestSingleNamespaceFullPipeline:
                 with_payload=True,
             )
             namespaces = {
-                pt.payload.get("metadata", {}).get("namespace") for pt in result
+                pt.payload.get("metadata", {}).get("namespace_id") for pt in result
             }
             assert namespaces == {
                 namespace_id

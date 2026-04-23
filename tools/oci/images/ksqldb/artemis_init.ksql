@@ -37,13 +37,13 @@
 -- Contract JSON structure (IngestionTaskDetails)
 -- -----------------------------------------------
 --   upload_action  : "create" | "modify" | "delete"
---   s3             : { bucket, object }
+--   s3             : { bucket, object, size }
 --   source         : { source, content_type, obj_id, object_type }
 --   info           : { namespace_id }
 --
 -- Celery v2 kwargs contract (tasks.ingest)
 -- -----------------------------------------
---   s3           : S3Details       { bucket, object }
+--   s3           : S3Details       { bucket, object, size }
 --   source       : SourceDetails   { source, content_type, obj_id, object_type }
 --   upload_action: UploadAction    "CREATE" | "MODIFY" | "DELETE"
 --   info         : IngestionInfo   { namespace_id }
@@ -141,7 +141,11 @@ AS SELECT
       `object` := EXTRACTJSONFIELD(
                     Records[1]->s3->object->userMetadata->`X-Amz-Meta-Contract`,
                     '$.s3.object'
-                  )
+                  ),
+      `size`   := CAST(EXTRACTJSONFIELD(
+                    Records[1]->s3->object->userMetadata->`X-Amz-Meta-Contract`,
+                    '$.s3.size'
+                  ) AS BIGINT)
     ),
     `source` := STRUCT(
       `source`       := EXTRACTJSONFIELD(

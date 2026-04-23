@@ -43,6 +43,7 @@ class S3Details(BaseModel):
 
     bucket: str
     object: str
+    size: int
 
 
 class SourceDetails(BaseModel):

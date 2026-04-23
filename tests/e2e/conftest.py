@@ -385,7 +385,7 @@ def dispatch_ingest(
     dispatch_app.send_task(
         "tasks.ingest",
         kwargs={
-            "s3": {"bucket": bucket, "object": key},
+            "s3": {"bucket": bucket, "object": key, "size": 0},
             "source": {
                 "source": key,
                 "content_type": "text/markdown",

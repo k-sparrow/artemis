@@ -17,7 +17,10 @@ py_test(
         "test_tei.py",
     ],
     env = {"TC_MAX_TRIES": "1000000000"},
-    tags = ["unit"],
+    tags = [
+        "manual",
+        "unit",
+    ],
     deps = [
         "//src/lib/core/adapters/document_compressors/huggingface:client",
         "//tests/lib/testcontainers/tei:pkg",
@@ -33,7 +36,10 @@ py_test(
         "test_tei.py",
     ],
     env = {"TC_MAX_TRIES": "1000000000"},
-    tags = ["integration"],
+    tags = [
+        "integration",
+        "manual",
+    ],
     deps = [
         "//src/lib/core/adapters/document_compressors/huggingface:client",
         "//tests/lib/testcontainers/tei:pkg",

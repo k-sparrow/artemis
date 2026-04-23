@@ -63,7 +63,7 @@ async def upload_file(
 
     details = IngestionTaskDetails(
         upload_action=IngestionTaskType.CREATE,
-        s3=S3Details(bucket=bucket, object=s3_key),
+        s3=S3Details(bucket=bucket, object=s3_key, size=len(data)),
         source=SourceDetails(
             source=source_label,
             content_type=resolved_content_type,
@@ -110,7 +110,7 @@ async def reingest_file(
 
     details = IngestionTaskDetails(
         upload_action=IngestionTaskType.MODIFY,
-        s3=S3Details(bucket=bucket, object=s3_key),
+        s3=S3Details(bucket=bucket, object=s3_key, size=len(data)),
         source=SourceDetails(
             source=source_label,
             content_type=resolved_content_type,
@@ -155,7 +155,7 @@ async def delete_file(
 
     details = IngestionTaskDetails(
         upload_action=IngestionTaskType.DELETE,
-        s3=S3Details(bucket=bucket, object=s3_key),
+        s3=S3Details(bucket=bucket, object=s3_key, size=0),
         source=SourceDetails(
             source=ingested.source,
             content_type=ingested.content_type,

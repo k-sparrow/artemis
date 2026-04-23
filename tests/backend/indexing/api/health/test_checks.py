@@ -47,7 +47,7 @@ class TestQdrantHealthcheck:
 
         assert result.passed is False
         assert result.name == "Readiness/Qdrant"
-        assert "Missing 'metadata.namespace' index" in result.details
+        assert "Missing 'metadata.namespace_id' index" in result.details
 
     @pytest.mark.asyncio
     async def test_namespace_index_not_tenant(self, qdrant_client_with_index_no_tenant):
@@ -60,7 +60,9 @@ class TestQdrantHealthcheck:
 
         assert result.passed is False
         assert result.name == "Readiness/Qdrant"
-        assert "index has no params configured" in result.details
+        assert (
+            "'metadata.namespace_id' index has no params configured" in result.details
+        )
 
     @pytest.mark.asyncio
     async def test_proper_tenant_index_passes(self, qdrant_client_with_tenant_index):

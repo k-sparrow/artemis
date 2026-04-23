@@ -33,6 +33,8 @@ from celery import chain
 from celery.signals import worker_ready
 from celery.utils.log import get_task_logger
 
+import pybreaker
+
 from src.backend.controller.lib.schemas import (
     IngestionInfo,
     S3Details,
@@ -43,6 +45,11 @@ from src.backend.controller.worker.backend.database import DatabaseBackend
 from src.backend.controller.worker.celery import app
 from src.backend.controller.worker.config import settings
 from src.backend.controller.worker.dependencies import get_s3_client
+from src.backend.controller.worker.exceptions import (
+    ChunkIntegrityError,
+    EmptyObjectError,
+    S3IntegrityError,
+)
 from src.backend.controller.worker.utils import (
     call_delete_service,
     call_indexing_service,
@@ -134,15 +141,17 @@ def ingest(
 
 @app.task(
     name="tasks.fetch_and_parse",
+    bind=True,
     pydantic=True,
     backend=_db_backend,
     result_serializer="json",
-    autoretry_for=(Exception,),
+    autoretry_for=(pybreaker.CircuitBreakerError,),
     retry_kwargs={"max_retries": 5},
     retry_backoff=True,
     retry_backoff_max=120,
 )
 def fetch_and_parse(
+    self,
     s3: S3Details,
     source: SourceDetails,
     namespace_id: uuid.UUID,
@@ -150,12 +159,29 @@ def fetch_and_parse(
     """Download the document from S3, parse it, persist chunks to MinIO.
 
     Returns the MinIO object key to be consumed by :func:`index`.
+
+    Failure modes (non-retryable):
+        EmptyObjectError   — contract reports size=0; empty file, nothing to index.
+        ChunkIntegrityError — parsing service returned chunks with multiple obj_ids.
+
+    Failure modes (retryable, max 3):
+        S3IntegrityError   — contract reports size>0 but MinIO returned 0 bytes.
     """
-    task_id = fetch_and_parse.request.id or str(uuid.uuid4())
+    # Guard 1: empty file — permanent, do not retry.
+    if s3.size == 0:
+        raise EmptyObjectError(str(source.obj_id))
 
+    task_id = self.request.id or str(uuid.uuid4())
     minio_client = get_s3_client()
-
     file_bytes = fetch_from_s3(minio_client, s3, logger)
+
+    # Guard 2: MinIO integrity — potentially transient, retry up to 3 times.
+    if len(file_bytes) == 0:
+        raise self.retry(
+            exc=S3IntegrityError(s3.object, s3.size),
+            max_retries=3,
+            countdown=10,
+        )
 
     chunks = call_parsing_service(
         file_bytes=file_bytes,
@@ -164,6 +190,11 @@ def fetch_and_parse(
         timeout=settings.HTTPX_TIMEOUT,
         logger=logger,
     )
+
+    # Guard 3: chunk integrity — parsing service contract violation, do not retry.
+    obj_ids = {c.obj_id for c in chunks}
+    if len(obj_ids) != 1:
+        raise ChunkIntegrityError(obj_ids)
 
     store = ParsedChunkStore(client=minio_client, bucket=settings.PARSED_CHUNKS_BUCKET)
     key = store.save(chunks, task_id)
@@ -199,6 +230,9 @@ def index(chunks_key: str, namespace_id: uuid.UUID) -> dict:
     chunks = store.load(chunks_key)
     logger.info("index=loaded key=%s chunks=%d", chunks_key, len(chunks))
 
+    # obj_id uniqueness was validated in fetch_and_parse; extract it here for the result.
+    obj_id = str(next(iter({c.obj_id for c in chunks})))
+
     result = call_indexing_service(
         chunks=chunks,
         namespace_id=namespace_id,
@@ -208,9 +242,9 @@ def index(chunks_key: str, namespace_id: uuid.UUID) -> dict:
     )
 
     store.delete(chunks_key)
-    logger.info("index=cleanup key=%s", chunks_key)
+    logger.info("index=cleanup key=%s obj_id=%s", chunks_key, obj_id)
 
-    return result
+    return {**result, "obj_id": obj_id}
 
 
 # ---------------------------------------------------------------------------

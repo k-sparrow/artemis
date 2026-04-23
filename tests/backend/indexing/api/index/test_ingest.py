@@ -175,8 +175,8 @@ class TestIngestEndpoint:
         mock_pipeline.aprocess.assert_called_once()
         docs_arg = mock_pipeline.aprocess.call_args[0][0]
         assert all(
-            doc.metadata.get("namespace") == str(namespace) for doc in docs_arg
-        ), "All documents must carry the namespace in their metadata"
+            doc.metadata.get("namespace_id") == str(namespace) for doc in docs_arg
+        ), "All documents must carry the namespace_id in their metadata"
         assert all(
             doc.metadata.get("obj_id") == str(OBJ_ID) for doc in docs_arg
         ), "All documents must carry obj_id in their metadata"

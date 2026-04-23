@@ -18,7 +18,7 @@ Output message structure
     "task_id": "<uuid>",        # top-level — HeaderFrom SMT promotes to CamelHeader.id
     "args":    [],              # Celery v2: always empty
     "kwargs": {
-      "s3":            {"bucket": str, "object": str},
+      "s3":            {"bucket": str, "object": str, "size": int},
       "source":        {
                           "source": str,
                           "content_type":
@@ -61,11 +61,12 @@ def _make_s3_event(
     bucket: str,
     obj_key: str,
     upload_action: str = "create",
+    size: int = 1024,
 ) -> dict:
     contract = json.dumps(
         {
             "upload_action": upload_action,
-            "s3": {"bucket": bucket, "object": obj_key},
+            "s3": {"bucket": bucket, "object": obj_key, "size": size},
             "source": {
                 "source": "storage",
                 "content_type": "text/plain",
@@ -295,6 +296,7 @@ class TestCeleryOutputContract:
         s3 = record.value["kwargs"]["s3"]
         assert s3["bucket"] == "artemis"
         assert s3["object"] == obj_key
+        assert s3["size"] == 1024
 
     def test_namespace_id_in_info(self, bootstrap_server: str, streams: None) -> None:
         task_id = str(uuid.uuid4())
