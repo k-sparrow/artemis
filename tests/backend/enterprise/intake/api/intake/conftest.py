@@ -26,10 +26,9 @@ from src.backend.enterprise.intake.api.main import app  # noqa: E402
 
 _NAMESPACE_ID = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
 _TASK_ID = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
-_S3_KEY = f"{_NAMESPACE_ID}/some-object-id"
 
 NAMESPACE_RESPONSE = {"id": str(_NAMESPACE_ID), "type": "shared", "name": "acme"}
-UPLOAD_RESPONSE = {"task_id": str(_TASK_ID), "s3_key": _S3_KEY}
+UPLOAD_RESPONSE = {"task_id": str(_TASK_ID)}
 
 
 @pytest.fixture

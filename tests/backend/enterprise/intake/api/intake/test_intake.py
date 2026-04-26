@@ -19,7 +19,6 @@ from fastapi.testclient import TestClient
 
 from tests.backend.enterprise.intake.api.intake.conftest import (
     _NAMESPACE_ID,
-    _S3_KEY,
     _TASK_ID,
 )
 
@@ -48,7 +47,6 @@ class TestFilesystemSource:
         assert resp.status_code == status.HTTP_202_ACCEPTED
         body = resp.json()
         assert body["task_id"] == str(_TASK_ID)
-        assert body["s3_key"] == _S3_KEY
         assert body["namespace_id"] == str(_NAMESPACE_ID)
 
     def test_namespace_verified_on_storage(
@@ -99,7 +97,6 @@ class TestInlineSource:
         assert resp.status_code == status.HTTP_202_ACCEPTED
         body = resp.json()
         assert body["task_id"] == str(_TASK_ID)
-        assert body["s3_key"] == _S3_KEY
         assert body["namespace_id"] == str(_NAMESPACE_ID)
 
     def test_content_encoded_to_bytes(
@@ -165,7 +162,6 @@ class TestUrlSource:
         assert resp.status_code == status.HTTP_202_ACCEPTED
         body = resp.json()
         assert body["task_id"] == str(_TASK_ID)
-        assert body["s3_key"] == _S3_KEY
 
     def test_fetched_bytes_uploaded_to_storage(
         self, client: TestClient, mock_http: MagicMock

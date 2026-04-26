@@ -6,12 +6,8 @@ TestClient against real infrastructure containers.  No service mocks.
 
 from __future__ import annotations
 
-import io  # noqa: F401
 import json
 import uuid
-from datetime import datetime, timezone
-
-import pytest  # noqa: F401
 from fastapi.testclient import TestClient
 from minio import Minio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -31,25 +27,25 @@ def _file_bytes(content: bytes = b"hello world") -> dict:
 def _seed_ingested_object(
     session_factory: async_sessionmaker[AsyncSession],
     namespace_id: uuid.UUID,
+    source: str = "seed.pdf",
+    group_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
     """Insert a minimal IngestedObject row and return its id."""
     import asyncio
 
-    obj_id = uuid.uuid5(namespace_id, "seed.pdf")
+    obj_id = uuid.uuid5(namespace_id, source)
 
     async def _insert():
         async with session_factory() as session:
             row = IngestedObject(
                 id=obj_id,
                 namespace_id=namespace_id,
-                task_id=uuid.uuid4(),
-                source="seed.pdf",
+                source=source,
                 object_type="file",
                 s3_key=f"{namespace_id}/{obj_id}",
                 content_type="application/pdf",
                 size_bytes=0,
-                status="SUCCESS",
-                completed_at=datetime.now(timezone.utc),
+                group_id=group_id,
             )
             session.add(row)
             await session.commit()
@@ -294,8 +290,8 @@ class TestUploadObjectIntegration:
             files=_file_bytes(),
         )
         assert response.status_code == 202
-        s3_key = response.json()["s3_key"]
         task_id = response.json()["task_id"]
+        s3_key = f"{ns_id}/{uuid.uuid5(uuid.UUID(ns_id), 'report.pdf')}"
 
         import os
 
@@ -304,23 +300,6 @@ class TestUploadObjectIntegration:
         assert stat.metadata.get("x-amz-meta-task_id") == task_id
         contract = json.loads(stat.metadata.get("x-amz-meta-contract"))
         assert contract["upload_action"] == IngestionTaskType.CREATE
-
-    def test_upload_s3_key_uses_namespace_prefix(
-        self, client: TestClient, owner_id: str
-    ) -> None:
-        ns_id = client.post(
-            "/namespaces",
-            json={"type": "private"},
-            headers={"X-Owner-Id": owner_id},
-        ).json()["id"]
-
-        response = client.post(f"/namespaces/{ns_id}/objects", files=_file_bytes())
-        assert response.status_code == 202
-        s3_key = response.json()["s3_key"]
-
-        prefix, file_part = s3_key.split("/", 1)
-        assert prefix == ns_id
-        uuid.UUID(file_part)  # raises ValueError if not a valid UUID
 
     def test_upload_to_missing_namespace_returns_404(self, client: TestClient) -> None:
         response = client.post(
@@ -357,7 +336,7 @@ class TestReingestObjectIntegration:
             files=_file_bytes(b"updated content"),
         )
         assert response.status_code == 202
-        s3_key = response.json()["s3_key"]
+        s3_key = f"{ns_id}/{obj_id}"
 
         import os
 
@@ -505,13 +484,65 @@ class TestListObjectsIntegration:
         assert o["object_type"] == "file"
         assert o["content_type"] == "application/pdf"
         assert o["size_bytes"] == 0
-        assert o["status"] == "SUCCESS"
-        assert o["failure_reason"] is None
-        assert "task_id" in o
-        assert "completed_at" in o
+        assert o["group_id"] is None
 
     def test_list_objects_on_missing_namespace_returns_404(
         self, client: TestClient
     ) -> None:
         response = client.get(f"/namespaces/{uuid.uuid4()}/objects")
         assert response.status_code == 404
+
+    def test_list_objects_filtered_by_group_id(
+        self,
+        client: TestClient,
+        owner_id: str,
+        storage_session_factory,
+    ) -> None:
+        ns_id = uuid.UUID(
+            client.post(
+                "/namespaces",
+                json={"type": "private"},
+                headers={"X-Owner-Id": owner_id},
+            ).json()["id"]
+        )
+        group_id = uuid.uuid4()
+        _seed_ingested_object(
+            storage_session_factory, ns_id, source="a.pdf", group_id=group_id
+        )
+        _seed_ingested_object(
+            storage_session_factory, ns_id, source="b.pdf", group_id=None
+        )
+
+        resp = client.get(
+            f"/namespaces/{ns_id}/objects", params={"group_id": str(group_id)}
+        )
+        assert resp.status_code == 200
+        objects = resp.json()
+        assert len(objects) == 1
+        assert objects[0]["group_id"] == str(group_id)
+
+    def test_upload_with_group_id_included_in_contract(
+        self,
+        client: TestClient,
+        owner_id: str,
+        test_minio_client: Minio,
+    ) -> None:
+        ns_id = client.post(
+            "/namespaces",
+            json={"type": "private"},
+            headers={"X-Owner-Id": owner_id},
+        ).json()["id"]
+        group_id = uuid.uuid4()
+
+        import os
+
+        response = client.post(
+            f"/namespaces/{ns_id}/objects",
+            files=_file_bytes(),
+            params={"group_id": str(group_id)},
+        )
+        assert response.status_code == 202
+        s3_key = f"{ns_id}/{uuid.uuid5(uuid.UUID(ns_id), 'report.pdf')}"
+        stat = test_minio_client.stat_object(os.environ["S3_ARTEMIS_BUCKET"], s3_key)
+        contract = json.loads(stat.metadata.get("x-amz-meta-contract"))
+        assert contract["info"]["group_id"] == str(group_id)

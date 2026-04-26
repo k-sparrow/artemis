@@ -88,20 +88,19 @@ class TestObjectUpload:
         resp = client.post(f"/namespaces/{ns_id}/objects", files=_pdf())
         assert resp.status_code == status.HTTP_202_ACCEPTED
 
-    def test_upload_response_has_task_id_and_s3_key(self, client: httpx.Client) -> None:
+    def test_upload_response_has_task_id(self, client: httpx.Client) -> None:
         ns_id = self._create_namespace(client)
         body = client.post(f"/namespaces/{ns_id}/objects", files=_pdf()).json()
         assert "task_id" in body
-        assert "s3_key" in body
+        assert "s3_key" not in body
 
     def test_object_lands_in_minio(
         self, client: httpx.Client, test_minio_client: Minio
     ) -> None:
         ns_id = self._create_namespace(client)
-        body = client.post(f"/namespaces/{ns_id}/objects", files=_pdf()).json()
-        s3_key = body["s3_key"]
+        client.post(f"/namespaces/{ns_id}/objects", files=_pdf())
+        s3_key = f"{ns_id}/{uuid.uuid5(uuid.UUID(ns_id), 'report.pdf')}"
 
-        # Verify the object actually exists in MinIO.
         obj = test_minio_client.stat_object("artemis", s3_key)
         assert obj.size > 0
 
@@ -110,12 +109,13 @@ class TestObjectUpload:
     ) -> None:
         content = b"unique pdf content for byte check"
         ns_id = self._create_namespace(client)
-        body = client.post(
+        client.post(
             f"/namespaces/{ns_id}/objects",
             files={"file": ("doc.pdf", content, "application/pdf")},
-        ).json()
+        )
+        s3_key = f"{ns_id}/{uuid.uuid5(uuid.UUID(ns_id), 'doc.pdf')}"
 
-        data = test_minio_client.get_object("artemis", body["s3_key"]).read()
+        data = test_minio_client.get_object("artemis", s3_key).read()
         assert data == content
 
     def test_unknown_namespace_returns_404(self, client: httpx.Client) -> None:
@@ -221,8 +221,8 @@ class TestKafkaNotification:
         kafka_consumer: KafkaConsumer,
     ) -> None:
         ns_id = self._create_namespace(client)
-        body = client.post(f"/namespaces/{ns_id}/objects", files=_pdf()).json()
-        s3_key = body["s3_key"]
+        client.post(f"/namespaces/{ns_id}/objects", files=_pdf())
+        s3_key = f"{ns_id}/{uuid.uuid5(uuid.UUID(ns_id), 'report.pdf')}"
 
         messages = list(kafka_consumer)
 

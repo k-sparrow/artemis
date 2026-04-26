@@ -375,7 +375,6 @@ def wiremock(
                 "headers": {"Content-Type": "application/json"},
                 "jsonBody": {
                     "task_id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
-                    "s3_key": f"{_NAMESPACE_ID}/test-object-key",
                 },
             },
         },
