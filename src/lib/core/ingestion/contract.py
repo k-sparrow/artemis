@@ -71,6 +71,7 @@ class IngestionInfo(BaseModel):
     """Namespace context for the ingestion task."""
 
     namespace_id: UUID
+    group_id: UUID | None = None
 
 
 class IngestionTaskDetails(BaseModel):

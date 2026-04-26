@@ -46,5 +46,4 @@ class IntakeRequest(BaseModel):
 
 class IntakeResponse(BaseModel):
     task_id: uuid.UUID
-    s3_key: str
     namespace_id: uuid.UUID

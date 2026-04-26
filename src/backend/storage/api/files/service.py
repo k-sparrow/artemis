@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import io
 import uuid
-from typing import Any
-
 import sqlalchemy as sa
 from minio import Minio
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +12,11 @@ from src.backend.storage.api.files.exceptions import (
     IngestedFileNotFoundError,
     TaskNotFoundError,
 )
-from src.backend.storage.api.models import IngestedObject, IngestionTaskType
+from src.backend.storage.api.models import (
+    IngestedObject,
+    IngestionTask,
+    IngestionTaskType,
+)
 from src.backend.storage.api.service import _fetch_namespace
 from src.lib.core.ingestion.contract import (
     IngestionInfo,
@@ -53,7 +55,8 @@ async def upload_file(
     filename: str | None,
     content_type: str | None,
     data: bytes,
-) -> tuple[uuid.UUID, str]:
+    group_id: uuid.UUID | None = None,
+) -> uuid.UUID:
     await _fetch_namespace(session=session, namespace_id=namespace_id)
     task_id = uuid.uuid4()
     source_label = filename or str(uuid.uuid4())
@@ -70,7 +73,7 @@ async def upload_file(
             obj_id=obj_id,
             object_type="file",
         ),
-        info=IngestionInfo(namespace_id=namespace_id),
+        info=IngestionInfo(namespace_id=namespace_id, group_id=group_id),
     )
 
     minio.put_object(
@@ -84,7 +87,7 @@ async def upload_file(
             "contract": details.model_dump_json(),
         },
     )
-    return task_id, s3_key
+    return task_id
 
 
 async def reingest_file(
@@ -96,7 +99,8 @@ async def reingest_file(
     filename: str | None,
     content_type: str | None,
     data: bytes,
-) -> tuple[uuid.UUID, str]:
+    group_id: uuid.UUID | None = None,
+) -> uuid.UUID:
     await _fetch_namespace(session=session, namespace_id=namespace_id)
     await _fetch_ingested_object(
         session=session, namespace_id=namespace_id, obj_id=obj_id
@@ -117,7 +121,7 @@ async def reingest_file(
             obj_id=obj_id,
             object_type="file",
         ),
-        info=IngestionInfo(namespace_id=namespace_id),
+        info=IngestionInfo(namespace_id=namespace_id, group_id=group_id),
     )
 
     minio.put_object(
@@ -131,7 +135,7 @@ async def reingest_file(
             "contract": details.model_dump_json(),
         },
     )
-    return task_id, s3_key
+    return task_id
 
 
 async def delete_file(
@@ -162,7 +166,7 @@ async def delete_file(
             obj_id=obj_id,
             object_type=ingested.object_type,
         ),
-        info=IngestionInfo(namespace_id=namespace_id),
+        info=IngestionInfo(namespace_id=namespace_id, group_id=ingested.group_id),
     )
 
     minio.put_object(
@@ -180,10 +184,23 @@ async def delete_file(
 async def list_files(
     session: AsyncSession,
     namespace_id: uuid.UUID,
+    group_id: uuid.UUID | None = None,
 ) -> list[IngestedObject]:
     await _fetch_namespace(session=session, namespace_id=namespace_id)
+    filters = [IngestedObject.namespace_id == namespace_id]
+    if group_id is not None:
+        filters.append(IngestedObject.group_id == group_id)
+    result = await session.execute(sa.select(IngestedObject).where(*filters))
+    return list(result.scalars().all())
+
+
+async def list_tasks(
+    session: AsyncSession,
+    namespace_id: uuid.UUID,
+) -> list[IngestionTask]:
+    await _fetch_namespace(session=session, namespace_id=namespace_id)
     result = await session.execute(
-        sa.select(IngestedObject).where(IngestedObject.namespace_id == namespace_id)
+        sa.select(IngestionTask).where(IngestionTask.namespace_id == namespace_id)
     )
     return list(result.scalars().all())
 
@@ -192,17 +209,15 @@ async def get_task_status(
     session: AsyncSession,
     namespace_id: uuid.UUID,
     task_id: uuid.UUID,
-) -> dict[str, Any]:
+) -> IngestionTask:
     await _fetch_namespace(session=session, namespace_id=namespace_id)
     result = await session.execute(
-        sa.text(
-            "SELECT task_id, status, result, traceback, date_done "
-            "FROM apollo_celery_taskmeta "
-            "WHERE task_id = :task_id"
-        ),
-        {"task_id": str(task_id)},
+        sa.select(IngestionTask).where(
+            IngestionTask.task_id == task_id,
+            IngestionTask.namespace_id == namespace_id,
+        )
     )
-    row = result.mappings().one_or_none()
-    if row is None:
+    task = result.scalar_one_or_none()
+    if task is None:
         raise TaskNotFoundError()
-    return dict(row)
+    return task

@@ -130,12 +130,9 @@ class Namespace(Base):
 
 
 class IngestedObject(Base):
-    """Terminal-state record of a completed ingestion task.
+    """Object registry — one row per successfully ingested object.
 
-    Written exclusively by the JDBC sink (CDC from ``apollo_celery_taskmeta``).
-    Only SUCCESS and FAILURE states are projected here — in-flight tasks are tracked
-    directly in ``apollo_celery_taskmeta`` by ``task_id``.
-
+    Written exclusively by the JDBC sink (SUCCESS events only, upsert on id).
     The storage service reads from this table; it never writes to it.
     """
 
@@ -152,12 +149,6 @@ class IngestedObject(Base):
         sa.ForeignKey("namespace.id"),
         nullable=False,
         index=True,
-    )
-    task_id: Mapped[uuid.UUID] = mapped_column(
-        sa.UUID(as_uuid=True),
-        nullable=False,
-        unique=True,
-        comment="Links to apollo_celery_taskmeta.task_id",
     )
     source: Mapped[str] = mapped_column(
         sa.Text,
@@ -176,15 +167,59 @@ class IngestedObject(Base):
     )
     content_type: Mapped[str] = mapped_column(sa.Text, nullable=False)
     size_bytes: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
+    group_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+        comment=(
+            "Logical group owner: connector_id (enterprise) or namespace_id (private)"
+        ),
+    )
+
+    namespace: Mapped[Namespace] = relationship(back_populates="objects")
+    tasks: Mapped[list["IngestionTask"]] = relationship(back_populates="object")
+
+
+class IngestionTask(Base):
+    """Task history — one row per completed ingestion task (SUCCESS or FAILURE).
+
+    Written exclusively by the JDBC sink (CDC from ``apollo_celery_taskmeta``).
+    The storage service reads from this table; it never writes to it.
+    """
+
+    __tablename__ = "ingestion_tasks"
+
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        sa.UUID(as_uuid=True),
+        primary_key=True,
+        comment="Links to apollo_celery_taskmeta.task_id",
+    )
+    obj_id: Mapped[uuid.UUID | None] = mapped_column(
+        sa.UUID(as_uuid=True),
+        sa.ForeignKey("ingested_objects.id"),
+        nullable=True,
+        index=True,
+        comment="NULL on FAILURE tasks that produced no object",
+    )
+    namespace_id: Mapped[uuid.UUID] = mapped_column(
+        sa.UUID(as_uuid=True),
+        sa.ForeignKey("namespace.id"),
+        nullable=False,
+        index=True,
+        comment=(
+            "Denormalised from obj_id for efficient per-namespace "
+            "queries and FAILURE lookup"
+        ),
+    )
     status: Mapped[str] = mapped_column(
         sa.Text,
         nullable=False,
-        comment="'success' or 'failure' — terminal states only",
+        comment="'SUCCESS' or 'FAILURE'",
     )
     failure_reason: Mapped[str | None] = mapped_column(
         sa.Text,
         nullable=True,
-        comment="Traceback excerpt on failure",
+        comment="Traceback excerpt on failure; NULL on SUCCESS",
     )
     completed_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
@@ -192,7 +227,8 @@ class IngestedObject(Base):
         comment="date_done from Celery result",
     )
 
-    namespace: Mapped[Namespace] = relationship(back_populates="objects")
+    object: Mapped["IngestedObject | None"] = relationship(back_populates="tasks")
+    namespace: Mapped[Namespace] = relationship()
 
 
 # ---------------------------------------------------------------------------

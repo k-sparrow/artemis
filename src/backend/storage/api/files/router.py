@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, UploadFile, status
+from fastapi import APIRouter, Query, UploadFile, status
 
 from src.backend.storage.api.config import settings
 from src.backend.storage.api.dependencies import (
@@ -18,8 +18,8 @@ from src.backend.storage.api.dependencies import (
 from src.backend.storage.api.files import service
 from src.backend.storage.api.files.schemas import (
     IngestedObjectResponse,
+    IngestionTaskResponse,
     ObjectUploadResponse,
-    TaskStatusResponse,
 )
 from src.lib.backend.logging import get_logger
 
@@ -42,9 +42,10 @@ async def upload_object_endpoint(
     file: UploadFile,
     session: db_session_dependency,
     minio: minio_client_dependency,
+    group_id: uuid.UUID | None = Query(default=None),
 ) -> ObjectUploadResponse:
     data = await file.read()
-    task_id, s3_key = await service.upload_file(
+    task_id = await service.upload_file(
         minio=minio,
         session=session,
         bucket=settings.S3_ARTEMIS_BUCKET,
@@ -52,6 +53,7 @@ async def upload_object_endpoint(
         filename=file.filename,
         content_type=file.content_type,
         data=data,
+        group_id=group_id,
     )
     log.info(
         "object_uploaded",
@@ -59,7 +61,7 @@ async def upload_object_endpoint(
         filename=file.filename,
         task_id=task_id,
     )
-    return ObjectUploadResponse(task_id=task_id, s3_key=s3_key)
+    return ObjectUploadResponse(task_id=task_id)
 
 
 @router.put(
@@ -73,9 +75,10 @@ async def reingest_object_endpoint(
     file: UploadFile,
     session: db_session_dependency,
     minio: minio_client_dependency,
+    group_id: uuid.UUID | None = Query(default=None),
 ) -> ObjectUploadResponse:
     data = await file.read()
-    task_id, s3_key = await service.reingest_file(
+    task_id = await service.reingest_file(
         minio=minio,
         session=session,
         bucket=settings.S3_ARTEMIS_BUCKET,
@@ -84,11 +87,12 @@ async def reingest_object_endpoint(
         filename=file.filename,
         content_type=file.content_type,
         data=data,
+        group_id=group_id,
     )
     log.info(
         "object_reingested", namespace=namespace_id, obj_id=obj_id, task_id=task_id
     )
-    return ObjectUploadResponse(task_id=task_id, s3_key=s3_key)
+    return ObjectUploadResponse(task_id=task_id)
 
 
 @router.delete("/{namespace_id}/objects/{obj_id}", status_code=status.HTTP_202_ACCEPTED)
@@ -121,28 +125,30 @@ async def delete_object_endpoint(
 async def list_objects_endpoint(
     namespace_id: uuid.UUID,
     session: db_session_dependency,
+    group_id: uuid.UUID | None = Query(default=None),
 ) -> list[IngestedObjectResponse]:
-    objects = await service.list_files(session=session, namespace_id=namespace_id)
+    objects = await service.list_files(
+        session=session, namespace_id=namespace_id, group_id=group_id
+    )
     return [IngestedObjectResponse.model_validate(o) for o in objects]
 
 
-@router.get("/{namespace_id}/tasks", response_model=list[IngestedObjectResponse])
+@router.get("/{namespace_id}/tasks", response_model=list[IngestionTaskResponse])
 async def list_tasks_endpoint(
     namespace_id: uuid.UUID,
     session: db_session_dependency,
-) -> list[IngestedObjectResponse]:
-    """Return terminal-state task records for *namespace_id* from ingested_objects."""
-    objects = await service.list_files(session=session, namespace_id=namespace_id)
-    return [IngestedObjectResponse.model_validate(o) for o in objects]
+) -> list[IngestionTaskResponse]:
+    tasks = await service.list_tasks(session=session, namespace_id=namespace_id)
+    return [IngestionTaskResponse.model_validate(t) for t in tasks]
 
 
-@router.get("/{namespace_id}/tasks/{task_id}", response_model=TaskStatusResponse)
+@router.get("/{namespace_id}/tasks/{task_id}", response_model=IngestionTaskResponse)
 async def get_task_status_endpoint(
     namespace_id: uuid.UUID,
     task_id: uuid.UUID,
     session: db_session_dependency,
-) -> TaskStatusResponse:
-    row = await service.get_task_status(
+) -> IngestionTaskResponse:
+    task = await service.get_task_status(
         session=session, namespace_id=namespace_id, task_id=task_id
     )
-    return TaskStatusResponse(**row)
+    return IngestionTaskResponse.model_validate(task)

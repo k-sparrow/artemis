@@ -23,7 +23,7 @@ log = get_logger(__name__)
 async def intake_endpoint(
     body: IntakeRequest, http: storage_client_dependency
 ) -> IntakeResponse:
-    task_id, s3_key = await service.intake_file(http=http, request=body)
+    task_id = await service.intake_file(http=http, request=body)
     log.info(
         "intake_dispatched",
         source_type=body.source.type,
@@ -31,6 +31,4 @@ async def intake_endpoint(
         display_name=body.display_name,
         task_id=str(task_id),
     )
-    return IntakeResponse(
-        task_id=task_id, s3_key=s3_key, namespace_id=body.namespace_id
-    )
+    return IntakeResponse(task_id=task_id, namespace_id=body.namespace_id)

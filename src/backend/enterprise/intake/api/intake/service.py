@@ -96,11 +96,8 @@ async def _resolve_bytes(
 async def intake_file(
     http: httpx.AsyncClient,
     request: IntakeRequest,
-) -> tuple[uuid.UUID, str]:
-    """Verify namespace → resolve bytes → infer content type → upload to storage.
-
-    Returns ``(task_id, s3_key)``.
-    """
+) -> uuid.UUID:
+    """Verify namespace → resolve bytes → infer content type → upload to storage."""
     # 1. Verify the namespace exists.
     await _verify_namespace(http, request.namespace_id)
 
@@ -116,4 +113,4 @@ async def intake_file(
         raise StorageServiceError(upload_resp.status_code, upload_resp.text)
 
     body = upload_resp.json()
-    return uuid.UUID(body["task_id"]), body["s3_key"]
+    return uuid.UUID(body["task_id"])
