@@ -182,6 +182,47 @@ class TestDeleteFile:
 
 
 # ---------------------------------------------------------------------------
+# DELETE /namespaces/{namespace_id}/objects  (bulk group delete)
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteGroup:
+    def test_happy_path_returns_202_with_task_ids(self, client: TestClient) -> None:
+        task_ids = [uuid.uuid4(), uuid.uuid4()]
+        with patch(f"{_SERVICE}.delete_group", new=AsyncMock(return_value=task_ids)):
+            response = client.delete(
+                f"/namespaces/{NAMESPACE_ID}/objects",
+                params={"group_id": str(GROUP_ID)},
+            )
+        assert response.status_code == 202
+        assert response.json()["task_ids"] == [str(t) for t in task_ids]
+
+    def test_empty_group_returns_202_with_empty_list(self, client: TestClient) -> None:
+        with patch(f"{_SERVICE}.delete_group", new=AsyncMock(return_value=[])):
+            response = client.delete(
+                f"/namespaces/{NAMESPACE_ID}/objects",
+                params={"group_id": str(GROUP_ID)},
+            )
+        assert response.status_code == 202
+        assert response.json()["task_ids"] == []
+
+    def test_missing_group_id_returns_422(self, client: TestClient) -> None:
+        response = client.delete(f"/namespaces/{NAMESPACE_ID}/objects")
+        assert response.status_code == 422
+
+    def test_namespace_not_found_returns_404(self, client: TestClient) -> None:
+        with patch(
+            f"{_SERVICE}.delete_group",
+            new=AsyncMock(side_effect=NamespaceNotFoundError()),
+        ):
+            response = client.delete(
+                f"/namespaces/{NAMESPACE_ID}/objects",
+                params={"group_id": str(GROUP_ID)},
+            )
+        assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # GET /namespaces/{namespace_id}/files
 # ---------------------------------------------------------------------------
 

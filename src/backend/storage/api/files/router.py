@@ -17,6 +17,7 @@ from src.backend.storage.api.dependencies import (
 )
 from src.backend.storage.api.files import service
 from src.backend.storage.api.files.schemas import (
+    GroupDeleteResponse,
     IngestedObjectResponse,
     IngestionTaskResponse,
     ObjectUploadResponse,
@@ -93,6 +94,33 @@ async def reingest_object_endpoint(
         "object_reingested", namespace=namespace_id, obj_id=obj_id, task_id=task_id
     )
     return ObjectUploadResponse(task_id=task_id)
+
+
+@router.delete(
+    "/{namespace_id}/objects",
+    response_model=GroupDeleteResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def delete_group_endpoint(
+    namespace_id: uuid.UUID,
+    group_id: uuid.UUID,
+    session: db_session_dependency,
+    minio: minio_client_dependency,
+) -> GroupDeleteResponse:
+    task_ids = await service.delete_group(
+        minio=minio,
+        session=session,
+        bucket=settings.S3_ARTEMIS_BUCKET,
+        namespace_id=namespace_id,
+        group_id=group_id,
+    )
+    log.info(
+        "group_tombstoned",
+        namespace=namespace_id,
+        group_id=group_id,
+        count=len(task_ids),
+    )
+    return GroupDeleteResponse(task_ids=task_ids)
 
 
 @router.delete("/{namespace_id}/objects/{obj_id}", status_code=status.HTTP_202_ACCEPTED)

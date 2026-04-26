@@ -181,6 +181,54 @@ async def delete_file(
     )
 
 
+async def delete_group(
+    minio: Minio,
+    session: AsyncSession,
+    bucket: str,
+    namespace_id: uuid.UUID,
+    group_id: uuid.UUID,
+) -> list[uuid.UUID]:
+    """Tombstone all objects belonging to a group.
+
+    Returns the list of task_ids dispatched (one per object).
+    """
+    await _fetch_namespace(session=session, namespace_id=namespace_id)
+    result = await session.execute(
+        sa.select(IngestedObject).where(
+            IngestedObject.namespace_id == namespace_id,
+            IngestedObject.group_id == group_id,
+        )
+    )
+    objects = list(result.scalars().all())
+    task_ids = []
+    for obj in objects:
+        task_id = uuid.uuid4()
+        s3_key = _s3_key(namespace_id, obj.id)
+        details = IngestionTaskDetails(
+            upload_action=IngestionTaskType.DELETE,
+            s3=S3Details(bucket=bucket, object=s3_key, size=0),
+            source=SourceDetails(
+                source=obj.source,
+                content_type=obj.content_type,
+                obj_id=obj.id,
+                object_type=obj.object_type,
+            ),
+            info=IngestionInfo(namespace_id=namespace_id, group_id=group_id),
+        )
+        minio.put_object(
+            bucket_name=bucket,
+            object_name=s3_key,
+            data=io.BytesIO(b""),
+            length=0,
+            metadata={
+                "task_id": str(task_id),
+                "contract": details.model_dump_json(),
+            },
+        )
+        task_ids.append(task_id)
+    return task_ids
+
+
 async def list_files(
     session: AsyncSession,
     namespace_id: uuid.UUID,

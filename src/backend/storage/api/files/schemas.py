@@ -26,6 +26,12 @@ class IngestedObjectResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class GroupDeleteResponse(BaseModel):
+    task_ids: list[uuid.UUID] = Field(
+        description="Tombstone task IDs dispatched, one per deleted object."
+    )
+
+
 class IngestionTaskResponse(BaseModel):
     task_id: uuid.UUID
     obj_id: uuid.UUID | None
