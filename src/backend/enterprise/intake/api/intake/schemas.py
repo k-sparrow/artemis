@@ -42,6 +42,10 @@ class IntakeRequest(BaseModel):
     namespace_id: uuid.UUID = Field(
         description="Namespace UUID issued by the storage service."
     )
+    group_id: uuid.UUID | None = Field(
+        default=None,
+        description="Logical group owner (connector_id for enterprise sources).",
+    )
 
 
 class IntakeResponse(BaseModel):

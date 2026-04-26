@@ -56,7 +56,8 @@ def _wait_for_storage_upload(
         calls = [
             r["request"]
             for r in resp.json().get("requests", [])
-            if r["request"]["method"] == "POST" and r["request"]["url"] == expected_path
+            if r["request"]["method"] == "POST"
+            and r["request"]["url"].split("?")[0] == expected_path
         ]
         if len(calls) >= count:
             return calls
@@ -80,7 +81,8 @@ def _assert_no_upload(
         calls = [
             r
             for r in resp.json().get("requests", [])
-            if r["request"]["method"] == "POST" and r["request"]["url"] == expected_path
+            if r["request"]["method"] == "POST"
+            and r["request"]["url"].split("?")[0] == expected_path
         ]
         if calls:
             pytest.fail(

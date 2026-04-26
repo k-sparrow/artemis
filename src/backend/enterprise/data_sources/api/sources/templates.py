@@ -18,6 +18,7 @@ _FILESYSTEM_TOPIC = "artemis.datasource.filesystem"
 def render_filesystem_connector(
     *,
     connector_name: str,
+    connector_id: str,
     watch_path: str,
     namespace: str,
     namespace_id: str,
@@ -96,6 +97,7 @@ def render_filesystem_connector(
                     "InjectNamespaceHeader",
                     "InjectNamespaceIdHeader",
                     "InjectOrgNameHeader",
+                    "InjectGroupIdHeader",
                 ]
             ),
             # ── Key transforms ───────────────────────────────────────────────
@@ -150,5 +152,10 @@ def render_filesystem_connector(
             ),
             "transforms.InjectOrgNameHeader.header": "artemis.org_name",
             "transforms.InjectOrgNameHeader.value.literal": org_name,
+            "transforms.InjectGroupIdHeader.type": (
+                "org.apache.kafka.connect.transforms.InsertHeader"
+            ),
+            "transforms.InjectGroupIdHeader.header": "artemis.group_id",
+            "transforms.InjectGroupIdHeader.value.literal": connector_id,
         },
     }

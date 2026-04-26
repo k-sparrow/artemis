@@ -28,6 +28,7 @@ from src.backend.enterprise.data_sources.api.sources.templates import (
 _TOPIC = "artemis.datasource.filesystem"
 _NAMESPACE = "test-ns"
 _NAMESPACE_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+_CONNECTOR_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 _ORG_NAME = "test-org"
 
 
@@ -136,6 +137,7 @@ class TestFilesourceConnector:
         connector_name = f"test-filesource-{uuid.uuid4().hex[:8]}"
         config = render_filesystem_connector(
             connector_name=connector_name,
+            connector_id=_CONNECTOR_ID,
             watch_path="/watch",
             namespace=_NAMESPACE,
             namespace_id=_NAMESPACE_ID,
@@ -172,6 +174,7 @@ class TestFilesourceConnector:
             pytest.param("artemis.namespace", _NAMESPACE, id="namespace"),
             pytest.param("artemis.namespace_id", _NAMESPACE_ID, id="namespace_id"),
             pytest.param("artemis.org_name", _ORG_NAME, id="org_name"),
+            pytest.param("artemis.group_id", _CONNECTOR_ID, id="group_id"),
         ],
     )
     def test_static_header_present_and_correct(

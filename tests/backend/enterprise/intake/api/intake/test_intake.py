@@ -17,10 +17,14 @@ import pytest  # noqa: F401
 from fastapi import status
 from fastapi.testclient import TestClient
 
+import uuid
+
 from tests.backend.enterprise.intake.api.intake.conftest import (
     _NAMESPACE_ID,
     _TASK_ID,
 )
+
+_GROUP_ID = uuid.uuid4()
 
 _COMMON = {
     "display_name": "doc.pdf",
@@ -209,6 +213,44 @@ class TestUrlSource:
             resp = _post(client, {"type": "url", "url": "https://unreachable.example"})
 
         assert resp.status_code == status.HTTP_502_BAD_GATEWAY
+
+
+# ---------------------------------------------------------------------------
+# group_id forwarding
+# ---------------------------------------------------------------------------
+
+
+class TestGroupIdForwarding:
+    def test_group_id_forwarded_as_query_param(
+        self, client: TestClient, mock_http: MagicMock, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "doc.pdf"
+        f.write_bytes(b"content")
+
+        client.post(
+            "/intake",
+            json={
+                **_COMMON,
+                "group_id": str(_GROUP_ID),
+                "source": {"type": "filesystem", "path": str(f)},
+            },
+        )
+
+        upload_call = mock_http.post.call_args_list[0]
+        params = upload_call.kwargs.get("params", {})
+        assert params.get("group_id") == str(_GROUP_ID)
+
+    def test_no_group_id_sends_no_query_param(
+        self, client: TestClient, mock_http: MagicMock, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "doc.pdf"
+        f.write_bytes(b"content")
+
+        _post(client, {"type": "filesystem", "path": str(f)})
+
+        upload_call = mock_http.post.call_args_list[0]
+        params = upload_call.kwargs.get("params", {})
+        assert not params
 
 
 # ---------------------------------------------------------------------------

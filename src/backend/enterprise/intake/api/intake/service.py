@@ -105,9 +105,13 @@ async def intake_file(
     data, content_type = await _resolve_bytes(request.source)
 
     # 3. Upload to the storage service.
+    params = {}
+    if request.group_id is not None:
+        params["group_id"] = str(request.group_id)
     upload_resp = await http.post(
         f"/namespaces/{request.namespace_id}/objects",
         files={"file": (request.display_name, data, content_type)},
+        params=params,
     )
     if upload_resp.status_code != status.HTTP_202_ACCEPTED:
         raise StorageServiceError(upload_resp.status_code, upload_resp.text)

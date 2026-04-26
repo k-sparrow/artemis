@@ -181,6 +181,7 @@ async def create_data_source(
 
     config_dict = render_filesystem_connector(
         connector_name=connector_name,
+        connector_id=str(record_id),
         watch_path=path,
         namespace=namespace,
         namespace_id=str(namespace_id),
