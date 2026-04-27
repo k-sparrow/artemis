@@ -139,6 +139,7 @@ def call_indexing_service(
     ingestion_url: str,
     timeout: float,
     logger: Logger,
+    group_id: str | None = None,
 ) -> dict:
     """POST *chunks* to the indexing service and return the UpsertResult dict.
 
@@ -148,12 +149,15 @@ def call_indexing_service(
     logger.info(
         "indexing=request url=%s namespace=%s chunks=%d", url, namespace_id, len(chunks)
     )
+    params: dict = {"namespace": str(namespace_id)}
+    if group_id is not None:
+        params["group_id"] = group_id
 
     def _request() -> dict:
         with httpx.Client(timeout=timeout) as http:
             response = http.post(
                 url,
-                params={"namespace": str(namespace_id)},
+                params=params,
                 json=[c.model_dump(mode="json") for c in chunks],
             )
             response.raise_for_status()

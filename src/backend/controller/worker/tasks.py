@@ -114,13 +114,15 @@ def ingest(
         s3.object,
     )
 
+    group_id = str(info.group_id) if info.group_id is not None else None
+
     match upload_action:
         case UploadAction.CREATE | UploadAction.UPDATE:
             result = chain(
                 fetch_and_parse.s(
-                    s3.model_dump(), source.model_dump(), str(namespace_id)
+                    s3.model_dump(), source.model_dump(), str(namespace_id), group_id
                 ),
-                index.s(str(namespace_id)),
+                index.s(str(namespace_id), group_id),
             ).apply_async()
             return {"chain_id": str(result.id)}
 
@@ -155,6 +157,7 @@ def fetch_and_parse(
     s3: S3Details,
     source: SourceDetails,
     namespace_id: uuid.UUID,
+    group_id: str | None = None,
 ) -> str:
     """Download the document from S3, parse it, persist chunks to MinIO.
 
@@ -217,7 +220,9 @@ def fetch_and_parse(
     retry_backoff=True,
     retry_backoff_max=120,
 )
-def index(chunks_key: str, namespace_id: uuid.UUID) -> dict:
+def index(
+    chunks_key: str, namespace_id: uuid.UUID, group_id: str | None = None
+) -> dict:
     """Load parsed chunks from MinIO, index them, delete the MinIO object.
 
     *chunks_key* is the MinIO object key returned by :func:`fetch_and_parse`.
@@ -239,12 +244,13 @@ def index(chunks_key: str, namespace_id: uuid.UUID) -> dict:
         ingestion_url=settings.INGESTION_SERVICE_URL,
         timeout=settings.HTTPX_TIMEOUT,
         logger=logger,
+        group_id=group_id,
     )
 
     store.delete(chunks_key)
     logger.info("index=cleanup key=%s obj_id=%s", chunks_key, obj_id)
 
-    return {**result, "obj_id": obj_id}
+    return {**result, "obj_id": obj_id, "group_id": group_id}
 
 
 # ---------------------------------------------------------------------------

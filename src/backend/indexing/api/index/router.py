@@ -39,10 +39,11 @@ async def ingest_endpoint(
     chunks: List[ParsedChunk],
     pipeline: pipeline_dependency,
     namespace: UUID,
+    group_id: Optional[str] = None,
 ) -> UpsertResult:
     logger.info("ingest_started", num_chunks=len(chunks))
     try:
-        result = await service.a_index_and_ingest(chunks, pipeline, namespace)
+        result = await service.a_index_and_ingest(chunks, pipeline, namespace, group_id)
         logger.info(
             "ingest_completed",
             num_added=result.num_added,
