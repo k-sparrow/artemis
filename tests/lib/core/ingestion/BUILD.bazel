@@ -31,6 +31,16 @@ py_library(
 )
 
 py_test(
+    name = "test_contract",
+    srcs = ["test_contract.py"],
+    tags = ["unit"],
+    deps = [
+        "//src/lib/core/ingestion:contract",
+        requirement("pytest"),
+    ],
+)
+
+py_test(
     name = "test_config",
     srcs = ["test_config.py"],
     env = {},

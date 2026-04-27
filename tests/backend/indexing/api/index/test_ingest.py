@@ -181,6 +181,46 @@ class TestIngestEndpoint:
             doc.metadata.get("obj_id") == str(OBJ_ID) for doc in docs_arg
         ), "All documents must carry obj_id in their metadata"
 
+    def test_group_id_stamped_when_provided(
+        self,
+        client: TestClient,
+        namespace: uuid.UUID,
+        mock_pipeline: AsyncMock,
+    ) -> None:
+        """group_id must be stamped on every document when passed as a query param."""
+        group_id = str(uuid.uuid4())
+        client.post(
+            "/ingest",
+            params={"namespace": str(namespace), "group_id": group_id},
+            json=[
+                {
+                    "page_content": "hello",
+                    "source": "test.md",
+                    "type": "text",
+                    "obj_id": str(OBJ_ID),
+                }
+            ],
+        )
+
+        docs_arg = mock_pipeline.aprocess.call_args[0][0]
+        assert all(
+            doc.metadata.get("group_id") == group_id for doc in docs_arg
+        ), "All documents must carry group_id in their metadata when provided"
+
+    def test_group_id_absent_when_not_provided(
+        self,
+        client: TestClient,
+        namespace: uuid.UUID,
+        mock_pipeline: AsyncMock,
+    ) -> None:
+        """group_id must not appear in metadata when not passed."""
+        _post_chunks(client, namespace)
+
+        docs_arg = mock_pipeline.aprocess.call_args[0][0]
+        assert all(
+            "group_id" not in doc.metadata for doc in docs_arg
+        ), "group_id must be absent from metadata when not provided"
+
     def test_multiple_chunks_all_passed_to_pipeline(
         self,
         client: TestClient,

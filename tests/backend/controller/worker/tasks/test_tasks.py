@@ -113,6 +113,7 @@ class TestIngest:
             _S3.model_dump(),
             _SOURCE.model_dump(),
             str(_NAMESPACE_ID),
+            None,  # group_id — None when not set on IngestionInfo
         )
 
     def test_update_dispatches_chain(self) -> None:
@@ -480,7 +481,29 @@ class TestIndex:
         The task must return the upsert result dict extended with obj_id from chunks.
         """
         result = self._run(MagicMock(), MagicMock())
-        assert result == {**_UPSERT_RESULT, "obj_id": str(_OBJ_ID)}
+        assert result == {**_UPSERT_RESULT, "obj_id": str(_OBJ_ID), "group_id": None}
+
+    def test_returns_group_id_when_provided(self) -> None:
+        """group_id must be included in the return dict when set."""
+        group_id = str(uuid.uuid4())
+        mock_store = MagicMock()
+        mock_store.return_value.load.return_value = _CHUNKS
+        mock_index_svc = MagicMock(return_value=_UPSERT_RESULT)
+
+        with (
+            patch(
+                "src.backend.controller.worker.tasks.call_indexing_service",
+                mock_index_svc,
+            ),
+            patch("src.backend.controller.worker.tasks.ParsedChunkStore", mock_store),
+            patch(
+                "src.backend.controller.worker.tasks.get_s3_client",
+                return_value=MagicMock(),
+            ),
+        ):
+            result = index.run(self._KEY, _NAMESPACE_ID, group_id)
+
+        assert result["group_id"] == group_id
 
     def test_loads_chunks_from_store(self) -> None:
         """

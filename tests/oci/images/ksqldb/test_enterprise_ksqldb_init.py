@@ -148,18 +148,22 @@ def _produce_file_event(
     namespace: str,
     namespace_id: str,
     org_name: str,
+    group_id: str | None = None,
 ) -> None:
     producer = KafkaProducer(bootstrap_servers=[bootstrap_server])
+    headers = [
+        ("CamelHeader.CamelFileAbsolutePath", abs_path.encode()),
+        ("CamelHeader.CamelFileName", filename.encode()),
+        ("artemis.namespace", namespace.encode()),
+        ("artemis.namespace_id", namespace_id.encode()),
+        ("artemis.org_name", org_name.encode()),
+    ]
+    if group_id is not None:
+        headers.append(("artemis.group_id", group_id.encode()))
     producer.send(
         _INPUT_TOPIC,
         value=b"",  # VALUE_FORMAT=KAFKA — content ignored; headers carry the data
-        headers=[
-            ("CamelHeader.CamelFileAbsolutePath", abs_path.encode()),
-            ("CamelHeader.CamelFileName", filename.encode()),
-            ("artemis.namespace", namespace.encode()),
-            ("artemis.namespace_id", namespace_id.encode()),
-            ("artemis.org_name", org_name.encode()),
-        ],
+        headers=headers,
     )
     producer.flush()
     producer.close()
@@ -282,3 +286,26 @@ class TestEnterpriseKsqlDbInit:
 
         expected = {ns for _, _, ns in files}
         assert seen_namespace_ids == expected
+
+    def test_group_id_promoted_to_value(
+        self, bootstrap_server: str, enterprise_init_exit_code: int
+    ) -> None:
+        """
+        artemis.group_id header must be decoded from UTF-8 bytes to a JSON string value.
+        """
+        group_id = str(uuid.uuid4())
+        namespace_id = str(uuid.uuid4())
+
+        start = _end_offset(bootstrap_server, _OUTPUT_TOPIC)
+        _produce_file_event(
+            bootstrap_server,
+            f"/watch/{uuid.uuid4().hex}.txt",
+            "doc.txt",
+            "test-ns",
+            namespace_id,
+            "test-org",
+            group_id=group_id,
+        )
+
+        record = _consume_from(bootstrap_server, _OUTPUT_TOPIC, start)
+        assert record["group_id"] == group_id

@@ -36,7 +36,8 @@ CREATE OR REPLACE STREAM `artemis-enterprise-datasource-filesystem` (
     `display_name` BYTES HEADER('CamelHeader.CamelFileName'),
     `namespace`    BYTES HEADER('artemis.namespace'),
     `namespace_id` BYTES HEADER('artemis.namespace_id'),
-    `org_name`     BYTES HEADER('artemis.org_name')
+    `org_name`     BYTES HEADER('artemis.org_name'),
+    `group_id`     BYTES HEADER('artemis.group_id')
 )
 WITH (
     KAFKA_TOPIC  = 'artemis.datasource.filesystem',
@@ -61,6 +62,7 @@ AS SELECT
         `path` := FROM_BYTES(`path`, 'utf8')
     ) AS `source`,
     FROM_BYTES(`display_name`, 'utf8') AS `display_name`,
-    FROM_BYTES(`namespace_id`, 'utf8') AS `namespace_id`
+    FROM_BYTES(`namespace_id`, 'utf8') AS `namespace_id`,
+    FROM_BYTES(`group_id`, 'utf8') AS `group_id`
 FROM `artemis-enterprise-datasource-filesystem`
 EMIT CHANGES;
