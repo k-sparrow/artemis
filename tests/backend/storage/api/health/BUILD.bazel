@@ -1,0 +1,28 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "test_health",
+    srcs = ["test_health.py"],
+    tags = ["unit"],
+    deps = [
+        "//src/backend/storage/api:main",
+        "//tests/backend/storage/api:conftest",
+        requirement("fastapi"),
+        requirement("httpx"),
+        requirement("minio"),
+        requirement("pytest"),
+    ],
+)
