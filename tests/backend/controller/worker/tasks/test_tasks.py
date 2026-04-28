@@ -107,13 +107,21 @@ class TestIngest:
 
         assert "chain_id" in result
         mock_chain.assert_called_once()
-        # First task in the chain must be fetch_and_parse with serialisable args
+        # First task: fetch_and_parse must receive serialisable args
         first_sig = mock_chain.call_args[0][0]
         assert first_sig.args == (
             _S3.model_dump(),
             _SOURCE.model_dump(),
             str(_NAMESPACE_ID),
             None,  # group_id — None when not set on IngestionInfo
+        )
+        # Second task: index must receive source + s3 dicts for the JDBC sink result
+        second_sig = mock_chain.call_args[0][1]
+        assert second_sig.args == (
+            str(_NAMESPACE_ID),
+            None,  # group_id
+            _SOURCE.model_dump(mode="json"),
+            _S3.model_dump(mode="json"),
         )
 
     def test_update_dispatches_chain(self) -> None:
@@ -474,14 +482,21 @@ class TestIndex:
                 return_value=MagicMock(),
             ),
         ):
-            return index.run(self._KEY, _NAMESPACE_ID)
+            return index.run(self._KEY, _NAMESPACE_ID, source=_SOURCE, s3=_S3)
 
     def test_returns_upsert_result_with_obj_id(self) -> None:
-        """
-        The task must return the upsert result dict extended with obj_id from chunks.
-        """
+        """The task must return a structured IngestionResult dict for the JDBC sink."""
         result = self._run(MagicMock(), MagicMock())
-        assert result == {**_UPSERT_RESULT, "obj_id": str(_OBJ_ID), "group_id": None}
+        assert result["object"]["id"] == str(_OBJ_ID)
+        assert result["object"]["source"] == _SOURCE.source
+        assert result["object"]["scope"]["namespace_id"] == str(_NAMESPACE_ID)
+        assert result["object"]["scope"]["group_id"] is None
+        assert result["object"]["properties"]["object_type"] == _SOURCE.object_type
+        assert result["object"]["properties"]["content_type"] == _SOURCE.content_type
+        assert result["object"]["properties"]["size_bytes"] == _S3.size
+        assert result["indexing"]["num_added"] == _UPSERT_RESULT["num_added"]
+        assert result["indexing"]["num_skipped"] == _UPSERT_RESULT["num_skipped"]
+        assert result["indexing"]["ids"] == _UPSERT_RESULT["ids"]
 
     def test_returns_group_id_when_provided(self) -> None:
         """group_id must be included in the return dict when set."""
@@ -501,9 +516,10 @@ class TestIndex:
                 return_value=MagicMock(),
             ),
         ):
-            result = index.run(self._KEY, _NAMESPACE_ID, group_id)
+            result = index.run(self._KEY, _NAMESPACE_ID, group_id, _SOURCE, _S3)
 
-        assert result["group_id"] == group_id
+        assert result["object"]["scope"]["group_id"] == group_id
+        assert result["object"]["scope"]["namespace_id"] == str(_NAMESPACE_ID)
 
     def test_loads_chunks_from_store(self) -> None:
         """
@@ -576,7 +592,7 @@ class TestIndex:
     def test_includes_obj_id_from_chunks_in_result(self) -> None:
         """The result dict must include obj_id extracted from the loaded chunks."""
         result = self._run(MagicMock(), MagicMock())
-        assert result["obj_id"] == str(_OBJ_ID)
+        assert result["object"]["id"] == str(_OBJ_ID)
 
     def test_minio_key_not_deleted_on_indexing_failure(self) -> None:
         """On failure the object must be left in MinIO for dead-letter replay."""

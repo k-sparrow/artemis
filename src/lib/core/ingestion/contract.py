@@ -35,6 +35,11 @@ __all__ = [
     "SourceDetails",
     "IngestionInfo",
     "IngestionTaskDetails",
+    "ObjectScope",
+    "ObjectProperties",
+    "ObjectMetadata",
+    "IndexingOutcome",
+    "IngestionResult",
 ]
 
 
@@ -72,6 +77,50 @@ class IngestionInfo(BaseModel):
 
     namespace_id: UUID
     group_id: UUID | None = None
+
+
+class ObjectScope(BaseModel):
+    """Tenancy context — which namespace and group owns this object."""
+
+    namespace_id: UUID
+    group_id: UUID | None
+
+
+class ObjectProperties(BaseModel):
+    """Intrinsic file/blob properties."""
+
+    object_type: str
+    content_type: str
+    size_bytes: int | None
+
+
+class ObjectMetadata(BaseModel):
+    """Full descriptor of an ingested object."""
+
+    id: UUID
+    source: str
+    scope: ObjectScope
+    properties: ObjectProperties
+
+
+class IndexingOutcome(BaseModel):
+    """Result produced by the vector indexing service."""
+
+    num_added: int
+    num_skipped: int
+    ids: list[str]
+
+
+class IngestionResult(BaseModel):
+    """Result of a completed ``tasks.index`` task.
+
+    Serialised as JSON into ``apollo_celery_taskmeta.result``.
+    The ksqlDB CSAS reads this to populate ``ingested_objects`` and
+    ``ingestion_tasks`` via two JDBC sink connectors.
+    """
+
+    object: ObjectMetadata
+    indexing: IndexingOutcome
 
 
 class IngestionTaskDetails(BaseModel):

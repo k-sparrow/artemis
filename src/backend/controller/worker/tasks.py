@@ -37,6 +37,11 @@ import pybreaker
 
 from src.backend.controller.lib.schemas import (
     IngestionInfo,
+    IngestionResult,
+    IndexingOutcome,
+    ObjectMetadata,
+    ObjectProperties,
+    ObjectScope,
     S3Details,
     SourceDetails,
     UploadAction,
@@ -122,7 +127,12 @@ def ingest(
                 fetch_and_parse.s(
                     s3.model_dump(), source.model_dump(), str(namespace_id), group_id
                 ),
-                index.s(str(namespace_id), group_id),
+                index.s(
+                    str(namespace_id),
+                    group_id,
+                    source.model_dump(mode="json"),
+                    s3.model_dump(mode="json"),
+                ),
             ).apply_async()
             return {"chain_id": str(result.id)}
 
@@ -221,7 +231,11 @@ def fetch_and_parse(
     retry_backoff_max=120,
 )
 def index(
-    chunks_key: str, namespace_id: uuid.UUID, group_id: str | None = None
+    chunks_key: str,
+    namespace_id: uuid.UUID,
+    group_id: str | None = None,
+    source: SourceDetails | None = None,
+    s3: S3Details | None = None,
 ) -> dict:
     """Load parsed chunks from MinIO, index them, delete the MinIO object.
 
@@ -250,7 +264,26 @@ def index(
     store.delete(chunks_key)
     logger.info("index=cleanup key=%s obj_id=%s", chunks_key, obj_id)
 
-    return {**result, "obj_id": obj_id, "group_id": group_id}
+    return IngestionResult(
+        object=ObjectMetadata(
+            id=uuid.UUID(obj_id),
+            source=source.source if source is not None else "",
+            scope=ObjectScope(
+                namespace_id=namespace_id,
+                group_id=uuid.UUID(group_id) if group_id is not None else None,
+            ),
+            properties=ObjectProperties(
+                object_type=source.object_type if source is not None else "",
+                content_type=source.content_type if source is not None else "",
+                size_bytes=s3.size if s3 is not None else None,
+            ),
+        ),
+        indexing=IndexingOutcome(
+            num_added=result["num_added"],
+            num_skipped=result["num_skipped"],
+            ids=result["ids"],
+        ),
+    ).model_dump(mode="json")
 
 
 # ---------------------------------------------------------------------------
