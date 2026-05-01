@@ -519,6 +519,68 @@ kafka_connect_connector_instance(
 )
 
 kafka_connect_connector_instance(
+    name = "debezium-jdbc-sink-ingested-objects",
+    connector_config = {
+        "connector.class": "io.debezium.connector.jdbc.JdbcSinkConnector",
+        "tasks.max": "1",
+        "topics": "artemis.celery.ingested_objects",
+
+        # ksqlDB output is plain JSON (no schema registry)
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter.schemas.enable": "false",
+        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "key.converter.schemas.enable": "false",
+        "connection.username": "postgres",
+        "connection.password": "testpass",
+        "connection.url": "jdbc:postgresql://postgres:5432/documents",
+
+        # sink to the ingested_objects table (created by the storage service)
+        "table.name.format": "ingested_objects",
+
+        # PK is the 'id' field in the message value (obj_id UUID)
+        "primary.key.mode": "record_value",
+        "primary.key.fields": "id",
+
+        # upsert: re-indexing the same object is idempotent
+        "insert.mode": "upsert",
+        "schema.evolution": "none",
+        "use.time.zone": "UTC",
+    },
+    connector_name = "DebeziumJdbcSinkConnector__CeleryResultToIngestedObjects",
+)
+
+kafka_connect_connector_instance(
+    name = "debezium-jdbc-sink-ingestion-tasks",
+    connector_config = {
+        "connector.class": "io.debezium.connector.jdbc.JdbcSinkConnector",
+        "tasks.max": "1",
+        "topics": "artemis.celery.ingestion_tasks",
+
+        # ksqlDB output is plain JSON (no schema registry)
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter.schemas.enable": "false",
+        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "key.converter.schemas.enable": "false",
+        "connection.username": "postgres",
+        "connection.password": "testpass",
+        "connection.url": "jdbc:postgresql://postgres:5432/documents",
+
+        # sink to the ingestion_tasks table (created by the storage service)
+        "table.name.format": "ingestion_tasks",
+
+        # PK is the 'task_id' field in the message value
+        "primary.key.mode": "record_value",
+        "primary.key.fields": "task_id",
+
+        # upsert: a given task_id is processed at most once
+        "insert.mode": "upsert",
+        "schema.evolution": "none",
+        "use.time.zone": "UTC",
+    },
+    connector_name = "DebeziumJdbcSinkConnector__CeleryResultToIngestionTasks",
+)
+
+kafka_connect_connector_instance(
     name = "debezium-jdbc-sink-private-files-table",
     connector_config = {
         "connector.class": "io.debezium.connector.jdbc.JdbcSinkConnector",
@@ -733,6 +795,11 @@ kafka_connect_init_image(
         ":artemis-http-sink-connector-intake",
         # ksqlDB-routed Celery tasks → RabbitMQ → Celery worker
         ":artemis-rabbitmq-sink-connector-celery",
+        # Celery task results (apollo_celery_taskmeta) → Kafka CDC
+        ":debezium-cdc-postgres-task-results",
+        # ksqlDB CDC fan-out → storage service tables
+        ":debezium-jdbc-sink-ingested-objects",
+        ":debezium-jdbc-sink-ingestion-tasks",
     ],
     exec_dir = "etc/bin",
 )

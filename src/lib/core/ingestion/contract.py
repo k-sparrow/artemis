@@ -72,18 +72,14 @@ class SourceDetails(BaseModel):
     object_type: str
 
 
-class IngestionInfo(BaseModel):
-    """Namespace context for the ingestion task."""
+class ObjectScope(BaseModel):
+    """Tenancy context — which namespace and group owns this object."""
 
     namespace_id: UUID
     group_id: UUID | None = None
 
 
-class ObjectScope(BaseModel):
-    """Tenancy context — which namespace and group owns this object."""
-
-    namespace_id: UUID
-    group_id: UUID | None
+IngestionInfo = ObjectScope
 
 
 class ObjectProperties(BaseModel):

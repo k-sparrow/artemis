@@ -177,7 +177,6 @@ class IngestedObject(Base):
     )
 
     namespace: Mapped[Namespace] = relationship(back_populates="objects")
-    tasks: Mapped[list["IngestionTask"]] = relationship(back_populates="object")
 
 
 class IngestionTask(Base):
@@ -196,7 +195,6 @@ class IngestionTask(Base):
     )
     obj_id: Mapped[uuid.UUID | None] = mapped_column(
         sa.UUID(as_uuid=True),
-        sa.ForeignKey("ingested_objects.id"),
         nullable=True,
         index=True,
         comment="NULL on FAILURE tasks that produced no object",
@@ -227,7 +225,6 @@ class IngestionTask(Base):
         comment="date_done from Celery result",
     )
 
-    object: Mapped["IngestedObject | None"] = relationship(back_populates="tasks")
     namespace: Mapped[Namespace] = relationship()
 
 

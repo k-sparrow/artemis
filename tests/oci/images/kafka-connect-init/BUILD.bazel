@@ -1,0 +1,40 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    visibility = ["//visibility:public"],
+)
+
+# CDC connector deployment tests — Debezium source + JDBC sinks against artemis/postgres
+#
+# Prerequisites:
+#   bazel run //tools/oci/images:kafka-connect.tarball
+#   bazel run //tools/oci/images/postgres:tarball
+py_test(
+    name = "test_cdc_connectors",
+    srcs = [
+        "conftest.py",
+        "test_cdc_connectors.py",
+    ],
+    tags = ["integration"],
+    deps = [
+        "//src/backend/storage/api:models",
+        "//tests/lib/testcontainers/kafka:pkg",
+        requirement("fastapi"),
+        requirement("httpx"),
+        requirement("kafka-python-ng"),
+        requirement("psycopg"),
+        requirement("psycopg-binary"),
+        requirement("pytest"),
+        requirement("sqlalchemy"),
+        requirement("testcontainers"),
+    ],
+)

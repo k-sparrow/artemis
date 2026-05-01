@@ -1,0 +1,32 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    visibility = ["//visibility:public"],
+)
+
+# artemis/cp-kafka-connect:latest — plugin discovery
+#
+# Prerequisite: bazel run //tools/oci/images:kafka-connect.tarball
+py_test(
+    name = "test_plugins",
+    srcs = [
+        "conftest.py",
+        "test_plugins.py",
+    ],
+    tags = ["integration"],
+    deps = [
+        "//tests/lib/testcontainers/kafka:pkg",
+        requirement("httpx"),
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)

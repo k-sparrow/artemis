@@ -1,7 +1,7 @@
 -- Artemis ingestion pipeline — KSQLDB stream processing
 --
--- Topology
--- --------
+-- Topology A: MinIO S3 → Celery task dispatch
+-- --------------------------------------------
 --   MinIO S3 bucket notification
 --       → artemis.ingestion.storage.s3  (raw S3 event, JSON)
 --       → [this file] flatten + reshape
@@ -13,6 +13,17 @@
 --           SMT: InsertHeader adds `CamelHeader.task` = "tasks.ingest"
 --           SMT: InsertHeader adds `CamelHeader.CamelSpringRabbitmqContentType` = "application/json"
 --       → RabbitMQ → Celery worker `tasks.ingest`
+--
+-- Topology B: Celery result CDC → ingested_objects + ingestion_tasks
+-- ------------------------------------------------------------------
+--   Celery worker completes tasks.index → writes IngestionResult to apollo_celery_taskmeta
+--       → Debezium PostgreSQL source connector (WAL, REPLICA IDENTITY FULL)
+--       → apollo.ingestion.celery.results.public.apollo_celery_taskmeta (Debezium CDC, JSON)
+--       → [this file] ExtractNewRecordState unwraps envelope; filter tasks.index SUCCESS
+--       → artemis.celery.ingested_objects  (flattened IngestionResult fields)
+--           → Debezium JDBC Sink → ingested_objects table (upsert on id)
+--       → artemis.celery.ingestion_tasks   (per-task completion record)
+--           → Debezium JDBC Sink → ingestion_tasks table (upsert on task_id)
 --
 -- Why two CSAS hops instead of one?
 --   The first CSAS (`artemis-ingestion-celery-tasks`) partitions by namespace_id so
@@ -220,4 +231,122 @@ AS SELECT
 FROM `artemis-ingestion-celery-tasks`
 PARTITION BY STRUCT(`task_id` := `task_id`)
 
+EMIT CHANGES;
+
+
+-- ===========================================================================
+-- Topology B: Celery result CDC → ingested_objects + ingestion_tasks
+-- ===========================================================================
+
+
+-- ---------------------------------------------------------------------------
+-- 4. CDC source stream: Celery task results (Debezium → apollo_celery_taskmeta)
+--
+-- Produced by the debezium-cdc-postgres-task-results Kafka Connect connector.
+-- The ExtractNewRecordState SMT unwraps the Debezium envelope to a flat row
+-- whose fields match the apollo_celery_taskmeta columns.
+--
+-- Relevant columns:
+--   task_id  : Celery task UUID (VARCHAR 155)
+--   name     : Celery task name — we filter to 'tasks.index' only
+--   status   : 'SUCCESS' | 'FAILURE' | 'STARTED' | 'PENDING'
+--   result   : JSON-encoded IngestionResult (see src/lib/core/ingestion/contract.py)
+--              NULL on FAILURE (Celery stores the exception repr instead)
+--   date_done: task completion timestamp (ISO 8601 string, JSON converter no-schema)
+--   traceback: full traceback on FAILURE; NULL on SUCCESS
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE STREAM `artemis-celery-taskmeta` (
+    task_id   STRING,
+    status    STRING,
+    result    STRING,
+    date_done STRING,
+    traceback STRING,
+    name      STRING
+)
+WITH (
+    KAFKA_TOPIC  = 'apollo.ingestion.celery.results.public.apollo_celery_taskmeta',
+    VALUE_FORMAT = 'JSON',
+    PARTITIONS   = 1
+);
+
+
+-- ---------------------------------------------------------------------------
+-- 5. Fan-out A: ingested objects (SUCCESS events only)
+--
+-- Output topic: artemis.celery.ingested_objects
+-- Downstream:   debezium-jdbc-sink-ingested-objects connector
+--               → upserts into the ingested_objects table (primary key: id)
+--
+-- All IngestionResult fields are parsed from the result TEXT column via
+-- EXTRACTJSONFIELD. The s3_key is derived as "{namespace_id}/{obj_id}".
+-- size_bytes is CAST to BIGINT; group_id is NULL for non-enterprise tasks.
+--
+-- The JDBC sink uses primary.key.mode=record_value, primary.key.fields=id.
+-- The Kafka record key (Debezium integer PK) is irrelevant for the sink.
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE STREAM `artemis-celery-ingested-objects`
+WITH (
+    KAFKA_TOPIC  = 'artemis.celery.ingested_objects',
+    VALUE_FORMAT = 'JSON',
+    PARTITIONS   = 1
+)
+AS SELECT
+    EXTRACTJSONFIELD(result, '$.object.id')                      AS `id`,
+    EXTRACTJSONFIELD(result, '$.object.scope.namespace_id')      AS `namespace_id`,
+    EXTRACTJSONFIELD(result, '$.object.source')                  AS `source`,
+    EXTRACTJSONFIELD(result, '$.object.properties.object_type')  AS `object_type`,
+    CONCAT(
+        EXTRACTJSONFIELD(result, '$.object.scope.namespace_id'),
+        '/',
+        EXTRACTJSONFIELD(result, '$.object.id')
+    )                                                            AS `s3_key`,
+    EXTRACTJSONFIELD(result, '$.object.properties.content_type') AS `content_type`,
+    CAST(
+        EXTRACTJSONFIELD(result, '$.object.properties.size_bytes') AS BIGINT
+    )                                                            AS `size_bytes`,
+    CASE
+      WHEN EXTRACTJSONFIELD(result, '$.object.scope.group_id') = 'null'
+        THEN CAST(NULL AS VARCHAR)
+      ELSE EXTRACTJSONFIELD(result, '$.object.scope.group_id')
+    END                                                          AS `group_id`
+FROM `artemis-celery-taskmeta`
+WHERE name = 'tasks.index' AND status = 'SUCCESS'
+EMIT CHANGES;
+
+
+-- ---------------------------------------------------------------------------
+-- 6. Fan-out B: ingestion tasks (SUCCESS events only)
+--
+-- Output topic: artemis.celery.ingestion_tasks
+-- Downstream:   debezium-jdbc-sink-ingestion-tasks connector
+--               → upserts into the ingestion_tasks table (primary key: task_id)
+--
+-- namespace_id and obj_id are extracted from the IngestionResult JSON and
+-- are guaranteed non-NULL for SUCCESS tasks.
+--
+-- Note: FAILURE tasks are excluded because result is NULL on FAILURE — Celery
+-- stores the exception repr rather than an IngestionResult, so namespace_id
+-- cannot be recovered from the result column alone. FAILURE tracking is a
+-- future enhancement (requires parsing the BYTEA kwargs column or a separate
+-- side channel).
+--
+-- The JDBC sink uses primary.key.mode=record_value, primary.key.fields=task_id.
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE STREAM `artemis-celery-ingestion-tasks`
+WITH (
+    KAFKA_TOPIC  = 'artemis.celery.ingestion_tasks',
+    VALUE_FORMAT = 'JSON',
+    PARTITIONS   = 1
+)
+AS SELECT
+    task_id                                                  AS `task_id`,
+    EXTRACTJSONFIELD(result, '$.object.id')                  AS `obj_id`,
+    EXTRACTJSONFIELD(result, '$.object.scope.namespace_id')  AS `namespace_id`,
+    status                                                   AS `status`,
+    date_done                                                AS `completed_at`
+FROM `artemis-celery-taskmeta`
+WHERE name = 'tasks.index' AND status = 'SUCCESS'
 EMIT CHANGES;

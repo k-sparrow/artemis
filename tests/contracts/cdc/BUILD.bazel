@@ -1,0 +1,35 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    visibility = ["//visibility:public"],
+)
+
+# Contract tests: apollo_celery_taskmeta CDC row → ingested_objects + ingestion_tasks topics
+#
+# Validates ksqlDB streams 4–6 in artemis_init.ksql.
+# Infrastructure: KafkaContainer + KSQLDbContainer only (no host mounts).
+#
+# Prerequisite: bazel run //tools/oci/images/ksqldb:artemis_init_tarball
+py_test(
+    name = "test_celery_result_to_tables",
+    srcs = [
+        "conftest.py",
+        "test_celery_result_to_tables.py",
+    ],
+    tags = ["integration"],
+    deps = [
+        "//tests/lib/testcontainers/kafka:pkg",
+        requirement("kafka-python-ng"),
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)
