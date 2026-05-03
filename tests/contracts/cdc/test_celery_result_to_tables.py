@@ -113,8 +113,36 @@ def _consume_one(
     pytest.fail(f"No record on {topic} after offset {start_offset} within {timeout_s}s")
 
 
+def _consume_raw(
+    bootstrap_server: str, topic: str, start_offset: int, timeout_s: int = 30
+) -> tuple[bytes | None, bytes | None]:
+    """Return (raw_key_bytes, raw_value_bytes) for the first record at or after start_offset.
+
+    Used for tombstone detection: a tombstone has value=None (null bytes).
+    """
+    tp = TopicPartition(topic, 0)
+    consumer = KafkaConsumer(
+        bootstrap_servers=[bootstrap_server],
+        enable_auto_commit=False,
+        consumer_timeout_ms=timeout_s * 1_000,
+        group_id=None,
+    )
+    consumer.assign([tp])
+    consumer.poll(timeout_ms=500)
+    consumer.seek(tp, start_offset)
+    try:
+        for record in consumer:
+            return record.key, record.value
+    finally:
+        consumer.close()
+    pytest.fail(f"No record on {topic} after offset {start_offset} within {timeout_s}s")
+
+
 def _make_ingestion_result(
-    obj_id: str, namespace_id: str, group_id: str | None = None
+    obj_id: str,
+    namespace_id: str,
+    group_id: str | None = None,
+    operation: str = "CREATE",
 ) -> str:
     return json.dumps(
         {
@@ -125,11 +153,11 @@ def _make_ingestion_result(
                 "properties": {
                     "object_type": "file",
                     "content_type": "text/plain",
-                    "size_bytes": 2048,
+                    "size_bytes": 2048 if operation != "DELETE" else None,
                 },
             },
-            "indexing": {"num_added": 3, "num_skipped": 0, "ids": ["a", "b", "c"]},
-            "operation": "CREATE",
+            "indexing": {"num_added": 0, "num_skipped": 0, "ids": []},
+            "operation": operation,
         }
     )
 
@@ -144,6 +172,7 @@ def _produce_cdc_row(
     name: str = "tasks.index",
     date_done: int = _DATE_DONE_US,
     group_id: str | None = None,
+    operation: str = "CREATE",
 ) -> None:
     """Produce a flat CDC row matching the ExtractNewRecordState output shape."""
     producer = KafkaProducer(
@@ -155,7 +184,7 @@ def _produce_cdc_row(
         value={
             "task_id": task_id,
             "status": status,
-            "result": _make_ingestion_result(obj_id, namespace_id, group_id),
+            "result": _make_ingestion_result(obj_id, namespace_id, group_id, operation),
             "date_done": date_done,
             "traceback": None,
             "name": name,
@@ -363,3 +392,84 @@ class TestIngestionTasksContract:
         assert record["status"] == "SUCCESS"
         assert record["completed_at"] is not None
         assert record["operation"] == "CREATE"
+
+
+# ---------------------------------------------------------------------------
+# Contract: delete_document events recorded in ingestion_tasks
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestDeleteDocumentContract:
+    """tasks.delete_document SUCCESS events are recorded in artemis.celery.ingestion_tasks."""
+
+    def test_delete_record_produced_on_success(
+        self, bootstrap_server: str, streams: None
+    ) -> None:
+        task_id = str(uuid.uuid4())
+        obj_id = str(uuid.uuid4())
+        namespace_id = str(uuid.uuid4())
+
+        start = _end_offset(bootstrap_server, _TASKS_TOPIC)
+        _produce_cdc_row(
+            bootstrap_server,
+            task_id,
+            obj_id,
+            namespace_id,
+            name="tasks.delete_document",
+            operation="DELETE",
+        )
+
+        record = _consume_one(bootstrap_server, _TASKS_TOPIC, start)
+        assert record["task_id"] == task_id
+
+    def test_delete_record_fields_correct(
+        self, bootstrap_server: str, streams: None
+    ) -> None:
+        task_id = str(uuid.uuid4())
+        obj_id = str(uuid.uuid4())
+        namespace_id = str(uuid.uuid4())
+
+        start = _end_offset(bootstrap_server, _TASKS_TOPIC)
+        _produce_cdc_row(
+            bootstrap_server,
+            task_id,
+            obj_id,
+            namespace_id,
+            name="tasks.delete_document",
+            operation="DELETE",
+        )
+
+        record = _consume_one(bootstrap_server, _TASKS_TOPIC, start)
+        assert record["task_id"] == task_id
+        assert record["obj_id"] == obj_id
+        assert record["namespace_id"] == namespace_id
+        assert record["status"] == "SUCCESS"
+        assert record["operation"] == "DELETE"
+        assert record["completed_at"] is not None
+
+    def test_tombstone_produced_on_ingested_objects(
+        self, bootstrap_server: str, streams: None
+    ) -> None:
+        """tasks.delete_document produces a tombstone on artemis.celery.ingested_objects."""
+        task_id = str(uuid.uuid4())
+        obj_id = str(uuid.uuid4())
+        namespace_id = str(uuid.uuid4())
+
+        start = _end_offset(bootstrap_server, _OBJECTS_TOPIC)
+        _produce_cdc_row(
+            bootstrap_server,
+            task_id,
+            obj_id,
+            namespace_id,
+            name="tasks.delete_document",
+            operation="DELETE",
+        )
+
+        key_bytes, value_bytes = _consume_raw(bootstrap_server, _OBJECTS_TOPIC, start)
+        assert value_bytes is None, (
+            f"Expected tombstone (null value) on {_OBJECTS_TOPIC}; "
+            f"got non-null value bytes"
+        )
+        key = _decode_sr(key_bytes)
+        assert key["id"] == obj_id

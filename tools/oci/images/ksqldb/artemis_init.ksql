@@ -359,3 +359,58 @@ FROM `artemis-celery-taskmeta`
 WHERE name = 'tasks.index' AND status = 'SUCCESS'
 PARTITION BY STRUCT(`task_id` := task_id)
 EMIT CHANGES;
+
+
+-- ---------------------------------------------------------------------------
+-- 7. Fan-out C: document deletion events → ingestion_tasks
+--
+-- INSERT INTO artemis.celery.ingestion_tasks for tasks.delete_document
+-- SUCCESS events, recording the deletion for CDC tracking.
+-- ---------------------------------------------------------------------------
+
+INSERT INTO `artemis-celery-ingestion-tasks`
+SELECT
+    STRUCT(`task_id` := task_id)                             AS task_id_key,
+    EXTRACTJSONFIELD(result, '$.object.id')                  AS `obj_id`,
+    EXTRACTJSONFIELD(result, '$.object.scope.namespace_id')  AS `namespace_id`,
+    status                                                   AS `status`,
+    FROM_UNIXTIME(date_done / 1000)                          AS `completed_at`,
+    EXTRACTJSONFIELD(result, '$.operation')                  AS `operation`
+FROM `artemis-celery-taskmeta`
+WHERE name = 'tasks.delete_document' AND status = 'SUCCESS'
+PARTITION BY STRUCT(`task_id` := task_id);
+
+
+-- ---------------------------------------------------------------------------
+-- 8. Tombstone fan-out: document deletions → ingested_objects (DELETE)
+--
+-- Produces a tombstone (null-value record) to artemis.celery.ingested_objects
+-- for each tasks.delete_document SUCCESS event.  The Debezium JDBC sink
+-- (configured with delete.enabled=true) sees the null value and DELETEs the
+-- row identified by the key.
+--
+-- VALUE_FORMAT='KAFKA' + CAST(NULL AS VARCHAR) is the ksqlDB idiom for
+-- producing a tombstone: the value is serialised as raw null bytes rather than
+-- a JSON schema payload, which is exactly what Debezium's delete.enabled mode
+-- requires.  The key remains JSON_SR to match the schema the JDBC sink expects
+-- when reading the primary key in record_key mode.
+--
+-- Two CSAS can share the same output Kafka topic provided their stream names
+-- differ — Stream 5 (upserts, JSON_SR value) and Stream 8 (tombstones, KAFKA
+-- value) both target artemis.celery.ingested_objects.
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE STREAM `artemis-celery-ingested-objects-deletes`
+WITH (
+    KAFKA_TOPIC  = 'artemis.celery.ingested_objects',
+    VALUE_FORMAT = 'KAFKA',
+    KEY_FORMAT   = 'JSON_SR',
+    PARTITIONS   = 1
+)
+AS SELECT
+    STRUCT(`id` := EXTRACTJSONFIELD(result, '$.object.id')) AS id_key,
+    CAST(NULL AS VARCHAR)
+FROM `artemis-celery-taskmeta`
+WHERE name = 'tasks.delete_document' AND status = 'SUCCESS'
+PARTITION BY STRUCT(`id` := EXTRACTJSONFIELD(result, '$.object.id'))
+EMIT CHANGES;

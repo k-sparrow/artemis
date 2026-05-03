@@ -51,6 +51,7 @@ def _make_result_json(
     obj_id: uuid.UUID,
     namespace_id: uuid.UUID,
     group_id: uuid.UUID | None = None,
+    operation: str = "CREATE",
 ) -> str:
     return json.dumps(
         {
@@ -64,11 +65,11 @@ def _make_result_json(
                 "properties": {
                     "object_type": "file",
                     "content_type": "text/plain",
-                    "size_bytes": 2048,
+                    "size_bytes": 2048 if operation != "DELETE" else None,
                 },
             },
-            "indexing": {"num_added": 3, "num_skipped": 0, "ids": ["a", "b", "c"]},
-            "operation": "CREATE",
+            "indexing": {"num_added": 0, "num_skipped": 0, "ids": []},
+            "operation": operation,
         }
     )
 
@@ -83,6 +84,7 @@ def _insert_taskmeta(
     status: str = "SUCCESS",
     name: str = "tasks.index",
     date_done: str = "2026-01-01T12:00:00",
+    operation: str = "CREATE",
 ) -> None:
     """Insert a row into apollo_celery_taskmeta to trigger Debezium WAL capture."""
     with engine.begin() as conn:
@@ -96,7 +98,7 @@ def _insert_taskmeta(
             {
                 "task_id": str(task_id),
                 "status": status,
-                "result": _make_result_json(obj_id, namespace_id, group_id),
+                "result": _make_result_json(obj_id, namespace_id, group_id, operation),
                 "date_done": date_done,
                 "name": name,
             },
@@ -319,3 +321,165 @@ class TestIngestionTasksTable:
         assert row.operation == "CREATE"
         # completed_at is derived from date_done; presence confirms the sink wrote it.
         assert row.completed_at is not None
+
+
+# ---------------------------------------------------------------------------
+# Delete document path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestDeleteDocumentPath:
+    """tasks.delete_document SUCCESS events are recorded in ingestion_tasks."""
+
+    def test_delete_task_recorded(
+        self,
+        postgres_engine: sa.Engine,
+        namespace_row: uuid.UUID,
+        connectors: None,
+        kafka_connect_url: str,
+    ) -> None:
+        task_id = uuid.uuid4()
+        obj_id = uuid.uuid4()
+
+        _insert_taskmeta(
+            postgres_engine,
+            task_id=task_id,
+            obj_id=obj_id,
+            namespace_id=namespace_row,
+            name="tasks.delete_document",
+            operation="DELETE",
+        )
+
+        q = "SELECT task_id FROM ingestion_tasks WHERE task_id = :task_id"
+        p = {"task_id": task_id}
+        _assert_row(_poll_row(postgres_engine, q, p), q, p, kafka_connect_url)
+
+    def test_delete_task_fields_correct(
+        self,
+        postgres_engine: sa.Engine,
+        namespace_row: uuid.UUID,
+        connectors: None,
+        kafka_connect_url: str,
+    ) -> None:
+        task_id = uuid.uuid4()
+        obj_id = uuid.uuid4()
+        namespace_id = namespace_row
+
+        _insert_taskmeta(
+            postgres_engine,
+            task_id=task_id,
+            obj_id=obj_id,
+            namespace_id=namespace_id,
+            name="tasks.delete_document",
+            operation="DELETE",
+        )
+
+        q = "SELECT * FROM ingestion_tasks WHERE task_id = :task_id"
+        p = {"task_id": task_id}
+        row = _assert_row(_poll_row(postgres_engine, q, p), q, p, kafka_connect_url)
+        assert row.task_id == task_id
+        assert row.obj_id == obj_id
+        assert row.namespace_id == namespace_id
+        assert row.status == "SUCCESS"
+        assert row.operation == "DELETE"
+        assert row.completed_at is not None
+
+    def test_ingested_objects_row_deleted(
+        self,
+        postgres_engine: sa.Engine,
+        namespace_row: uuid.UUID,
+        connectors: None,
+        kafka_connect_url: str,
+    ) -> None:
+        """After tasks.delete_document, the ingested_objects row is removed via tombstone."""
+        # Step 1: create the row via tasks.index
+        index_task_id = uuid.uuid4()
+        obj_id = uuid.uuid4()
+
+        _insert_taskmeta(
+            postgres_engine,
+            task_id=index_task_id,
+            obj_id=obj_id,
+            namespace_id=namespace_row,
+        )
+        q = "SELECT id FROM ingested_objects WHERE id = :id"
+        p = {"id": obj_id}
+        _assert_row(_poll_row(postgres_engine, q, p), q, p, kafka_connect_url)
+
+        # Step 2: delete the row via tasks.delete_document
+        delete_task_id = uuid.uuid4()
+        _insert_taskmeta(
+            postgres_engine,
+            task_id=delete_task_id,
+            obj_id=obj_id,
+            namespace_id=namespace_row,
+            name="tasks.delete_document",
+            operation="DELETE",
+        )
+
+        deadline = time.monotonic() + _POLL_TIMEOUT_S
+        while time.monotonic() < deadline:
+            with postgres_engine.connect() as conn:
+                row = conn.execute(sa.text(q), p).fetchone()
+                if row is None:
+                    return
+            time.sleep(_POLL_INTERVAL_S)
+        pytest.fail(
+            f"ingested_objects row {obj_id!r} was not deleted within {_POLL_TIMEOUT_S}s.\n"
+            f"Connector statuses:\n{_connector_diagnostics(kafka_connect_url)}"
+        )
+
+    def test_delete_does_not_create_ingested_objects_row(
+        self,
+        postgres_engine: sa.Engine,
+        namespace_row: uuid.UUID,
+        connectors: None,
+        kafka_connect_url: str,
+    ) -> None:
+        """tasks.delete_document rows must NOT produce ingested_objects records.
+
+        The ksqlDB stream filter (name = 'tasks.index') prevents delete events
+        from reaching the ingested_objects JDBC sink.  Confirmed by verifying
+        no row appears after a sentinel index task does appear.
+        """
+        delete_task_id = uuid.uuid4()
+        delete_obj_id = uuid.uuid4()
+
+        _insert_taskmeta(
+            postgres_engine,
+            task_id=delete_task_id,
+            obj_id=delete_obj_id,
+            namespace_id=namespace_row,
+            name="tasks.delete_document",
+            operation="DELETE",
+        )
+
+        # Sentinel tasks.index row confirms the ingested_objects pipeline is live.
+        sentinel_task = uuid.uuid4()
+        sentinel_obj = uuid.uuid4()
+        _insert_taskmeta(
+            postgres_engine,
+            task_id=sentinel_task,
+            obj_id=sentinel_obj,
+            namespace_id=namespace_row,
+        )
+        sentinel_q = "SELECT id FROM ingested_objects WHERE id = :id"
+        sentinel_p = {"id": sentinel_obj}
+        _assert_row(
+            _poll_row(postgres_engine, sentinel_q, sentinel_p),
+            sentinel_q,
+            sentinel_p,
+            kafka_connect_url,
+        )
+
+        # The delete_obj_id must not have been written to ingested_objects.
+        with postgres_engine.connect() as conn:
+            row = conn.execute(
+                sa.text("SELECT id FROM ingested_objects WHERE id = :id"),
+                {"id": delete_obj_id},
+            ).fetchone()
+        assert row is None, (
+            f"tasks.delete_document should not produce an ingested_objects row; "
+            f"found id={row.id!r}"
+        )
