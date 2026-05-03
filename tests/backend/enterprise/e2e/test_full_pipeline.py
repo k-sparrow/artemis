@@ -1,8 +1,16 @@
 """Enterprise → ingestion full e2e test.
 
 Proves the complete pipeline end-to-end:
-  file drop → FileSource → Kafka → ksqlDB → HTTP sink → intake
-            → storage → Celery → Docling → TEI → Qdrant vectors
+  Enterprise path:
+    file drop → FileSource → Kafka → ksqlDB → HTTP sink → intake
+              → storage → Celery → Docling → TEI → Qdrant vectors
+              → CDC → ingested_objects + ingestion_tasks tables
+
+  Private path:
+    POST /namespaces/{id}/objects → storage → Celery → Docling → TEI → Qdrant vectors
+              → CDC → ingested_objects + ingestion_tasks tables
+    DELETE /namespaces/{id}/objects/{obj_id} → tombstone → Qdrant vectors gone
+              → CDC → ingested_objects row deleted
 """
 
 from __future__ import annotations
@@ -256,3 +264,222 @@ class TestSingleNamespaceFullPipeline:
                 f"Expected (subset): {obj_ids}\n"
                 f"Got: {[o['id'] for o in resp.json()]}"
             )
+
+
+class TestPrivatePathFullPipeline:
+    """Private upload path: POST /objects → Qdrant → CDC → DELETE → cleanup."""
+
+    @pytest.fixture(scope="class")
+    def namespace(self, storage_url: str) -> dict:
+        """Create a PRIVATE namespace; return the response dict."""
+        resp = httpx.post(
+            f"{storage_url}/namespaces",
+            json={"type": "private"},
+            headers={"X-Owner-Id": str(uuid.uuid4())},
+            timeout=10.0,
+        )
+        assert resp.status_code == status.HTTP_201_CREATED, resp.text
+        return resp.json()
+
+    @pytest.fixture(scope="class")
+    def qdrant_points(
+        self,
+        namespace: dict,
+        storage_url: str,
+        qdrant_client: QdrantClient,
+    ) -> list:
+        """Upload a file directly to the storage service and wait for Qdrant vectors."""
+        namespace_id: str = str(namespace["id"])
+
+        content = (
+            "# Artemis Private Path E2E Test\n\n"
+            "The quick brown fox jumps over the lazy dog. " * 10
+        )
+        resp = httpx.post(
+            f"{storage_url}/namespaces/{namespace_id}/objects",
+            files={"file": ("private_doc.md", content.encode(), "text/markdown")},
+            timeout=15.0,
+        )
+        assert resp.status_code == status.HTTP_202_ACCEPTED, resp.text
+
+        def _scroll():
+            result, _ = qdrant_client.scroll(
+                collection_name=_QDRANT_COLLECTION,
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="metadata.namespace_id",
+                            match=MatchValue(value=namespace_id),
+                        )
+                    ]
+                ),
+                limit=100,
+                with_payload=True,
+            )
+            return result or None
+
+        try:
+            return poll_until(
+                _scroll,
+                timeout=_QDRANT_POLL_TIMEOUT_S,
+                interval=_QDRANT_POLL_INTERVAL_S,
+            )
+        except TimeoutError:
+            pytest.fail(
+                f"No vectors found in Qdrant for private namespace_id={namespace_id} "
+                f"after {_QDRANT_POLL_TIMEOUT_S}s"
+            )
+
+    def test_vectors_exist(self, qdrant_points: list) -> None:
+        assert len(qdrant_points) >= 1
+
+    def test_namespace_matches(self, qdrant_points: list, namespace: dict) -> None:
+        namespace_id = str(namespace["id"])
+        for pt in qdrant_points:
+            assert pt.payload.get("metadata", {}).get("namespace_id") == namespace_id
+
+    def test_ingested_objects_populated(
+        self,
+        qdrant_points: list,
+        postgres_engine: sa.Engine,
+    ) -> None:
+        obj_ids = list(
+            {
+                uuid.UUID(pt.payload["metadata"]["obj_id"])
+                for pt in qdrant_points
+                if pt.payload.get("metadata", {}).get("obj_id")
+            }
+        )
+        assert obj_ids
+
+        def _rows():
+            with postgres_engine.connect() as conn:
+                rows = conn.execute(
+                    sa.text("SELECT id FROM ingested_objects WHERE id = ANY(:ids)"),
+                    {"ids": obj_ids},
+                ).fetchall()
+            return rows if len(rows) == len(obj_ids) else None
+
+        try:
+            poll_until(
+                _rows, timeout=_CDC_POLL_TIMEOUT_S, interval=_CDC_POLL_INTERVAL_S
+            )
+        except TimeoutError:
+            pytest.fail(
+                f"ingested_objects missing rows for obj_ids {obj_ids} "
+                f"after {_CDC_POLL_TIMEOUT_S}s"
+            )
+
+    def test_ingestion_tasks_recorded(
+        self,
+        qdrant_points: list,
+        namespace: dict,
+        postgres_engine: sa.Engine,
+    ) -> None:
+        namespace_id = uuid.UUID(namespace["id"])
+
+        def _row():
+            with postgres_engine.connect() as conn:
+                return conn.execute(
+                    sa.text(
+                        "SELECT task_id FROM ingestion_tasks"
+                        " WHERE namespace_id = :ns_id AND status = 'SUCCESS' LIMIT 1"
+                    ),
+                    {"ns_id": namespace_id},
+                ).fetchone()
+
+        try:
+            poll_until(_row, timeout=_CDC_POLL_TIMEOUT_S, interval=_CDC_POLL_INTERVAL_S)
+        except TimeoutError:
+            pytest.fail(
+                f"ingestion_tasks has no SUCCESS rows for namespace_id={namespace_id} "
+                f"after {_CDC_POLL_TIMEOUT_S}s"
+            )
+
+    def test_delete_removes_vectors_and_db_row(
+        self,
+        qdrant_points: list,  # guarantees upload pipeline completed
+        namespace: dict,
+        storage_url: str,
+        qdrant_client: QdrantClient,
+        postgres_engine: sa.Engine,
+    ) -> None:
+        """
+        DELETE /objects/{obj_id} → tombstone → Qdrant empty + ingested_objects row gone.
+        """
+        namespace_id = str(namespace["id"])
+        obj_ids = list(
+            {
+                pt.payload["metadata"]["obj_id"]
+                for pt in qdrant_points
+                if pt.payload.get("metadata", {}).get("obj_id")
+            }
+        )
+        assert len(obj_ids) == 1, f"expected exactly one object, got {obj_ids}"
+        obj_id = obj_ids[0]
+
+        resp = httpx.delete(
+            f"{storage_url}/namespaces/{namespace_id}/objects/{obj_id}",
+            timeout=10.0,
+        )
+        assert resp.status_code == status.HTTP_202_ACCEPTED, resp.text
+
+        # Qdrant: all chunks for this object must disappear
+        def _qdrant_empty():
+            result, _ = qdrant_client.scroll(
+                collection_name=_QDRANT_COLLECTION,
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="metadata.namespace_id",
+                            match=MatchValue(value=namespace_id),
+                        )
+                    ]
+                ),
+                limit=1,
+                with_payload=False,
+            )
+            return True if not result else None
+
+        try:
+            poll_until(
+                _qdrant_empty,
+                timeout=_CDC_POLL_TIMEOUT_S,
+                interval=_CDC_POLL_INTERVAL_S,
+            )
+        except TimeoutError:
+            pytest.fail(
+                f"Qdrant still has vectors for namespace_id={namespace_id} "
+                f"after DELETE and {_CDC_POLL_TIMEOUT_S}s"
+            )
+
+        # CDC: ingested_objects row must be removed by the tombstone sink
+        def _db_row_gone():
+            with postgres_engine.connect() as conn:
+                row = conn.execute(
+                    sa.text("SELECT id FROM ingested_objects WHERE id = :id"),
+                    {"id": uuid.UUID(obj_id)},
+                ).fetchone()
+            return True if row is None else None
+
+        try:
+            poll_until(
+                _db_row_gone,
+                timeout=_CDC_POLL_TIMEOUT_S,
+                interval=_CDC_POLL_INTERVAL_S,
+            )
+        except TimeoutError:
+            pytest.fail(
+                f"ingested_objects row for obj_id={obj_id} still present "
+                f"after DELETE and {_CDC_POLL_TIMEOUT_S}s"
+            )
+
+        # Storage API: object must no longer appear in the namespace listing
+        resp = httpx.get(
+            f"{storage_url}/namespaces/{namespace_id}/objects", timeout=10.0
+        )
+        resp.raise_for_status()
+        found_ids = {o["id"] for o in resp.json()}
+        assert (
+            obj_id not in found_ids
+        ), f"Storage API still lists obj_id={obj_id} after DELETE"

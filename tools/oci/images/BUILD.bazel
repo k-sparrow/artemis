@@ -546,6 +546,9 @@ kafka_connect_connector_instance(
         # upsert: re-indexing the same object is idempotent
         "insert.mode": "upsert",
         "schema.evolution": "none",
+        # tombstone records (null value) from artemis-celery-ingested-objects-deletes
+        # must trigger a DELETE on the target row
+        "delete.enabled": "true",
     },
     connector_name = "DebeziumJdbcSinkConnector__CeleryResultToIngestedObjects",
 )
