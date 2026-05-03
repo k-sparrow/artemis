@@ -392,7 +392,9 @@ class TestDeleteDocumentPath:
         connectors: None,
         kafka_connect_url: str,
     ) -> None:
-        """After tasks.delete_document, the ingested_objects row is removed via tombstone."""
+        """
+        After tasks.delete_document, the ingested_objects row is removed via tombstone.
+        """
         # Step 1: create the row via tasks.index
         index_task_id = uuid.uuid4()
         obj_id = uuid.uuid4()
@@ -426,7 +428,8 @@ class TestDeleteDocumentPath:
                     return
             time.sleep(_POLL_INTERVAL_S)
         pytest.fail(
-            f"ingested_objects row {obj_id!r} was not deleted within {_POLL_TIMEOUT_S}s.\n"
+            f"ingested_objects row {obj_id!r} "
+            f"was not deleted within {_POLL_TIMEOUT_S}s.\n"
             f"Connector statuses:\n{_connector_diagnostics(kafka_connect_url)}"
         )
 

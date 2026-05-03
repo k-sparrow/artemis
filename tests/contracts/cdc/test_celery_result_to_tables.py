@@ -116,7 +116,9 @@ def _consume_one(
 def _consume_raw(
     bootstrap_server: str, topic: str, start_offset: int, timeout_s: int = 30
 ) -> tuple[bytes | None, bytes | None]:
-    """Return (raw_key_bytes, raw_value_bytes) for the first record at or after start_offset.
+    """
+    Return (raw_key_bytes, raw_value_bytes) for the first record
+    at or after start_offset.
 
     Used for tombstone detection: a tombstone has value=None (null bytes).
     """
@@ -401,7 +403,9 @@ class TestIngestionTasksContract:
 
 @pytest.mark.integration
 class TestDeleteDocumentContract:
-    """tasks.delete_document SUCCESS events are recorded in artemis.celery.ingestion_tasks."""
+    """
+    tasks.delete_document SUCCESS events are recorded in artemis.celery.ingestion_tasks.
+    """
 
     def test_delete_record_produced_on_success(
         self, bootstrap_server: str, streams: None
@@ -451,7 +455,9 @@ class TestDeleteDocumentContract:
     def test_tombstone_produced_on_ingested_objects(
         self, bootstrap_server: str, streams: None
     ) -> None:
-        """tasks.delete_document produces a tombstone on artemis.celery.ingested_objects."""
+        """
+        tasks.delete_document produces a tombstone on artemis.celery.ingested_objects.
+        """
         task_id = str(uuid.uuid4())
         obj_id = str(uuid.uuid4())
         namespace_id = str(uuid.uuid4())

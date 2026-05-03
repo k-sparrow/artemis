@@ -30,13 +30,13 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
-import time
 from pathlib import Path
 
-import httpx
 import pytest
+import sqlalchemy as sa
 from qdrant_client import QdrantClient
 from testcontainers.compose import DockerCompose
+from tests.lib.polling import poll_until, wait_for_http, wait_for_kc_connector
 from tests.lib.testcontainers.tei import TEIContainer
 
 
@@ -56,60 +56,25 @@ def _clear_dir(d: Path) -> None:
             shutil.rmtree(child)
 
 
-def _wait_for_http(base_url: str, path: str, timeout: int = 300) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            resp = httpx.get(f"{base_url}{path}", timeout=5.0)
-            if resp.is_success:
-                return
-        except httpx.RequestError:
-            pass
-        time.sleep(3)
-    raise TimeoutError(f"{base_url}{path} did not become ready within {timeout}s")
-
-
 def _wait_connector_running(
     data_sources_url: str, source_id: str, timeout: int = 120
 ) -> None:
-    deadline = time.monotonic() + timeout
-    with httpx.Client(base_url=data_sources_url, timeout=10.0) as client:
-        while time.monotonic() < deadline:
-            resp = client.get(f"/data-sources/{source_id}")
-            if resp.is_success:
-                if resp.json().get("kafka_status", {}).get("state") == "RUNNING":
-                    return
-            time.sleep(3)
-    raise TimeoutError(
-        f"Connector for data source {source_id} did not reach RUNNING within {timeout}s"
-    )
+    import httpx
 
+    def _is_running() -> bool:
+        resp = httpx.get(f"{data_sources_url}/data-sources/{source_id}", timeout=5.0)
+        return (
+            resp.is_success
+            and resp.json().get("kafka_status", {}).get("state") == "RUNNING"
+        )
 
-def _wait_kc_connector_running(
-    kc_url: str, connector_name: str, timeout: int = 120
-) -> None:
-    """Poll Kafka Connect REST API until a connector reaches RUNNING state."""
-    deadline = time.monotonic() + timeout
-    with httpx.Client(base_url=kc_url, timeout=10.0) as client:
-        while time.monotonic() < deadline:
-            try:
-                resp = client.get(f"/connectors/{connector_name}/status")
-                if resp.is_success:
-                    s = resp.json()
-                    tasks = s.get("tasks", [])
-                    if (
-                        s.get("connector", {}).get("state") == "RUNNING"
-                        and tasks
-                        and all(t["state"] == "RUNNING" for t in tasks)
-                    ):
-                        return
-            except httpx.RequestError:
-                pass
-            time.sleep(3)
-    raise TimeoutError(
-        f"Kafka Connect connector {connector_name!r} "
-        f"did not reach RUNNING within {timeout}s"
-    )
+    try:
+        poll_until(_is_running, timeout=timeout, interval=3.0)
+    except TimeoutError:
+        raise TimeoutError(
+            f"Connector for data source {source_id} "
+            f"did not reach RUNNING within {timeout}s"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -231,16 +196,26 @@ def compose(
     kc_url = f"http://{host_kc}:{port_kc}"
 
     try:
-        _wait_for_http(f"http://{host_storage}:{port_storage}", "/health/readiness")
-        _wait_for_http(f"http://{host_ds}:{port_ds}", "/health/liveness")
-        _wait_for_http(f"http://{host_intake}:{port_intake}", "/health/liveness")
-        _wait_for_http(f"http://{host_ingestion}:{port_ingestion}", "/health/readiness")
+        wait_for_http(f"http://{host_storage}:{port_storage}/health/readiness")
+        wait_for_http(f"http://{host_ds}:{port_ds}/health/liveness")
+        wait_for_http(f"http://{host_intake}:{port_intake}/health/liveness")
+        wait_for_http(f"http://{host_ingestion}:{port_ingestion}/health/readiness")
         # Both system connectors must be RUNNING before any file is dropped.
         # auto.offset.reset=latest means messages produced before the connector
         # is up would be lost.
-        _wait_kc_connector_running(kc_url, "AivenHttpSinkConnector__FilesystemIntake")
-        _wait_kc_connector_running(
+        wait_for_kc_connector(kc_url, "AivenHttpSinkConnector__FilesystemIntake")
+        wait_for_kc_connector(
             kc_url, "CamelRabbitMQSinkConnector__CeleryTasksIngestion"
+        )
+        # CDC pipeline: Debezium source + two JDBC sinks
+        wait_for_kc_connector(
+            kc_url, "DebeziumPostgresSourceConnector__CeleryResultBackendPublish"
+        )
+        wait_for_kc_connector(
+            kc_url, "DebeziumJdbcSinkConnector__CeleryResultToIngestedObjects"
+        )
+        wait_for_kc_connector(
+            kc_url, "DebeziumJdbcSinkConnector__CeleryResultToIngestionTasks"
         )
     except Exception:
         _dump_service_logs(dc)
@@ -281,3 +256,13 @@ def data_sources_url(compose: DockerCompose) -> str:
 def qdrant_client(compose: DockerCompose) -> QdrantClient:
     host, port = compose.get_service_host_and_port("vectorstore", 6333)
     return QdrantClient(host=host, port=int(port))
+
+
+@pytest.fixture(scope="session")
+def postgres_engine(compose: DockerCompose) -> sa.Engine:
+    host, port = compose.get_service_host_and_port("postgres", 5432)
+    engine = sa.create_engine(
+        f"postgresql+psycopg://postgres:testpass@{host}:{port}/documents"
+    )
+    yield engine
+    engine.dispose()

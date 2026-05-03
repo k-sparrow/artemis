@@ -525,11 +525,13 @@ kafka_connect_connector_instance(
         "tasks.max": "1",
         "topics": "artemis.celery.ingested_objects",
 
-        # ksqlDB output is plain JSON (no schema registry)
-        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
-        "value.converter.schemas.enable": "false",
-        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
-        "key.converter.schemas.enable": "false",
+        # ksqlDB writes JSON_SR (JSON Schema Registry format); requires JsonSchemaConverter
+        "value.converter": "io.confluent.connect.json.JsonSchemaConverter",
+        "value.converter.schemas.enable": True,
+        "value.converter.schema.registry.url": "http://schemaregistry:8081",
+        "key.converter": "io.confluent.connect.json.JsonSchemaConverter",
+        "key.converter.schemas.enable": True,
+        "key.converter.schema.registry.url": "http://schemaregistry:8081",
         "connection.username": "postgres",
         "connection.password": "testpass",
         "connection.url": "jdbc:postgresql://postgres:5432/documents",
@@ -537,14 +539,13 @@ kafka_connect_connector_instance(
         # sink to the ingested_objects table (created by the storage service)
         "table.name.format": "ingested_objects",
 
-        # PK is the 'id' field in the message value (obj_id UUID)
-        "primary.key.mode": "record_value",
+        # PARTITION BY strips 'id' from the value; read PK from the record key struct
+        "primary.key.mode": "record_key",
         "primary.key.fields": "id",
 
         # upsert: re-indexing the same object is idempotent
         "insert.mode": "upsert",
         "schema.evolution": "none",
-        "use.time.zone": "UTC",
     },
     connector_name = "DebeziumJdbcSinkConnector__CeleryResultToIngestedObjects",
 )
@@ -556,11 +557,13 @@ kafka_connect_connector_instance(
         "tasks.max": "1",
         "topics": "artemis.celery.ingestion_tasks",
 
-        # ksqlDB output is plain JSON (no schema registry)
-        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
-        "value.converter.schemas.enable": "false",
-        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
-        "key.converter.schemas.enable": "false",
+        # ksqlDB writes JSON_SR (JSON Schema Registry format); requires JsonSchemaConverter
+        "value.converter": "io.confluent.connect.json.JsonSchemaConverter",
+        "value.converter.schemas.enable": True,
+        "value.converter.schema.registry.url": "http://schemaregistry:8081",
+        "key.converter": "io.confluent.connect.json.JsonSchemaConverter",
+        "key.converter.schemas.enable": True,
+        "key.converter.schema.registry.url": "http://schemaregistry:8081",
         "connection.username": "postgres",
         "connection.password": "testpass",
         "connection.url": "jdbc:postgresql://postgres:5432/documents",
@@ -568,14 +571,13 @@ kafka_connect_connector_instance(
         # sink to the ingestion_tasks table (created by the storage service)
         "table.name.format": "ingestion_tasks",
 
-        # PK is the 'task_id' field in the message value
-        "primary.key.mode": "record_value",
+        # PARTITION BY strips 'task_id' from the value; read PK from the record key struct
+        "primary.key.mode": "record_key",
         "primary.key.fields": "task_id",
 
         # upsert: a given task_id is processed at most once
         "insert.mode": "upsert",
         "schema.evolution": "none",
-        "use.time.zone": "UTC",
     },
     connector_name = "DebeziumJdbcSinkConnector__CeleryResultToIngestionTasks",
 )
@@ -919,6 +921,8 @@ multirun(
             "ksqldb",
             "postgres",
         ]
+    ] + [
+        "//tools/oci/images/ksqldb:load.all",
     ],
     visibility = ["//:__pkg__"],
 )

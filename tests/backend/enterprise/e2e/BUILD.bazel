@@ -14,10 +14,13 @@ py_library(
     srcs = ["conftest.py"],
     visibility = ["//visibility:public"],
     deps = [
+        "//tests/lib:polling",
         "//tests/lib/testcontainers/tei:pkg",
         requirement("httpx"),
+        requirement("psycopg"),
         requirement("pytest"),
         requirement("qdrant-client"),
+        requirement("sqlalchemy"),
         requirement("testcontainers"),
     ],
 )
@@ -36,10 +39,13 @@ py_test(
     ],
     deps = [
         ":conftest",
+        "//tests/lib:polling",
         requirement("fastapi"),
         requirement("httpx"),
+        requirement("psycopg"),
         requirement("pytest"),
         requirement("qdrant-client"),
+        requirement("sqlalchemy"),
         requirement("testcontainers"),
     ],
 )

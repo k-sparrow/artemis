@@ -82,7 +82,7 @@ multirun(
     name = "load.images.dev",
     commands = [
         "//src:load.dev.all",
-        "//tools/oci/images/ksqldb:load.all",
+        "//tools/oci/images:load.all",
     ],
     jobs = 1,  # sequential — docker load is not safe to parallelize
     visibility = ["//visibility:public"],
