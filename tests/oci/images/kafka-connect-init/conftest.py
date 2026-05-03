@@ -31,7 +31,6 @@ from kafka.admin import KafkaAdminClient, NewTopic
 from kafka.errors import TopicAlreadyExistsError
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
-from testcontainers.core.wait_strategies import HttpWaitStrategy
 
 from src.backend.storage.api.models import Base
 from tests.lib.testcontainers.kafka.connect import KafkaConnectContainer

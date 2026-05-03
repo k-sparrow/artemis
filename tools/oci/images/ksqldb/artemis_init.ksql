@@ -252,7 +252,7 @@ EMIT CHANGES;
 --   status   : 'SUCCESS' | 'FAILURE' | 'STARTED' | 'PENDING'
 --   result   : JSON-encoded IngestionResult (see src/lib/core/ingestion/contract.py)
 --              NULL on FAILURE (Celery stores the exception repr instead)
---   date_done: task completion timestamp (ISO 8601 string, JSON converter no-schema)
+--   date_done: task completion timestamp (microseconds since Unix epoch, Debezium encoding)
 --   traceback: full traceback on FAILURE; NULL on SUCCESS
 -- ---------------------------------------------------------------------------
 
@@ -260,7 +260,7 @@ CREATE OR REPLACE STREAM `artemis-celery-taskmeta` (
     task_id   STRING,
     status    STRING,
     result    STRING,
-    date_done STRING,
+    date_done BIGINT,
     traceback STRING,
     name      STRING
 )
@@ -289,11 +289,14 @@ WITH (
 CREATE OR REPLACE STREAM `artemis-celery-ingested-objects`
 WITH (
     KAFKA_TOPIC  = 'artemis.celery.ingested_objects',
-    VALUE_FORMAT = 'JSON',
+    VALUE_FORMAT = 'JSON_SR',
+    KEY_FORMAT   = 'JSON_SR',
     PARTITIONS   = 1
 )
 AS SELECT
-    EXTRACTJSONFIELD(result, '$.object.id')                      AS `id`,
+    -- id_key is the Kafka record key (record_key PK mode); PARTITION BY strips it from the value.
+    -- id must NOT appear as a separate value projection — the JDBC sink reads it from the key struct.
+    STRUCT(`id` := EXTRACTJSONFIELD(result, '$.object.id'))      AS id_key,
     EXTRACTJSONFIELD(result, '$.object.scope.namespace_id')      AS `namespace_id`,
     EXTRACTJSONFIELD(result, '$.object.source')                  AS `source`,
     EXTRACTJSONFIELD(result, '$.object.properties.object_type')  AS `object_type`,
@@ -313,6 +316,7 @@ AS SELECT
     END                                                          AS `group_id`
 FROM `artemis-celery-taskmeta`
 WHERE name = 'tasks.index' AND status = 'SUCCESS'
+PARTITION BY STRUCT(`id` := EXTRACTJSONFIELD(result, '$.object.id'))
 EMIT CHANGES;
 
 
@@ -338,15 +342,19 @@ EMIT CHANGES;
 CREATE OR REPLACE STREAM `artemis-celery-ingestion-tasks`
 WITH (
     KAFKA_TOPIC  = 'artemis.celery.ingestion_tasks',
-    VALUE_FORMAT = 'JSON',
+    VALUE_FORMAT = 'JSON_SR',
+    KEY_FORMAT   = 'JSON_SR',
     PARTITIONS   = 1
 )
 AS SELECT
-    task_id                                                  AS `task_id`,
+    -- task_id_key is the Kafka record key (record_key PK mode); PARTITION BY strips it from the value.
+    -- task_id must NOT appear as a separate value projection — the JDBC sink reads it from the key struct.
+    STRUCT(`task_id` := task_id)                             AS task_id_key,
     EXTRACTJSONFIELD(result, '$.object.id')                  AS `obj_id`,
     EXTRACTJSONFIELD(result, '$.object.scope.namespace_id')  AS `namespace_id`,
     status                                                   AS `status`,
-    date_done                                                AS `completed_at`
+    FROM_UNIXTIME(date_done / 1000)                          AS `completed_at`
 FROM `artemis-celery-taskmeta`
 WHERE name = 'tasks.index' AND status = 'SUCCESS'
+PARTITION BY STRUCT(`task_id` := task_id)
 EMIT CHANGES;

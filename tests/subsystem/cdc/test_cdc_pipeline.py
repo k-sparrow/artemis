@@ -1,0 +1,319 @@
+"""Subsystem tests: CDC pipeline writes expected rows
+to ingested_objects + ingestion_tasks.
+
+Verifies the complete path from a Celery result row appearing in Postgres through
+Debezium WAL capture → Kafka → ksqlDB fan-out → JDBC sink → DB tables.
+
+The contract tests (tests/contracts/cdc/) verify the Kafka message shape in
+isolation. These tests verify that the full pipeline actually populates the DB.
+
+All containers are session-scoped; only DB rows are cleaned between tests.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+import uuid
+from typing import Any
+
+import httpx
+import pytest
+import sqlalchemy as sa
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_POLL_TIMEOUT_S = 90
+_POLL_INTERVAL_S = 2
+
+_SOURCE_CONNECTOR = "DebeziumPostgresSourceConnector__CeleryResultBackendPublish"
+_SINK_OBJECTS = "DebeziumJdbcSinkConnector__CeleryResultToIngestedObjects"
+_SINK_TASKS = "DebeziumJdbcSinkConnector__CeleryResultToIngestionTasks"
+
+
+def _connector_diagnostics(kafka_connect_url: str) -> str:
+    lines = []
+    for name in (_SOURCE_CONNECTOR, _SINK_OBJECTS, _SINK_TASKS):
+        try:
+            resp = httpx.get(
+                f"{kafka_connect_url}/connectors/{name}/status", timeout=5.0
+            )
+            lines.append(f"  {name}: {resp.json()}")
+        except Exception as e:
+            lines.append(f"  {name}: ERROR {e}")
+    return "\n".join(lines)
+
+
+def _make_result_json(
+    obj_id: uuid.UUID,
+    namespace_id: uuid.UUID,
+    group_id: uuid.UUID | None = None,
+) -> str:
+    return json.dumps(
+        {
+            "object": {
+                "id": str(obj_id),
+                "source": "doc.txt",
+                "scope": {
+                    "namespace_id": str(namespace_id),
+                    "group_id": str(group_id) if group_id else None,
+                },
+                "properties": {
+                    "object_type": "file",
+                    "content_type": "text/plain",
+                    "size_bytes": 2048,
+                },
+            },
+            "indexing": {"num_added": 3, "num_skipped": 0, "ids": ["a", "b", "c"]},
+        }
+    )
+
+
+def _insert_taskmeta(
+    engine: sa.Engine,
+    *,
+    task_id: uuid.UUID,
+    obj_id: uuid.UUID,
+    namespace_id: uuid.UUID,
+    group_id: uuid.UUID | None = None,
+    status: str = "SUCCESS",
+    name: str = "tasks.index",
+    date_done: str = "2026-01-01T12:00:00",
+) -> None:
+    """Insert a row into apollo_celery_taskmeta to trigger Debezium WAL capture."""
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "INSERT INTO apollo_celery_taskmeta"
+                " (id, task_id, status, result, date_done, traceback, name)"
+                " VALUES (nextval('apollo_task_id_sequence'), :task_id, :status,"
+                "         :result, CAST(:date_done AS TIMESTAMP), NULL, :name)"
+            ),
+            {
+                "task_id": str(task_id),
+                "status": status,
+                "result": _make_result_json(obj_id, namespace_id, group_id),
+                "date_done": date_done,
+                "name": name,
+            },
+        )
+
+
+def _poll_row(
+    engine: sa.Engine,
+    query: str,
+    params: dict[str, Any],
+    timeout: int = _POLL_TIMEOUT_S,
+) -> Any | None:
+    """Poll until a query returns a row. Returns None on timeout."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with engine.connect() as conn:
+            row = conn.execute(sa.text(query), params).fetchone()
+            if row is not None:
+                return row
+        time.sleep(_POLL_INTERVAL_S)
+    return None
+
+
+def _assert_row(
+    row: Any | None,
+    query: str,
+    params: dict[str, Any],
+    kafka_connect_url: str,
+) -> Any:
+    """Assert a row was found; include connector diagnostics on failure."""
+    if row is None:
+        pytest.fail(
+            f"No row found within {_POLL_TIMEOUT_S}s.\n"
+            f"Query: {query}\nParams: {params}\n"
+            f"Connector statuses:\n{_connector_diagnostics(kafka_connect_url)}"
+        )
+    return row
+
+
+# ---------------------------------------------------------------------------
+# ingested_objects
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestIngestedObjectsTable:
+    """JDBC sink writes expected rows to ingested_objects after a SUCCESS task."""
+
+    def test_row_written(
+        self,
+        postgres_engine: sa.Engine,
+        namespace_row: uuid.UUID,
+        connectors: None,
+        kafka_connect_url: str,
+    ) -> None:
+        task_id = uuid.uuid4()
+        obj_id = uuid.uuid4()
+
+        _insert_taskmeta(
+            postgres_engine,
+            task_id=task_id,
+            obj_id=obj_id,
+            namespace_id=namespace_row,
+        )
+
+        q = "SELECT id FROM ingested_objects WHERE id = :id"
+        p = {"id": obj_id}
+        _assert_row(_poll_row(postgres_engine, q, p), q, p, kafka_connect_url)
+
+    def test_all_fields_correct(
+        self,
+        postgres_engine: sa.Engine,
+        namespace_row: uuid.UUID,
+        connectors: None,
+        kafka_connect_url: str,
+    ) -> None:
+        task_id = uuid.uuid4()
+        obj_id = uuid.uuid4()
+        namespace_id = namespace_row
+
+        _insert_taskmeta(
+            postgres_engine,
+            task_id=task_id,
+            obj_id=obj_id,
+            namespace_id=namespace_id,
+        )
+
+        q = "SELECT * FROM ingested_objects WHERE id = :id"
+        p = {"id": obj_id}
+        row = _assert_row(_poll_row(postgres_engine, q, p), q, p, kafka_connect_url)
+        assert row.id == obj_id
+        assert row.namespace_id == namespace_id
+        assert row.source == "doc.txt"
+        assert row.object_type == "file"
+        assert row.s3_key == f"{namespace_id}/{obj_id}"
+        assert row.content_type == "text/plain"
+        assert row.size_bytes == 2048
+        assert row.group_id is None
+
+    def test_group_id_propagated(
+        self,
+        postgres_engine: sa.Engine,
+        namespace_row: uuid.UUID,
+        connectors: None,
+        kafka_connect_url: str,
+    ) -> None:
+        task_id = uuid.uuid4()
+        obj_id = uuid.uuid4()
+        group_id = uuid.uuid4()
+
+        _insert_taskmeta(
+            postgres_engine,
+            task_id=task_id,
+            obj_id=obj_id,
+            namespace_id=namespace_row,
+            group_id=group_id,
+        )
+
+        q = "SELECT group_id FROM ingested_objects WHERE id = :id"
+        p = {"id": obj_id}
+        row = _assert_row(_poll_row(postgres_engine, q, p), q, p, kafka_connect_url)
+        assert row.group_id == group_id
+
+    def test_non_index_task_not_written(
+        self,
+        postgres_engine: sa.Engine,
+        namespace_row: uuid.UUID,
+        connectors: None,
+        kafka_connect_url: str,
+    ) -> None:
+        """tasks.ingest rows must be filtered by ksqlDB and never reach the sink."""
+        filtered_task = uuid.uuid4()
+        filtered_obj = uuid.uuid4()
+
+        _insert_taskmeta(
+            postgres_engine,
+            task_id=filtered_task,
+            obj_id=filtered_obj,
+            namespace_id=namespace_row,
+            name="tasks.ingest",
+        )
+
+        # Sentinel row confirms the pipeline is live; filtered row must not appear first.
+        sentinel_task = uuid.uuid4()
+        sentinel_obj = uuid.uuid4()
+        _insert_taskmeta(
+            postgres_engine,
+            task_id=sentinel_task,
+            obj_id=sentinel_obj,
+            namespace_id=namespace_row,
+        )
+
+        q = (
+            "SELECT id FROM ingested_objects WHERE id IN (:filtered, :sentinel)"
+            " ORDER BY ctid LIMIT 1"
+        )
+        p = {"filtered": filtered_obj, "sentinel": sentinel_obj}
+        row = _assert_row(_poll_row(postgres_engine, q, p), q, p, kafka_connect_url)
+        assert row.id == sentinel_obj, (
+            f"tasks.ingest row should have been filtered out; "
+            f"got {row.id!r}, expected sentinel {sentinel_obj!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# ingestion_tasks
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestIngestionTasksTable:
+    """JDBC sink writes expected rows to ingestion_tasks after a SUCCESS task."""
+
+    def test_row_written(
+        self,
+        postgres_engine: sa.Engine,
+        namespace_row: uuid.UUID,
+        connectors: None,
+        kafka_connect_url: str,
+    ) -> None:
+        task_id = uuid.uuid4()
+        obj_id = uuid.uuid4()
+
+        _insert_taskmeta(
+            postgres_engine,
+            task_id=task_id,
+            obj_id=obj_id,
+            namespace_id=namespace_row,
+        )
+
+        q = "SELECT task_id FROM ingestion_tasks WHERE task_id = :task_id"
+        p = {"task_id": task_id}
+        _assert_row(_poll_row(postgres_engine, q, p), q, p, kafka_connect_url)
+
+    def test_all_fields_correct(
+        self,
+        postgres_engine: sa.Engine,
+        namespace_row: uuid.UUID,
+        connectors: None,
+        kafka_connect_url: str,
+    ) -> None:
+        task_id = uuid.uuid4()
+        obj_id = uuid.uuid4()
+        namespace_id = namespace_row
+
+        _insert_taskmeta(
+            postgres_engine,
+            task_id=task_id,
+            obj_id=obj_id,
+            namespace_id=namespace_id,
+        )
+
+        q = "SELECT * FROM ingestion_tasks WHERE task_id = :task_id"
+        p = {"task_id": task_id}
+        row = _assert_row(_poll_row(postgres_engine, q, p), q, p, kafka_connect_url)
+        assert row.task_id == task_id
+        assert row.obj_id == obj_id
+        assert row.namespace_id == namespace_id
+        assert row.status == "SUCCESS"
+        # completed_at is derived from date_done; presence confirms the sink wrote it.
+        assert row.completed_at is not None

@@ -70,7 +70,8 @@ def _wait_connector_running(kafka_connect_url: str, name: str) -> None:
             return
         time.sleep(3)
     pytest.fail(
-        f"Connector {name!r} did not reach RUNNING within {_CONNECTOR_RUNNING_TIMEOUT_S}s. "
+        f"Connector {name!r} did not reach RUNNING "
+        f"within {_CONNECTOR_RUNNING_TIMEOUT_S}s. "
         f"Last status: {last}"
     )
 

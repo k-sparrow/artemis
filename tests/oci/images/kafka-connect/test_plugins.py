@@ -45,7 +45,7 @@ def _list_plugin_classes(kafka_connect_url: str) -> set[str]:
             id="DebeziumJdbcSink",
         ),
         pytest.param(
-            "org.apache.camel.kafkaconnector.springrabbitmqsink.CamelSpringrabbitmqsinkSinkConnector",
+            "org.apache.camel.kafkaconnector.springrabbitmqsink.CamelSpringrabbitmqsinkSinkConnector",  # noqa: E501
             id="CamelRabbitMQSink",
         ),
         pytest.param(
@@ -53,7 +53,7 @@ def _list_plugin_classes(kafka_connect_url: str) -> set[str]:
             id="CamelFileSource",
         ),
         pytest.param(
-            "org.apache.camel.kafkaconnector.filewatchsource.CamelFilewatchsourceSourceConnector",
+            "org.apache.camel.kafkaconnector.filewatchsource.CamelFilewatchsourceSourceConnector",  # noqa: E501
             id="CamelFileWatchSource",
         ),
         # ── SMTs ─────────────────────────────────────────────────────────────

@@ -20,7 +20,8 @@ package(
     default_visibility = [
         "//src/backend/storage/api:__subpackages__",
         "//tests/backend/storage/api:__subpackages__",
-        "//tests/oci:__subpackages__"
+        "//tests/oci:__subpackages__",
+        "//tests/subsystem:__subpackages__",
     ],
 )
 

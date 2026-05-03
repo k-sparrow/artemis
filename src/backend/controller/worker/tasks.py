@@ -316,13 +316,21 @@ def delete_document(source: SourceDetails, namespace_id: uuid.UUID) -> dict:
         logger=logger,
     )
     logger.info(
-        "delete_document=done namespace=%s םbj_id=%s", namespace_id, source.obj_id
+        "delete_document=done namespace=%s obj_id=%s", namespace_id, source.obj_id
     )
-    return {
-        "status": "deleted",
-        "obj_id": str(source.obj_id),
-        "namespace_id": str(namespace_id),
-    }
+    return IngestionResult(
+        object=ObjectMetadata(
+            id=source.obj_id,
+            source=source.source,
+            scope=ObjectScope(namespace_id=namespace_id, group_id=None),
+            properties=ObjectProperties(
+                object_type=source.object_type,
+                content_type=source.content_type,
+                size_bytes=None,
+            ),
+        ),
+        indexing=IndexingOutcome(num_added=0, num_skipped=0, ids=[]),
+    ).model_dump(mode="json")
 
 
 # ---------------------------------------------------------------------------
