@@ -108,7 +108,7 @@ class IndexingOutcome(BaseModel):
 
 
 class IngestionResult(BaseModel):
-    """Result of a completed ``tasks.index`` task.
+    """Result of a completed ``tasks.index`` or ``tasks.delete_document`` task.
 
     Serialised as JSON into ``apollo_celery_taskmeta.result``.
     The ksqlDB CSAS reads this to populate ``ingested_objects`` and
@@ -117,6 +117,7 @@ class IngestionResult(BaseModel):
 
     object: ObjectMetadata
     indexing: IndexingOutcome
+    operation: str
 
 
 class IngestionTaskDetails(BaseModel):

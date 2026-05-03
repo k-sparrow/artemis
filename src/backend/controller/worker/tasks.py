@@ -129,6 +129,7 @@ def ingest(
                 ),
                 index.s(
                     str(namespace_id),
+                    upload_action,
                     group_id,
                     source.model_dump(mode="json"),
                     s3.model_dump(mode="json"),
@@ -233,6 +234,7 @@ def fetch_and_parse(
 def index(
     chunks_key: str,
     namespace_id: uuid.UUID,
+    upload_action: str,
     group_id: str | None = None,
     source: SourceDetails | None = None,
     s3: S3Details | None = None,
@@ -283,6 +285,7 @@ def index(
             num_skipped=result["num_skipped"],
             ids=result["ids"],
         ),
+        operation=upload_action,
     ).model_dump(mode="json")
 
 
@@ -330,6 +333,7 @@ def delete_document(source: SourceDetails, namespace_id: uuid.UUID) -> dict:
             ),
         ),
         indexing=IndexingOutcome(num_added=0, num_skipped=0, ids=[]),
+        operation=UploadAction.DELETE.value,
     ).model_dump(mode="json")
 
 

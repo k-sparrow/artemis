@@ -353,7 +353,8 @@ AS SELECT
     EXTRACTJSONFIELD(result, '$.object.id')                  AS `obj_id`,
     EXTRACTJSONFIELD(result, '$.object.scope.namespace_id')  AS `namespace_id`,
     status                                                   AS `status`,
-    FROM_UNIXTIME(date_done / 1000)                          AS `completed_at`
+    FROM_UNIXTIME(date_done / 1000)                          AS `completed_at`,
+    EXTRACTJSONFIELD(result, '$.operation')                  AS `operation`
 FROM `artemis-celery-taskmeta`
 WHERE name = 'tasks.index' AND status = 'SUCCESS'
 PARTITION BY STRUCT(`task_id` := task_id)

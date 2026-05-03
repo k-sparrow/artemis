@@ -224,6 +224,11 @@ class IngestionTask(Base):
         nullable=False,
         comment="date_done from Celery result",
     )
+    operation: Mapped[str] = mapped_column(
+        sa.Text,
+        nullable=False,
+        comment="'CREATE', 'MODIFY', or 'DELETE'",
+    )
 
     namespace: Mapped[Namespace] = relationship()
 

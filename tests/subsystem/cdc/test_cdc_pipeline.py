@@ -68,6 +68,7 @@ def _make_result_json(
                 },
             },
             "indexing": {"num_added": 3, "num_skipped": 0, "ids": ["a", "b", "c"]},
+            "operation": "CREATE",
         }
     )
 
@@ -315,5 +316,6 @@ class TestIngestionTasksTable:
         assert row.obj_id == obj_id
         assert row.namespace_id == namespace_id
         assert row.status == "SUCCESS"
+        assert row.operation == "CREATE"
         # completed_at is derived from date_done; presence confirms the sink wrote it.
         assert row.completed_at is not None

@@ -11,8 +11,8 @@ Input  topic: apollo.ingestion.celery.results.public.apollo_celery_taskmeta
                 after ExtractNewRecordState SMT)
 
 Output topic A: artemis.celery.ingested_objects
-  {
-    "id":           str (UUID),   # obj_id — PK for ingested_objects table
+  key:   {"id": str (UUID)}        # PK — record_key mode; NOT duplicated in value
+  value: {
     "namespace_id": str (UUID),
     "source":       str,
     "object_type":  str,
@@ -23,13 +23,19 @@ Output topic A: artemis.celery.ingested_objects
   }
 
 Output topic B: artemis.celery.ingestion_tasks
-  {
-    "task_id":      str (UUID),   # PK for ingestion_tasks table
+  key:   {"task_id": str (UUID)}   # PK — record_key mode; NOT duplicated in value
+  value: {
     "obj_id":       str (UUID),
     "namespace_id": str (UUID),
     "status":       str,          # "SUCCESS"
-    "completed_at": str,          # date_done pass-through
+    "completed_at": int,          # epoch ms (FROM_UNIXTIME of Debezium microseconds)
+    "operation":    str,          # "CREATE" | "MODIFY" | "DELETE"
   }
+
+Both topics use JSON Schema (JSON_SR) with Confluent wire format (5-byte header).
+date_done is BIGINT (microseconds since epoch, Debezium TIMESTAMP encoding).
+
+Filtered to: name = 'tasks.index' AND status = 'SUCCESS' only.
 
 Filtered to: name = 'tasks.index' AND status = 'SUCCESS' only.
 """
@@ -45,6 +51,9 @@ from kafka import KafkaConsumer, KafkaProducer, TopicPartition
 _SOURCE_TOPIC = "apollo.ingestion.celery.results.public.apollo_celery_taskmeta"
 _OBJECTS_TOPIC = "artemis.celery.ingested_objects"
 _TASKS_TOPIC = "artemis.celery.ingestion_tasks"
+
+# 2026-01-01T12:00:00 UTC in microseconds (Debezium TIMESTAMP encoding)
+_DATE_DONE_US = 1767268800000000
 
 
 # ---------------------------------------------------------------------------
@@ -67,15 +76,30 @@ def _end_offset(bootstrap_server: str, topic: str) -> int:
     return offset
 
 
+def _decode_sr(b: bytes | None) -> dict:
+    """
+    Strip the 5-byte Confluent wire format header
+    (magic byte + schema ID) and JSON-parse.
+    """
+    if not b:
+        return {}
+    return json.loads(b[5:].decode())
+
+
 def _consume_one(
     bootstrap_server: str, topic: str, start_offset: int, timeout_s: int = 30
 ) -> dict:
+    """Consume one record from *topic* at or after *start_offset*.
+
+    Returns key fields merged into value fields so callers can assert on PK
+    fields (id, task_id) alongside value fields without knowing which side holds them.
+    Both key and value use JSON_SR (Confluent wire format: 5-byte header + JSON payload).
+    """
     tp = TopicPartition(topic, 0)
     consumer = KafkaConsumer(
         bootstrap_servers=[bootstrap_server],
         enable_auto_commit=False,
         consumer_timeout_ms=timeout_s * 1_000,
-        value_deserializer=lambda b: json.loads(b.decode()),
         group_id=None,
     )
     consumer.assign([tp])
@@ -83,7 +107,7 @@ def _consume_one(
     consumer.seek(tp, start_offset)
     try:
         for record in consumer:
-            return record.value
+            return {**_decode_sr(record.key), **_decode_sr(record.value)}
     finally:
         consumer.close()
     pytest.fail(f"No record on {topic} after offset {start_offset} within {timeout_s}s")
@@ -105,6 +129,7 @@ def _make_ingestion_result(
                 },
             },
             "indexing": {"num_added": 3, "num_skipped": 0, "ids": ["a", "b", "c"]},
+            "operation": "CREATE",
         }
     )
 
@@ -117,7 +142,7 @@ def _produce_cdc_row(
     *,
     status: str = "SUCCESS",
     name: str = "tasks.index",
-    date_done: str = "2026-01-01T12:00:00",
+    date_done: int = _DATE_DONE_US,
     group_id: str | None = None,
 ) -> None:
     """Produce a flat CDC row matching the ExtractNewRecordState output shape."""
@@ -318,6 +343,7 @@ class TestIngestionTasksContract:
             "namespace_id",
             "status",
             "completed_at",
+            "operation",
         }
 
     def test_fields_extracted_correctly(
@@ -326,16 +352,14 @@ class TestIngestionTasksContract:
         task_id = str(uuid.uuid4())
         obj_id = str(uuid.uuid4())
         namespace_id = str(uuid.uuid4())
-        date_done = "2026-04-30T09:15:00"
 
         start = _end_offset(bootstrap_server, _TASKS_TOPIC)
-        _produce_cdc_row(
-            bootstrap_server, task_id, obj_id, namespace_id, date_done=date_done
-        )
+        _produce_cdc_row(bootstrap_server, task_id, obj_id, namespace_id)
 
         record = _consume_one(bootstrap_server, _TASKS_TOPIC, start)
         assert record["task_id"] == task_id
         assert record["obj_id"] == obj_id
         assert record["namespace_id"] == namespace_id
         assert record["status"] == "SUCCESS"
-        assert record["completed_at"] == date_done
+        assert record["completed_at"] is not None
+        assert record["operation"] == "CREATE"

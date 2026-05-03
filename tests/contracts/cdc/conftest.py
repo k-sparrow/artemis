@@ -18,11 +18,12 @@ import pytest
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
 
-from tests.lib.testcontainers.kafka import KSQLDbContainer
+from tests.lib.testcontainers.kafka import KSQLDbContainer, SchemaRegistryContainer
 from tests.lib.testcontainers.kafka.kafka import KafkaContainer
 
 _KAFKA_ALIAS = "broker"
 _KSQLDB_ALIAS = "ksqldb-server"
+_SR_ALIAS = "schema-registry"
 _INIT_IMAGE = "artemis/ksqldb-init:latest"
 
 
@@ -57,13 +58,31 @@ def bootstrap_server(kafka: KafkaContainer) -> str:
 
 
 @pytest.fixture(scope="session")
-def ksqldb(
+def schema_registry(
     network: Network, kafka: KafkaContainer
+) -> Generator[SchemaRegistryContainer, None, None]:
+    container = (
+        SchemaRegistryContainer(bootstrap_servers=kafka.get_internal_bootstrap_server())
+        .with_network(network)
+        .with_network_aliases(_SR_ALIAS)
+        .with_log_level("WARN")
+    )
+    container.start()
+    yield container
+    container.stop()
+
+
+@pytest.fixture(scope="session")
+def ksqldb(
+    network: Network,
+    kafka: KafkaContainer,
+    schema_registry: SchemaRegistryContainer,
 ) -> Generator[KSQLDbContainer, None, None]:
     container = (
         KSQLDbContainer(bootstrap_servers=kafka.get_internal_bootstrap_server())
         .with_network(network)
         .with_network_aliases(_KSQLDB_ALIAS)
+        .with_schema_registry(schema_registry.get_internal_url())
         .with_log_level("WARN")
     )
     container.start()

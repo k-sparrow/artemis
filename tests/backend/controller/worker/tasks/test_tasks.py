@@ -115,10 +115,12 @@ class TestIngest:
             str(_NAMESPACE_ID),
             None,  # group_id — None when not set on IngestionInfo
         )
-        # Second task: index must receive source + s3 dicts for the JDBC sink result
+        # Second task: index must receive upload_action + source + s3 dicts for the
+        # JDBC sink result
         second_sig = mock_chain.call_args[0][1]
         assert second_sig.args == (
             str(_NAMESPACE_ID),
+            "CREATE",  # upload_action
             None,  # group_id
             _SOURCE.model_dump(mode="json"),
             _S3.model_dump(mode="json"),
@@ -213,13 +215,13 @@ class TestDeleteDocument:
             return delete_document.run(source=source, namespace_id=_NAMESPACE_ID)
 
     def test_returns_deleted_status(self) -> None:
-        """Successful deletion must return a status dict with obj_id and namespace."""
+        """
+        Successful deletion must return an IngestionResult dict for the CDC pipeline.
+        """
         result = self._run(MagicMock())
-        assert result == {
-            "status": "deleted",
-            "obj_id": str(_OBJ_ID),
-            "namespace_id": str(_NAMESPACE_ID),
-        }
+        assert result["object"]["id"] == str(_OBJ_ID)
+        assert result["object"]["scope"]["namespace_id"] == str(_NAMESPACE_ID)
+        assert result["operation"] == "DELETE"
 
     def test_call_delete_service_called_with_correct_args(self) -> None:
         """The indexing service must be called with obj_id and namespace."""
@@ -482,7 +484,7 @@ class TestIndex:
                 return_value=MagicMock(),
             ),
         ):
-            return index.run(self._KEY, _NAMESPACE_ID, source=_SOURCE, s3=_S3)
+            return index.run(self._KEY, _NAMESPACE_ID, "CREATE", source=_SOURCE, s3=_S3)
 
     def test_returns_upsert_result_with_obj_id(self) -> None:
         """The task must return a structured IngestionResult dict for the JDBC sink."""
@@ -497,6 +499,7 @@ class TestIndex:
         assert result["indexing"]["num_added"] == _UPSERT_RESULT["num_added"]
         assert result["indexing"]["num_skipped"] == _UPSERT_RESULT["num_skipped"]
         assert result["indexing"]["ids"] == _UPSERT_RESULT["ids"]
+        assert result["operation"] == "CREATE"
 
     def test_returns_group_id_when_provided(self) -> None:
         """group_id must be included in the return dict when set."""
@@ -516,7 +519,9 @@ class TestIndex:
                 return_value=MagicMock(),
             ),
         ):
-            result = index.run(self._KEY, _NAMESPACE_ID, group_id, _SOURCE, _S3)
+            result = index.run(
+                self._KEY, _NAMESPACE_ID, "CREATE", group_id, _SOURCE, _S3
+            )
 
         assert result["object"]["scope"]["group_id"] == group_id
         assert result["object"]["scope"]["namespace_id"] == str(_NAMESPACE_ID)
@@ -542,7 +547,7 @@ class TestIndex:
                 return_value=MagicMock(),
             ),
         ):
-            index.run(self._KEY, _NAMESPACE_ID)
+            index.run(self._KEY, _NAMESPACE_ID, "CREATE")
 
         mock_store_instance.load.assert_called_once_with(self._KEY)
 
@@ -563,7 +568,7 @@ class TestIndex:
                 return_value=MagicMock(),
             ),
         ):
-            index.run(self._KEY, _NAMESPACE_ID)
+            index.run(self._KEY, _NAMESPACE_ID, "CREATE")
 
         assert mock_index_svc.call_args[1]["namespace_id"] == _NAMESPACE_ID
 
@@ -585,7 +590,7 @@ class TestIndex:
                 return_value=MagicMock(),
             ),
         ):
-            index.run(self._KEY, _NAMESPACE_ID)
+            index.run(self._KEY, _NAMESPACE_ID, "CREATE")
 
         mock_store_instance.delete.assert_called_once_with(self._KEY)
 
@@ -613,6 +618,6 @@ class TestIndex:
             ),
         ):
             with pytest.raises(RuntimeError):
-                index.run(self._KEY, _NAMESPACE_ID)
+                index.run(self._KEY, _NAMESPACE_ID, "CREATE")
 
         mock_store_instance.delete.assert_not_called()
