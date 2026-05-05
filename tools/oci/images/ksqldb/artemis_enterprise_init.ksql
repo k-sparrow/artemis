@@ -30,7 +30,7 @@ SET 'auto.offset.reset' = 'earliest';
 -- 1. Source stream — raw FileSource messages with promoted headers
 -- ---------------------------------------------------------------------------
 
-CREATE OR REPLACE STREAM `artemis-enterprise-datasource-filesystem` (
+CREATE STREAM IF NOT EXISTS `artemis-enterprise-datasource-filesystem` (
     `payload`      BYTES,
     `path`         BYTES HEADER('CamelHeader.CamelFileAbsolutePath'),
     `display_name` BYTES HEADER('CamelHeader.CamelFileName'),

@@ -184,7 +184,20 @@ AS SELECT
       `namespace_id` := EXTRACTJSONFIELD(
                           Records[1]->s3->object->userMetadata->`X-Amz-Meta-Contract`,
                           '$.info.namespace_id'
-                        )
+                        ),
+      -- EXTRACTJSONFIELD returns the *string* "null" when the JSON value is null.
+      -- Pydantic's UUID | None coercion rejects that string, so we normalise here.
+      `group_id` := CASE
+        WHEN EXTRACTJSONFIELD(
+          Records[1]->s3->object->userMetadata->`X-Amz-Meta-Contract`,
+          '$.info.group_id'
+        ) = 'null'
+        THEN CAST(NULL AS STRING)
+        ELSE EXTRACTJSONFIELD(
+          Records[1]->s3->object->userMetadata->`X-Amz-Meta-Contract`,
+          '$.info.group_id'
+        )
+        END
     )
   ) AS `kwargs`
 

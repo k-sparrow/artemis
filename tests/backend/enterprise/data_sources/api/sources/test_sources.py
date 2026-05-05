@@ -246,9 +246,10 @@ class TestDeleteDataSource:
     ) -> None:
         created = client.post("/data-sources", json=_CREATE_PAYLOAD).json()
         client.delete(f"/data-sources/{created['id']}")
-        mock_storage_client.delete.assert_called_once()
-        call_url = mock_storage_client.delete.call_args[0][0]
-        assert created["namespace_id"] in call_url
+        # Two DELETE calls: group delete (/objects?group_id=) then namespace soft-delete
+        assert mock_storage_client.delete.call_count == 2
+        urls = [call[0][0] for call in mock_storage_client.delete.call_args_list]
+        assert any(created["namespace_id"] in url for url in urls)
 
     def test_unknown_id_returns_404(self, client: TestClient) -> None:
         resp = client.delete(f"/data-sources/{uuid.uuid4()}")

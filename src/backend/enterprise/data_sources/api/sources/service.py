@@ -129,6 +129,22 @@ async def _soft_delete_namespace(
         raise StorageServiceError(resp.status_code, resp.text)
 
 
+async def _delete_group(
+    http: httpx.AsyncClient,
+    namespace_id: uuid.UUID,
+    group_id: uuid.UUID,
+) -> None:
+    resp = await http.delete(
+        f"/namespaces/{namespace_id}/objects",
+        params={"group_id": str(group_id)},
+    )
+    if resp.status_code not in (
+        http_status.HTTP_202_ACCEPTED,
+        http_status.HTTP_404_NOT_FOUND,
+    ):
+        raise StorageServiceError(resp.status_code, resp.text)
+
+
 async def _fetch_row(session: AsyncSession, source_id: uuid.UUID) -> DataSource:
     result = await session.execute(
         sa.select(DataSource).where(
@@ -261,6 +277,10 @@ async def delete_data_source(
     except HTTPError as exc:
         if "404" not in str(exc):
             raise KafkaConnectError(str(exc)) from exc
+
+    # Delete all objects that belong to this connector (group_id = source_id).
+    # This is unconditional: each connector owns its own group regardless of siblings.
+    await _delete_group(http, row.namespace_id, source_id)
 
     if not has_siblings:
         await _soft_delete_namespace(http, row.namespace_id)
