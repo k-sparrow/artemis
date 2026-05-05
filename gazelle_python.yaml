@@ -5,12 +5,14 @@
 
 manifest:
   modules_mapping:
+    81d243bd2c585b0f4821__mypyc: charset_normalizer
     Crypto: pycryptodome
     IPython: ipython
     PIL: pillow
     accelerate: accelerate
     aiohappyeyeballs: aiohappyeyeballs
     aiohttp: aiohttp
+    aioresponses: aioresponses
     aiosignal: aiosignal
     aiosqlite: aiosqlite
     alembic: alembic
@@ -41,12 +43,6 @@ manifest:
     comm: comm
     cryptography: cryptography
     cuda.bindings: cuda_bindings
-    cuda.ccuda: cuda_bindings
-    cuda.ccudart: cuda_bindings
-    cuda.cnvrtc: cuda_bindings
-    cuda.cuda: cuda_bindings
-    cuda.cudart: cuda_bindings
-    cuda.nvrtc: cuda_bindings
     cuda.pathfinder: cuda_pathfinder
     cv2: opencv_python_headless
     dataclasses_json: dataclasses_json
@@ -99,6 +95,7 @@ manifest:
     idna: idna
     imageio: imageio
     importlib_metadata: importlib_metadata
+    importlib_resources: importlib_resources
     iniconfig: iniconfig
     ipykernel: ipykernel
     ipykernel_launcher: ipykernel
@@ -128,6 +125,8 @@ manifest:
     jupyterlab_server: jupyterlab_server
     jupyterlab_widgets: jupyterlab_widgets
     jwt: PyJWT
+    kafka: kafka_python_ng
+    kafka_connect: kafka_connect_py
     kombu: kombu
     langchain: langchain
     langchain_community: langchain_community
@@ -140,6 +139,7 @@ manifest:
     lark: lark
     latex2mathml: latex2mathml
     lazy_loader: lazy_loader
+    lorem: lorem
     lxml: lxml
     makefun: makefun
     mako: mako
@@ -167,17 +167,10 @@ manifest:
     notebook: notebook
     notebook_shim: notebook_shim
     numpy: numpy
-    nvidia: nvidia_nvtx_cu12
-    nvidia.cublas: nvidia_cublas_cu12
-    nvidia.cuda_cupti: nvidia_cuda_cupti_cu12
-    nvidia.cuda_nvrtc: nvidia_cuda_nvrtc_cu12
-    nvidia.cuda_runtime: nvidia_cuda_runtime_cu12
-    nvidia.cufft: nvidia_cufft_cu12
-    nvidia.cufile: nvidia_cufile_cu12
-    nvidia.curand: nvidia_curand_cu12
-    nvidia.cusolver: nvidia_cusolver_cu12
-    nvidia.cusparse: nvidia_cusparse_cu12
-    nvidia.nvjitlink: nvidia_nvjitlink_cu12
+    nvidia.cu13.lib.libcheckpoint: nvidia_cuda_cupti
+    nvidia.cu13.lib.libnvperf_host: nvidia_cuda_cupti
+    nvidia.cu13.lib.libnvperf_target: nvidia_cuda_cupti
+    nvidia.cu13.lib.libpcsamplingutil: nvidia_cuda_cupti
     onnxruntime: onnxruntime
     openapi_python_client: openapi_python_client
     opencv_python_headless.libs.libopenblasp-r0-59ffcd50: opencv_python_headless
@@ -202,6 +195,7 @@ manifest:
     parso: parso
     passlib: passlib
     pexpect: pexpect
+    pika: pika
     pkg_resources: setuptools
     platformdirs: platformdirs
     pluggy: pluggy
@@ -218,6 +212,7 @@ manifest:
     pure_eval: pure_eval
     pwdlib: pwdlib
     py: pytest
+    pybreaker: pybreaker
     pyclipper: pyclipper
     pycodestyle: pycodestyle
     pycparser: pycparser
@@ -243,6 +238,7 @@ manifest:
     regex: regex
     requests: requests
     requests_toolbelt: requests_toolbelt
+    respx: respx
     rfc3339_validator: rfc3339_validator
     rfc3986_validator: rfc3986_validator
     rfc3987_syntax: rfc3987_syntax
@@ -342,6 +338,7 @@ manifest:
     typing_inspect: typing_inspect
     typing_inspection: typing_inspection
     tzdata: tzdata
+    tzlocal: tzlocal
     uri_template: uri_template
     urllib3: urllib3
     uvicorn: uvicorn
@@ -352,6 +349,7 @@ manifest:
     webencodings: webencodings
     websocket: websocket_client
     widgetsnbextension: widgetsnbextension
+    wiremock: wiremock
     wrapt: wrapt
     xlsxwriter: xlsxwriter
     yaml: pyyaml
@@ -361,4 +359,4 @@ manifest:
     zstandard: zstandard
   pip_repository:
     name: pip
-integrity: fb7065ec74d3459053c924b9b4edfaee152cc2dc442683ed59ccbe311e9ab40a
+integrity: bef013955f3188d92272398410b3951a80464dae2e1a9f7199e1101815830e99

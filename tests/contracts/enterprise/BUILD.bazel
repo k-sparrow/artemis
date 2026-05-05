@@ -1,0 +1,37 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    visibility = ["//visibility:public"],
+)
+
+# Contract tests: Camel FileSource headers → artemis.datasource.filesystem.intake JSON
+#
+# Validates the enterprise ksqlDB CSAS in artemis_enterprise_init.ksql:
+# confirms that group_id and all IntakeRequest fields flow correctly from
+# Kafka headers to the output topic consumed by the HTTP sink.
+# Infrastructure: KafkaContainer + KSQLDbContainer only (no host mounts).
+#
+# Prerequisite: bazel run //tools/oci/images/ksqldb:enterprise_init_tarball
+py_test(
+    name = "test_filesystem_stream",
+    srcs = [
+        "conftest.py",
+        "test_filesystem_stream.py",
+    ],
+    tags = ["integration"],
+    deps = [
+        "//tests/lib/testcontainers/kafka:pkg",
+        requirement("kafka-python-ng"),
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)
