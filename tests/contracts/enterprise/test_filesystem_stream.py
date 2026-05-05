@@ -116,7 +116,9 @@ def _produce_file_event(
 
 @pytest.mark.integration
 class TestFilesystemStreamContract:
-    """artemis.datasource.filesystem.intake receives correctly shaped IntakeRequest records."""
+    """
+    artemis.datasource.filesystem.intake receives correctly shaped IntakeRequest records.
+    """
 
     def test_record_produced_on_file_event(
         self, bootstrap_server: str, streams: None

@@ -292,8 +292,7 @@ WITH (
 --               → upserts into the ingested_objects table (primary key: id)
 --
 -- All IngestionResult fields are parsed from the result TEXT column via
--- EXTRACTJSONFIELD. The s3_key is derived as "{namespace_id}/{obj_id}".
--- size_bytes is CAST to BIGINT; group_id is NULL for non-enterprise tasks.
+-- EXTRACTJSONFIELD. size_bytes is CAST to BIGINT; group_id is NULL for non-enterprise tasks.
 --
 -- The JDBC sink uses primary.key.mode=record_value, primary.key.fields=id.
 -- The Kafka record key (Debezium integer PK) is irrelevant for the sink.
@@ -313,11 +312,6 @@ AS SELECT
     EXTRACTJSONFIELD(result, '$.object.scope.namespace_id')      AS `namespace_id`,
     EXTRACTJSONFIELD(result, '$.object.source')                  AS `source`,
     EXTRACTJSONFIELD(result, '$.object.properties.object_type')  AS `object_type`,
-    CONCAT(
-        EXTRACTJSONFIELD(result, '$.object.scope.namespace_id'),
-        '/',
-        EXTRACTJSONFIELD(result, '$.object.id')
-    )                                                            AS `s3_key`,
     EXTRACTJSONFIELD(result, '$.object.properties.content_type') AS `content_type`,
     CAST(
         EXTRACTJSONFIELD(result, '$.object.properties.size_bytes') AS BIGINT

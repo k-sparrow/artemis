@@ -160,11 +160,6 @@ class IngestedObject(Base):
         nullable=False,
         comment="'file' for user uploads; open-ended for enterprise ingestion",
     )
-    s3_key: Mapped[str] = mapped_column(
-        sa.Text,
-        nullable=False,
-        comment="S3 object key: {namespace_id}/{obj_id}",
-    )
     content_type: Mapped[str] = mapped_column(sa.Text, nullable=False)
     size_bytes: Mapped[int | None] = mapped_column(sa.BigInteger, nullable=True)
     group_id: Mapped[uuid.UUID | None] = mapped_column(

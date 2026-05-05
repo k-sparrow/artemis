@@ -42,7 +42,6 @@ def _seed_ingested_object(
                 namespace_id=namespace_id,
                 source=source,
                 object_type="file",
-                s3_key=f"{namespace_id}/{obj_id}",
                 content_type="application/pdf",
                 size_bytes=0,
                 group_id=group_id,

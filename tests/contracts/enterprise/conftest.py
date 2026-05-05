@@ -2,8 +2,10 @@
 
 Stack: Network → Kafka (KRaft) → KSQLDbContainer → artemis/ksqldb-enterprise-init sidecar
 
-The `streams` fixture creates the two enterprise streams from artemis_enterprise_init.ksql:
-  1. artemis-enterprise-datasource-filesystem  (source stream; also creates the backing topic)
+The `streams` fixture creates the two enterprise streams
+from artemis_enterprise_init.ksql:
+  1. artemis-enterprise-datasource-filesystem  (source stream;
+                                                also creates the backing topic)
   2. artemis-enterprise-datasource-filesystem-intake  (CSAS; routes to HTTP sink)
 
 Prerequisites:

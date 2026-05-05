@@ -16,7 +16,6 @@ Output topic A: artemis.celery.ingested_objects
     "namespace_id": str (UUID),
     "source":       str,
     "object_type":  str,
-    "s3_key":       str,          # "{namespace_id}/{obj_id}"
     "content_type": str,
     "size_bytes":   int | null,
     "group_id":     str | null,   # UUID
@@ -234,24 +233,10 @@ class TestIngestedObjectsContract:
             "namespace_id",
             "source",
             "object_type",
-            "s3_key",
             "content_type",
             "size_bytes",
             "group_id",
         }
-
-    def test_s3_key_derived_correctly(
-        self, bootstrap_server: str, streams: None
-    ) -> None:
-        task_id = str(uuid.uuid4())
-        obj_id = str(uuid.uuid4())
-        namespace_id = str(uuid.uuid4())
-
-        start = _end_offset(bootstrap_server, _OBJECTS_TOPIC)
-        _produce_cdc_row(bootstrap_server, task_id, obj_id, namespace_id)
-
-        record = _consume_one(bootstrap_server, _OBJECTS_TOPIC, start)
-        assert record["s3_key"] == f"{namespace_id}/{obj_id}"
 
     def test_object_fields_extracted_from_result_json(
         self, bootstrap_server: str, streams: None

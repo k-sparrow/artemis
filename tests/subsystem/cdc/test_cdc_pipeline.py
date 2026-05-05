@@ -193,7 +193,6 @@ class TestIngestedObjectsTable:
         assert row.namespace_id == namespace_id
         assert row.source == "doc.txt"
         assert row.object_type == "file"
-        assert row.s3_key == f"{namespace_id}/{obj_id}"
         assert row.content_type == "text/plain"
         assert row.size_bytes == 2048
         assert row.group_id is None
