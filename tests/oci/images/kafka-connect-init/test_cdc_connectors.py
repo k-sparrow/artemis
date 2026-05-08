@@ -5,8 +5,8 @@
 """CDC pipeline connector deployment tests.
 
 Verifies that the three connectors deployed by artemis/cp-kafka-connect-init
-can be deployed against a real Postgres (artemis/postgres:latest) and reach
-the RUNNING state within a reasonable timeout.
+can be deployed against a plain Postgres (postgres:16-alpine + Alembic migrations)
+and reach the RUNNING state within a reasonable timeout.
 
 Connectors under test
 ---------------------
@@ -22,7 +22,7 @@ Connectors under test
 
 Prerequisites:
     bazel run //tools/oci/images:kafka-connect.tarball
-    bazel run //tools/oci/images/postgres:tarball
+    bazel run //src/backend/alembic:tarball.dev
 """
 
 from __future__ import annotations
@@ -82,7 +82,9 @@ def _delete_connector(kafka_connect_url: str, name: str) -> None:
 
 @pytest.mark.integration
 class TestDebeziumSourceConnector:
-    """Debezium PostgreSQL source connector reaches RUNNING against artemis/postgres."""
+    """
+    Debezium PostgreSQL source connector reaches RUNNING against a migrated Postgres.
+    """
 
     _NAME = "DebeziumPostgresSourceConnector__CeleryResultBackendPublish"
 

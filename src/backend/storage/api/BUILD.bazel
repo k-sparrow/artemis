@@ -18,6 +18,7 @@ load("//tools/oci:py_layer.bzl", "py_oci_image")
 
 package(
     default_visibility = [
+        "//src/backend/alembic:__subpackages__",
         "//src/backend/storage/api:__subpackages__",
         "//tests/backend/storage/api:__subpackages__",
         "//tests/oci:__subpackages__",

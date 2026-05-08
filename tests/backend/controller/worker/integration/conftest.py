@@ -168,13 +168,31 @@ def rabbitmq_container(request: pytest.FixtureRequest) -> RabbitMqContainer:
 def postgres_container(request: pytest.FixtureRequest) -> PostgresContainer:
     container = PostgresContainer(
         image="postgres:16-alpine",
-        username="celery",
-        password="celery",
+        username="postgres",
+        password="postgres",
         dbname="celery_results",
+    ).with_command(
+        "postgres "
+        "-c wal_level=logical "
+        "-c max_wal_senders=10 "
+        "-c max_replication_slots=10"
     )
     container.start()
     request.addfinalizer(container.stop)
     return container
+
+
+@pytest.fixture(scope="session")
+def migrations_container(postgres_container: PostgresContainer) -> None:
+    from tests.lib.testcontainers.migrations import run_migrations_host
+
+    run_migrations_host(
+        username=postgres_container.username,
+        password=postgres_container.password,
+        host=postgres_container.get_container_host_ip(),
+        port=postgres_container.get_exposed_port(5432),
+        dbname=postgres_container.dbname,
+    )
 
 
 @pytest.fixture(scope="session")
@@ -272,6 +290,7 @@ def worker_container(
     minio_container: MinioContainer,
     parsing_stub: StubServer,
     indexing_stub: StubServer,
+    migrations_container: None,
     request: pytest.FixtureRequest,
 ) -> DockerContainer:
     env = _worker_env(

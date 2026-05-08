@@ -175,16 +175,37 @@ def postgres_container(
     container = (
         PostgresContainer(
             image="postgres:16-alpine",
-            username="storage",
-            password="storage",
+            username="postgres",
+            password="postgres",
             dbname="storage_test",
         )
         .with_network(docker_network)
         .with_network_aliases("postgres")
+        .with_command(
+            "postgres "
+            "-c wal_level=logical "
+            "-c max_wal_senders=10 "
+            "-c max_replication_slots=10"
+        )
     )
     container.start()
     request.addfinalizer(container.stop)
     return container
+
+
+@pytest.fixture(scope="session")
+def migrations_container(
+    docker_network: Network,
+    postgres_container: PostgresContainer,
+) -> None:
+    from tests.lib.testcontainers.migrations import run_migrations_on_network
+
+    run_migrations_on_network(
+        docker_network,
+        postgres_container.username,
+        postgres_container.password,
+        postgres_container.dbname,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +233,7 @@ def storage_container(
     kafka_container: KafkaContainer,
     minio_container: MinioContainer,
     postgres_container: PostgresContainer,
+    migrations_container: None,
 ) -> DockerContainer:
     container = (
         DockerContainer("artemis/backend-storage:dev")
@@ -220,7 +242,8 @@ def storage_container(
         .with_exposed_ports(_STORAGE_PORT)
         .with_env(
             "SQL_DB_URL",
-            "postgresql+asyncpg://storage:storage@postgres:5432/storage_test",
+            f"postgresql+asyncpg://{postgres_container.username}:{postgres_container.password}"  # noqa: E501
+            f"@postgres:5432/{postgres_container.dbname}",
         )
         .with_env("S3_ENDPOINT_URL", "minio:9000")
         .with_env("S3_ACCESS_KEY", "minioadmin")
@@ -230,15 +253,20 @@ def storage_container(
         .with_env("DEBUG", "true")
     )
     container.start()
-    request.addfinalizer(container.stop)
+
+    def dump_logs_and_stop():
+        stdout, stderr = container.get_logs()
+        print("\n=== storage container stdout ===\n", stdout.decode(errors="replace"))
+        print("\n=== storage container stderr ===\n", stderr.decode(errors="replace"))
+        container.stop()
+
+    request.addfinalizer(dump_logs_and_stop)
+
     host = container.get_container_host_ip()
     port = container.get_exposed_port(_STORAGE_PORT)
     try:
         _wait_for_http(f"http://{host}:{port}", "/health/readiness")
     except TimeoutError:
-        stdout, stderr = container.get_logs()
-        print("\n=== storage container stdout ===\n", stdout.decode(errors="replace"))
-        print("\n=== storage container stderr ===\n", stderr.decode(errors="replace"))
         raise
     return container
 

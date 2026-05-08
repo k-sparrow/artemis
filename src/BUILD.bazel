@@ -3,6 +3,7 @@ load("@rules_multirun//:defs.bzl", "multirun")
 multirun(
     name = "load.dev.all",
     commands = [
+        "//src/backend/alembic:tarball.dev",
         "//src/backend/storage/api:tarball.dev",
         "//src/backend/parsing/api:tarball.dev",
         "//src/backend/indexing/api:tarball.dev",

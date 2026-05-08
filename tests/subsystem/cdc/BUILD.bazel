@@ -20,7 +20,7 @@ py_library(
 #
 # Prerequisites:
 #   bazel run //tools/oci/images:kafka-connect.tarball
-#   bazel run //tools/oci/images/postgres:tarball
+#   bazel run //src/backend/alembic:tarball.dev
 #   bazel run //tools/oci/images/ksqldb:artemis_init_tarball
 py_test(
     name = "test_cdc_pipeline",
@@ -28,9 +28,11 @@ py_test(
         "conftest.py",
         "test_cdc_pipeline.py",
     ],
+    data = ["//src/backend/alembic:tarball.dev"],
     tags = ["integration"],
     deps = [
         "//src/backend/storage/api:models",
+        "//tests/lib/testcontainers:migrations",
         "//tests/lib/testcontainers/kafka:pkg",
         requirement("fastapi"),
         requirement("httpx"),

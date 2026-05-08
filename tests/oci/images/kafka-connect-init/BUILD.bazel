@@ -13,20 +13,21 @@ py_library(
     visibility = ["//visibility:public"],
 )
 
-# CDC connector deployment tests — Debezium source + JDBC sinks against artemis/postgres
+# CDC connector deployment tests — Debezium source + JDBC sinks
 #
 # Prerequisites:
 #   bazel run //tools/oci/images:kafka-connect.tarball
-#   bazel run //tools/oci/images/postgres:tarball
+#   bazel run //src/backend/alembic:tarball.dev
 py_test(
     name = "test_cdc_connectors",
     srcs = [
         "conftest.py",
         "test_cdc_connectors.py",
     ],
+    data = ["//src/backend/alembic:tarball.dev"],
     tags = ["integration"],
     deps = [
-        "//src/backend/storage/api:models",
+        "//tests/lib/testcontainers:migrations",
         "//tests/lib/testcontainers/kafka:pkg",
         requirement("fastapi"),
         requirement("httpx"),

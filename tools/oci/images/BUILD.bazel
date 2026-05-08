@@ -890,7 +890,6 @@ filegroup(
         for tool in [
             "kong",
             "ksqldb",
-            "postgres",
         ]
     ] + [
         ":artemis-kafka-connect-init",
@@ -908,7 +907,6 @@ filegroup(
     for tool in [
         "kong",
         "ksqldb",
-        "postgres",
     ]
 ]
 
@@ -922,7 +920,6 @@ multirun(
             "artemis-kafka-connect-init",
             "kong",
             "ksqldb",
-            "postgres",
         ]
     ] + [
         "//tools/oci/images/ksqldb:load.all",

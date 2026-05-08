@@ -12,6 +12,7 @@ py_library(
     srcs = ["conftest.py"],
     deps = [
         "//tests:conftest",
+        "//tests/lib/testcontainers:migrations",
         "//tests/lib/testcontainers/tei:pkg",
         requirement("minio"),
         requirement("httpx"),
@@ -27,6 +28,7 @@ py_library(
 py_test(
     name = "test_ingestion",
     srcs = ["test_ingestion.py"],
+    data = ["//src/backend/alembic:tarball.dev"],
     # e2e tests require all service images to be pre-loaded and are excluded
     # from the standard //tests/... sweep.  Run with:
     #   bazel test //tests/e2e:test_ingestion --test_arg=--e2e

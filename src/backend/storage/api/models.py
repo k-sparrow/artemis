@@ -97,7 +97,11 @@ class Namespace(Base):
         ),
     )
     type: Mapped[NamespaceType] = mapped_column(
-        sa.Enum(NamespaceType, name="namespace_type"),
+        sa.Enum(
+            NamespaceType,
+            name="namespace_type",
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
         nullable=False,
     )
     owner_id: Mapped[uuid.UUID] = mapped_column(

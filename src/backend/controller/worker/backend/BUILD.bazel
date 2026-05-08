@@ -1,7 +1,10 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
 load("@pip//:requirements.bzl", "requirement")
 
-package(default_visibility = ["//src/backend/controller/worker:__subpackages__"])
+package(default_visibility = [
+    "//src/backend/alembic:__pkg__",
+    "//src/backend/controller/worker:__subpackages__",
+])
 
 py_library(
     name = "pkg",

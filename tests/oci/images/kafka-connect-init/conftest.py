@@ -4,20 +4,20 @@
 #
 """Fixtures for artemis/cp-kafka-connect-init CDC connector tests.
 
-Stack: Kafka + artemis/postgres:latest + artemis/cp-kafka-connect:latest.
+Stack:
+   Kafka +
+   postgres:16-alpine +
+   artemis-db-migrations +
+   artemis/cp-kafka-connect:latest.
 
-The postgres image ships init.sql which creates:
+Alembic migrations create:
   - debezium user with REPLICATION privilege
   - apollo_celery_taskmeta table + celery_results_publication
-  - apollo_taskmeta_table_rep_slot replication slot (created by Debezium on first connect)
-
-The storage service tables (ingested_objects, ingestion_tasks) are not in
-init.sql — they are created here via SQLAlchemy using the storage service
-models so the JDBC sink connectors can verify their target tables exist.
+  - all storage service tables (ingested_objects, ingestion_tasks, owner, namespace)
 
 Prerequisites:
     bazel run //tools/oci/images:kafka-connect.tarball
-    bazel run //tools/oci/images/postgres:tarball
+    bazel run //src/backend/alembic:tarball.dev
 """
 
 from __future__ import annotations
@@ -26,18 +26,15 @@ import time
 
 import httpx
 import pytest
-import sqlalchemy as sa
 from kafka.admin import KafkaAdminClient, NewTopic
 from kafka.errors import TopicAlreadyExistsError
-from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
+from testcontainers.postgres import PostgresContainer
 
-from src.backend.storage.api.models import Base
 from tests.lib.testcontainers.kafka.connect import KafkaConnectContainer
 from tests.lib.testcontainers.kafka.kafka import KafkaContainer
 
 _KC_IMAGE = "artemis/cp-kafka-connect:latest"
-_PG_IMAGE = "artemis/postgres:latest"
 _PG_HOST_ALIAS = "postgres"
 _PG_PORT = 5432
 _PG_DB = "documents"
@@ -112,21 +109,17 @@ def sink_topics(kafka_bootstrap_server: str) -> None:
 def postgres_container(
     request: pytest.FixtureRequest,
     docker_network: Network,
-) -> DockerContainer:
-    """artemis/postgres:latest with wal_level=logical and standard dev credentials.
-
-    Runs init.sql which creates:
-      - debezium user + REPLICATION + apollo_celery_taskmeta + celery_results_publication
-    """
+) -> PostgresContainer:
     container = (
-        DockerContainer(_PG_IMAGE)
+        PostgresContainer(
+            image="postgres:16-alpine",
+            username=_PG_SUPERUSER,
+            password=_PG_SUPERPASS,
+            dbname=_PG_DB,
+        )
         .with_network(docker_network)
         .with_network_aliases(_PG_HOST_ALIAS)
         .with_kwargs(hostname=_PG_HOST_ALIAS)
-        .with_exposed_ports(_PG_PORT)
-        .with_env("POSTGRES_USER", _PG_SUPERUSER)
-        .with_env("POSTGRES_PASSWORD", _PG_SUPERPASS)
-        .with_env("POSTGRES_DB", _PG_DB)
         .with_command(
             "postgres"
             " -c wal_level=logical"
@@ -136,45 +129,22 @@ def postgres_container(
     )
     container.start()
     request.addfinalizer(container.stop)
-
-    host = container.get_container_host_ip()
-    port = container.get_exposed_port(_PG_PORT)
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline:
-        try:
-            engine = sa.create_engine(
-                f"postgresql+psycopg://{_PG_SUPERUSER}:{_PG_SUPERPASS}"
-                f"@{host}:{port}/{_PG_DB}"
-            )
-            with engine.connect():
-                pass
-            engine.dispose()
-            break
-        except Exception:
-            time.sleep(2)
-    else:
-        raise TimeoutError("Postgres did not become ready within 60s")
-
     return container
 
 
 @pytest.fixture(scope="session")
-def storage_tables(postgres_container: DockerContainer) -> None:
-    """Create ingested_objects and ingestion_tasks (and their FK anchors) via SQLAlchemy.
+def migrations_container(
+    docker_network: Network,
+    postgres_container: PostgresContainer,
+) -> None:
+    from tests.lib.testcontainers.migrations import run_migrations_on_network
 
-    These tables are not in init.sql — the storage service normally creates them
-    via create_all() on startup. We replicate that here so the JDBC sink connectors
-    can connect and verify the target table exists.
-    """
-    host = postgres_container.get_container_host_ip()
-    port = postgres_container.get_exposed_port(_PG_PORT)
-    url = (
-        f"postgresql+psycopg://{_PG_SUPERUSER}:{_PG_SUPERPASS}"
-        f"@{host}:{port}/{_PG_DB}"
+    run_migrations_on_network(
+        network=docker_network,
+        username=postgres_container.username,
+        password=postgres_container.password,
+        dbname=postgres_container.dbname,
     )
-    engine = sa.create_engine(url)
-    Base.metadata.create_all(engine)
-    engine.dispose()
 
 
 @pytest.fixture(scope="session")
@@ -182,8 +152,8 @@ def kafka_connect(
     request: pytest.FixtureRequest,
     docker_network: Network,
     kafka_container: KafkaContainer,
-    postgres_container: DockerContainer,
-    storage_tables: None,
+    postgres_container: PostgresContainer,
+    migrations_container: None,
     sink_topics: None,
 ) -> KafkaConnectContainer:
     container = (

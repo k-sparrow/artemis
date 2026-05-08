@@ -1,7 +1,8 @@
 """Subsystem fixtures for the CDC pipeline end-to-end verification.
 
-Stack: Network → Kafka (KRaft) → Postgres (artemis/postgres:latest, wal_level=logical)
-       → ksqlDB → ksqldb-init sidecar → Kafka Connect (artemis/cp-kafka-connect:latest)
+Stack: Network → Kafka (KRaft) → Postgres (postgres:16-alpine, wal_level=logical)
+       → artemis-db-migrations → ksqlDB → ksqldb-init sidecar
+       → Kafka Connect (artemis/cp-kafka-connect:latest)
        → three connectors (Debezium source + 2 JDBC sinks)
 
 Test actions insert rows directly into apollo_celery_taskmeta. Debezium reads
@@ -10,7 +11,7 @@ JDBC sinks upsert the rows into ingested_objects and ingestion_tasks.
 
 Prerequisites:
     bazel run //tools/oci/images:kafka-connect.tarball
-    bazel run //tools/oci/images/postgres:tarball
+    bazel run //src/backend/alembic:tarball.dev
     bazel run //tools/oci/images/ksqldb:artemis_init_tarball
 """
 
@@ -24,16 +25,16 @@ import pytest
 import sqlalchemy as sa
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
+from testcontainers.postgres import PostgresContainer
 
 from sqlalchemy.orm import Session
 
-from src.backend.storage.api.models import Base, Namespace, NamespaceType, Owner
+from src.backend.storage.api.models import Namespace, NamespaceType, Owner
 from tests.lib.testcontainers.kafka.connect import KafkaConnectContainer
 from tests.lib.testcontainers.kafka.kafka import KafkaContainer
 from tests.lib.testcontainers.kafka import KSQLDbContainer, SchemaRegistryContainer
 
 _KC_IMAGE = "artemis/cp-kafka-connect:latest"
-_PG_IMAGE = "artemis/postgres:latest"
 _PG_ALIAS = "postgres"
 _PG_PORT = 5432
 _PG_DB = "documents"
@@ -123,20 +124,17 @@ def schema_registry(
 
 
 @pytest.fixture(scope="session")
-def postgres(network: Network, request: pytest.FixtureRequest) -> DockerContainer:
-    """artemis/postgres:latest with wal_level=logical.
-
-    init.sql creates debezium user, apollo_celery_taskmeta, celery_results_publication.
-    """
+def postgres(network: Network, request: pytest.FixtureRequest) -> PostgresContainer:
     container = (
-        DockerContainer(_PG_IMAGE)
+        PostgresContainer(
+            image="postgres:16-alpine",
+            username=_PG_USER,
+            password=_PG_PASS,
+            dbname=_PG_DB,
+        )
         .with_network(network)
         .with_network_aliases(_PG_ALIAS)
         .with_kwargs(hostname=_PG_ALIAS)
-        .with_exposed_ports(_PG_PORT)
-        .with_env("POSTGRES_USER", _PG_USER)
-        .with_env("POSTGRES_PASSWORD", _PG_PASS)
-        .with_env("POSTGRES_DB", _PG_DB)
         .with_command(
             "postgres"
             " -c wal_level=logical"
@@ -146,29 +144,25 @@ def postgres(network: Network, request: pytest.FixtureRequest) -> DockerContaine
     )
     container.start()
     request.addfinalizer(container.stop)
-
-    host = container.get_container_host_ip()
-    port = container.get_exposed_port(_PG_PORT)
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline:
-        try:
-            engine = sa.create_engine(
-                f"postgresql+psycopg://{_PG_USER}:{_PG_PASS}@{host}:{port}/{_PG_DB}"
-            )
-            with engine.connect():
-                pass
-            engine.dispose()
-            break
-        except Exception:
-            time.sleep(2)
-    else:
-        raise TimeoutError("Postgres did not become ready within 60s")
-
     return container
 
 
 @pytest.fixture(scope="session")
-def postgres_engine(postgres: DockerContainer) -> Iterator[sa.Engine]:
+def migrations_container(network: Network, postgres: PostgresContainer) -> None:
+    from tests.lib.testcontainers.migrations import run_migrations_on_network
+
+    run_migrations_on_network(
+        network=network,
+        username=postgres.username,
+        password=postgres.password,
+        dbname=postgres.dbname,
+    )
+
+
+@pytest.fixture(scope="session")
+def postgres_engine(
+    postgres: PostgresContainer, migrations_container: None
+) -> Iterator[sa.Engine]:
     host = postgres.get_container_host_ip()
     port = postgres.get_exposed_port(_PG_PORT)
     engine = sa.create_engine(
@@ -176,16 +170,6 @@ def postgres_engine(postgres: DockerContainer) -> Iterator[sa.Engine]:
     )
     yield engine
     engine.dispose()
-
-
-@pytest.fixture(scope="session")
-def storage_tables(postgres_engine: sa.Engine) -> None:
-    """Create owner, namespace, ingested_objects, ingestion_tasks via SQLAlchemy.
-
-    These are not in init.sql — the storage service creates them on startup.
-    We replicate that here so the JDBC sinks can target real tables.
-    """
-    Base.metadata.create_all(postgres_engine)
 
 
 # ---------------------------------------------------------------------------
@@ -243,8 +227,8 @@ def streams(network: Network, ksqldb: KSQLDbContainer) -> None:
 def kafka_connect(
     network: Network,
     kafka: KafkaContainer,
-    postgres: DockerContainer,
-    storage_tables: None,
+    postgres: PostgresContainer,
+    migrations_container: None,
     request: pytest.FixtureRequest,
 ) -> KafkaConnectContainer:
     container = (
@@ -410,7 +394,7 @@ def connectors(
 
 
 @pytest.fixture
-def namespace_row(postgres_engine: sa.Engine, storage_tables: None) -> uuid.UUID:
+def namespace_row(postgres_engine: sa.Engine) -> uuid.UUID:
     """Insert an owner + namespace row and return the namespace_id.
 
     ingested_objects.namespace_id and ingestion_tasks.namespace_id both have
@@ -434,7 +418,7 @@ def namespace_row(postgres_engine: sa.Engine, storage_tables: None) -> uuid.UUID
 
 
 @pytest.fixture(autouse=True)
-def clean_db(postgres_engine: sa.Engine, storage_tables: None) -> Iterator[None]:
+def clean_db(postgres_engine: sa.Engine) -> Iterator[None]:
     yield
     with postgres_engine.begin() as conn:
         # Keep owner + namespace alive: the session-scoped JDBC sink connectors may

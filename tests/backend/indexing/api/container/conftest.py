@@ -72,13 +72,39 @@ def postgres_container(
     docker_network: Network, request: pytest.FixtureRequest
 ) -> PostgresContainer:
     container = (
-        PostgresContainer("postgres:16-alpine", driver="asyncpg")
+        PostgresContainer(
+            "postgres:16-alpine",
+            username="postgres",
+            password="postgres",
+            driver="asyncpg",
+        )
         .with_network(docker_network)
         .with_network_aliases("postgres")
+        .with_command(
+            "postgres "
+            "-c wal_level=logical "
+            "-c max_wal_senders=10 "
+            "-c max_replication_slots=10"
+        )
     )
     container.start()
     request.addfinalizer(container.stop)
     return container
+
+
+@pytest.fixture(scope="session")
+def migrations_container(
+    docker_network: Network,
+    postgres_container: PostgresContainer,
+) -> None:
+    from tests.lib.testcontainers.migrations import run_migrations_on_network
+
+    run_migrations_on_network(
+        docker_network,
+        postgres_container.username,
+        postgres_container.password,
+        postgres_container.dbname,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +132,7 @@ def app_container(
     docker_network: Network,
     qdrant_container: QdrantContainer,
     tei_container: TEIContainer,
+    migrations_container: None,
     postgres_container: PostgresContainer,
     request: pytest.FixtureRequest,
 ) -> DockerContainer:

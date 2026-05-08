@@ -137,16 +137,37 @@ def postgres_container(
     container = (
         PostgresContainer(
             image="postgres:16-alpine",
-            username="ds",
-            password="ds",
+            username="postgres",
+            password="postgres",
             dbname="data_sources_test",
         )
         .with_network(docker_network)
         .with_network_aliases("postgres")
+        .with_command(
+            "postgres "
+            "-c wal_level=logical "
+            "-c max_wal_senders=10 "
+            "-c max_replication_slots=10"
+        )
     )
     container.start()
     request.addfinalizer(container.stop)
     return container
+
+
+@pytest.fixture(scope="session")
+def migrations_container(
+    docker_network: Network,
+    postgres_container: PostgresContainer,
+) -> None:
+    from tests.lib.testcontainers.migrations import run_migrations_on_network
+
+    run_migrations_on_network(
+        docker_network,
+        postgres_container.username,
+        postgres_container.password,
+        postgres_container.dbname,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +222,7 @@ def data_sources_container(
     kafka_container: KafkaContainer,
     postgres_container: PostgresContainer,
     wiremock: WireMockContainer,
+    migrations_container: None,
 ) -> DockerContainer:
     wiremock_internal_url = f"http://wiremock:{wiremock.http_server_port}"
     container = (
@@ -210,7 +232,8 @@ def data_sources_container(
         .with_exposed_ports(_DS_PORT)
         .with_env(
             "SQL_DB_URL",
-            "postgresql+asyncpg://ds:ds@postgres:5432/data_sources_test",
+            f"postgresql+asyncpg://{postgres_container.username}:{postgres_container.password}"  # noqa: E501
+            f"@postgres:5432/{postgres_container.dbname}",
         )
         .with_env(
             "KAFKA_CONNECT_URL",

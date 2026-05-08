@@ -12,31 +12,22 @@ py_library(
     name = "conftest",
     testonly = True,
     srcs = ["conftest.py"],
-    visibility = ["//visibility:public"],
     deps = [
-        "//tests/lib/testcontainers:migrations",
-        "//tests/lib/testcontainers/kafka:pkg",
-        requirement("fastapi"),
-        requirement("httpx"),
-        requirement("kafka-python-ng"),
+        requirement("psycopg"),
         requirement("pytest"),
         requirement("testcontainers"),
-        requirement("wiremock"),
     ],
 )
 
 py_test(
-    name = "test_pipeline",
-    srcs = ["test_pipeline.py"],
+    name = "test_migrations",
+    srcs = ["test_migrations.py"],
     data = ["//src/backend/alembic:tarball.dev"],
-    tags = [
-        "container",
-        "integration",
-        "local",  # disable Bazel sandbox so Docker volume mounts see the real host filesystem
-    ],
+    tags = ["integration"],
     deps = [
         ":conftest",
-        requirement("httpx"),
+        requirement("psycopg"),
         requirement("pytest"),
+        requirement("testcontainers"),
     ],
 )

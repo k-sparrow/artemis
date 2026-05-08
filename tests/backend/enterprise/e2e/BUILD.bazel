@@ -32,7 +32,10 @@ py_test(
         "--compose-file",
         "$(location //tools/docker:docker_compose_test)",
     ],
-    data = ["//tools/docker:docker_compose_test"],
+    data = [
+        "//src/backend/alembic:tarball.dev",
+        "//tools/docker:docker_compose_test",
+    ],
     tags = [
         "e2e",
         "local",  # disable Bazel sandbox — Docker volume mounts need real host paths

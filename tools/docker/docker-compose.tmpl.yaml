@@ -76,7 +76,7 @@ services:
       - default
   postgres:
     profiles: [infra]
-    image: artemis/postgres:latest
+    image: postgres:16
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres", "-d", "documents"]
@@ -102,6 +102,17 @@ services:
       -c max_wal_senders=10
       -c max_replication_slots=10
       -c hot_standby_feedback=on
+    networks:
+      - default
+  artemis-db-migrations:
+    profiles: [infra]
+    image: artemis/db-migrations:dev
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SQL_DB_URL: "postgresql+psycopg://postgres:testpass@postgres:5432/documents"
     networks:
       - default
   rabbitmq:
@@ -180,6 +191,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      artemis-db-migrations:
+        condition: service_completed_successfully
     healthcheck:
       test: wget http://localhost:10001/health || exit 1
       interval: 20s
@@ -208,6 +221,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      artemis-db-migrations:
+        condition: service_completed_successfully
       backend-indexing-retrieval:
         condition: service_healthy
     extra_hosts:
@@ -249,6 +264,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      artemis-db-migrations:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/7000 && printf 'GET /health/readiness HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q 'HTTP/1.1 200' <&3"]
       interval: 20s
@@ -277,6 +294,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      artemis-db-migrations:
+        condition: service_completed_successfully
       minio:
         condition: service_healthy
     environment:
@@ -329,6 +348,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      artemis-db-migrations:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/10000 && printf 'GET /health/readiness HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q 'HTTP/1.1 200' <&3"]
       interval: 20s
@@ -399,6 +420,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      artemis-db-migrations:
+        condition: service_completed_successfully
       kafka-connect:
         condition: service_healthy
       backend-storage:
