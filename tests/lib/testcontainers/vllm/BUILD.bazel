@@ -1,0 +1,31 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+
+package(
+    default_visibility = ["//tests:__subpackages__"],
+)
+
+py_library(
+    name = "vllm",
+    testonly = True,
+    srcs = ["vllm.py"],
+    deps = [
+        requirement("docker"),
+        requirement("testcontainers"),
+        requirement("typing-extensions"),
+    ],
+)
+
+py_library(
+    name = "pkg",
+    testonly = True,
+    srcs = ["__init__.py"],
+    deps = [
+        ":vllm",
+    ],
+)

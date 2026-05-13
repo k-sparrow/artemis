@@ -20,6 +20,29 @@ py_library(
     ],
     deps = [
         ":huggingface",
+        ":late_interaction",
+        ":sparse",
+    ],
+)
+
+py_library(
+    name = "late_interaction",
+    srcs = [
+        "late_interaction.py",
+    ],
+    deps = [
+        requirement("httpx"),
+    ],
+)
+
+py_library(
+    name = "sparse",
+    srcs = [
+        "sparse.py",
+    ],
+    deps = [
+        requirement("fastembed"),
+        requirement("langchain-qdrant"),
     ],
 )
 
