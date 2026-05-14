@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import json
+
 import docker
 from typing_extensions import Self
 from testcontainers.core.container import DockerContainer
@@ -53,9 +55,9 @@ class VLLMContainer(DockerContainer):
     def __init__(self, model_id: str, image: str = _DEFAULT_IMAGE) -> None:
         super().__init__(image)
         self._model_id = model_id
+        self._extra_flags: list[str] = []
 
         self.with_exposed_ports(self.HTTP_PORT)
-        self.with_command(f"{model_id} --pooler-config.task token_embed")
         self.with_kwargs(
             device_requests=[
                 docker.types.DeviceRequest(count=-1, capabilities=[["gpu"]])
@@ -68,6 +70,7 @@ class VLLMContainer(DockerContainer):
             .for_status_code(200)
             .with_startup_timeout(_STARTUP_TIMEOUT_S)
         )
+        self._apply_command()
 
     @property
     def model_id(self) -> str:
@@ -78,8 +81,30 @@ class VLLMContainer(DockerContainer):
         self.with_volume_mapping(host_cache_dir, _CONTAINER_CACHE_DIR, "rw")
         return self
 
+    def with_trust_remote_code(self) -> Self:
+        """Add --trust-remote-code (required by some models, e.g. jinaai/jina-colbert-v2)."""
+        self._extra_flags.append("--trust-remote-code")
+        self._apply_command()
+        return self
+
+    def with_hf_overrides(self, overrides: dict) -> Self:
+        """Add --hf-overrides for models with non-BERT backbones.
+
+        Required when vLLM cannot infer the correct ColBERT architecture class
+        from the model config alone, e.g.::
+
+            container.with_hf_overrides({"architectures": ["ColBERTJinaRobertaModel"]})
+        """
+        self._extra_flags.append(f"--hf-overrides '{json.dumps(overrides)}'")
+        self._apply_command()
+        return self
+
     def get_url(self) -> str:
         """Return the vLLM HTTP base URL reachable from the test process."""
         host = self.get_container_host_ip()
         port = self.get_exposed_port(self.HTTP_PORT)
         return f"http://{host}:{port}"
+
+    def _apply_command(self) -> None:
+        parts = [self._model_id, "--pooler-config.task token_embed"] + self._extra_flags
+        self.with_command(" ".join(parts))

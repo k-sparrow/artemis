@@ -18,7 +18,6 @@ from src.lib.core.adapters.embedding.late_interaction import (
     VLLMLateInteractionEmbeddings,
 )
 
-_MODEL_ID = "colbert-ir/colbertv2.0"
 _COLBERT_DIM = 128
 
 _DOCUMENTS = [
@@ -30,93 +29,65 @@ _QUERY = "What vector database does Artemis use?"
 
 
 @pytest.fixture(scope="session")
-def client(vllm_base_url: str) -> VLLMLateInteractionEmbeddings:
-    return VLLMLateInteractionEmbeddings(url=vllm_base_url, model=_MODEL_ID)
-
-
-# ---------------------------------------------------------------------------
-# Sync
-# ---------------------------------------------------------------------------
+def client(vllm_base_url: str, vllm_model_id: str) -> VLLMLateInteractionEmbeddings:
+    return VLLMLateInteractionEmbeddings(url=vllm_base_url, model=vllm_model_id)
 
 
 @pytest.mark.integration
 @pytest.mark.local
-def test_embed_documents_returns_one_matrix_per_document(
-    client: VLLMLateInteractionEmbeddings,
-):
-    result = client.embed_documents(_DOCUMENTS)
-    assert len(result) == len(_DOCUMENTS)
+class TestEmbedDocuments:
+    def test_returns_one_matrix_per_document(
+        self, client: VLLMLateInteractionEmbeddings
+    ):
+        result = client.embed_documents(_DOCUMENTS)
+        assert len(result) == len(_DOCUMENTS)
+
+    def test_token_vectors_are_128_dim(self, client: VLLMLateInteractionEmbeddings):
+        result = client.embed_documents(_DOCUMENTS)
+        for matrix in result:
+            assert len(matrix) > 0, "expected at least one token"
+            assert all(len(vec) == _COLBERT_DIM for vec in matrix)
+
+    def test_preserves_order(self, client: VLLMLateInteractionEmbeddings):
+        """
+        Index-sorted response must match input order regardless of server scheduling.
+        """
+        docs = [f"document number {i}" for i in range(5)]
+        result = client.embed_documents(docs)
+        assert len(result) == 5
+        for matrix in result:
+            assert len(matrix) > 0
+            assert len(matrix[0]) == _COLBERT_DIM
+
+    @pytest.mark.asyncio
+    async def test_async_returns_one_matrix_per_document(
+        self, client: VLLMLateInteractionEmbeddings
+    ):
+        result = await client.aembed_documents(_DOCUMENTS)
+        assert len(result) == len(_DOCUMENTS)
+
+    @pytest.mark.asyncio
+    async def test_async_token_vectors_are_128_dim(
+        self, client: VLLMLateInteractionEmbeddings
+    ):
+        result = await client.aembed_documents(_DOCUMENTS)
+        for matrix in result:
+            assert len(matrix) > 0
+            assert all(len(vec) == _COLBERT_DIM for vec in matrix)
 
 
 @pytest.mark.integration
 @pytest.mark.local
-def test_embed_documents_token_vectors_are_128_dim(
-    client: VLLMLateInteractionEmbeddings,
-):
-    result = client.embed_documents(_DOCUMENTS)
-    for matrix in result:
-        assert len(matrix) > 0, "expected at least one token"
-        assert all(len(vec) == _COLBERT_DIM for vec in matrix)
+class TestEmbedQuery:
+    def test_returns_token_matrix(self, client: VLLMLateInteractionEmbeddings):
+        result = client.embed_query(_QUERY)
+        assert len(result) > 0, "expected at least one token"
+        assert all(len(vec) == _COLBERT_DIM for vec in result)
 
-
-@pytest.mark.integration
-@pytest.mark.local
-def test_embed_query_returns_token_matrix(
-    client: VLLMLateInteractionEmbeddings,
-):
-    result = client.embed_query(_QUERY)
-    assert len(result) > 0, "expected at least one token"
-    assert all(len(vec) == _COLBERT_DIM for vec in result)
-
-
-@pytest.mark.integration
-@pytest.mark.local
-def test_embed_documents_preserves_order(
-    client: VLLMLateInteractionEmbeddings,
-):
-    """Batched results must arrive in input order regardless of server scheduling."""
-    docs = [f"document number {i}" for i in range(5)]
-    result = client.embed_documents(docs)
-    assert len(result) == 5
-    # Each matrix must be non-empty and 128-dim — a proxy for "not shuffled to zeros"
-    for matrix in result:
-        assert len(matrix) > 0
-        assert len(matrix[0]) == _COLBERT_DIM
-
-
-# ---------------------------------------------------------------------------
-# Async
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.integration
-@pytest.mark.local
-@pytest.mark.asyncio
-async def test_aembed_documents_returns_one_matrix_per_document(
-    client: VLLMLateInteractionEmbeddings,
-):
-    result = await client.aembed_documents(_DOCUMENTS)
-    assert len(result) == len(_DOCUMENTS)
-
-
-@pytest.mark.integration
-@pytest.mark.local
-@pytest.mark.asyncio
-async def test_aembed_documents_token_vectors_are_128_dim(
-    client: VLLMLateInteractionEmbeddings,
-):
-    result = await client.aembed_documents(_DOCUMENTS)
-    for matrix in result:
-        assert len(matrix) > 0
-        assert all(len(vec) == _COLBERT_DIM for vec in matrix)
-
-
-@pytest.mark.integration
-@pytest.mark.local
-@pytest.mark.asyncio
-async def test_aembed_query_returns_token_matrix(
-    client: VLLMLateInteractionEmbeddings,
-):
-    result = await client.aembed_query(_QUERY)
-    assert len(result) > 0
-    assert all(len(vec) == _COLBERT_DIM for vec in result)
+    @pytest.mark.asyncio
+    async def test_async_returns_token_matrix(
+        self, client: VLLMLateInteractionEmbeddings
+    ):
+        result = await client.aembed_query(_QUERY)
+        assert len(result) > 0
+        assert all(len(vec) == _COLBERT_DIM for vec in result)
