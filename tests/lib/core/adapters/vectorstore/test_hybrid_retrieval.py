@@ -186,9 +186,7 @@ class TestHybridRetrievalMode:
         results = sparse_store.similarity_search(_KEYWORD, k=1)
 
         assert results, "sparse search returned no results"
-        assert (
-            _KEYWORD in results[0].page_content
-        ), (
+        assert _KEYWORD in results[0].page_content, (
             f"BM25 did not rank keyword-matched doc first; "
             f"got: {results[0].page_content!r}"
         )
@@ -262,9 +260,7 @@ class TestMultiStageRetrievalMode:
         results = multi_stage_vectorstore.similarity_search(_KEYWORD, k=2)
 
         assert results, "multi-stage search returned no results"
-        assert (
-            _KEYWORD in results[0].page_content
-        ), (
+        assert _KEYWORD in results[0].page_content, (
             f"Expected keyword doc at rank 1 after ColBERT reranking; "
             f"got: {results[0].page_content!r}"
         )

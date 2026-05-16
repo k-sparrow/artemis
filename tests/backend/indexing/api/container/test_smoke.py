@@ -7,6 +7,11 @@ against real infrastructure.
 
 The indexing service no longer handles file uploads — it accepts
 ``List[ParsedChunk]`` JSON produced by the parsing service.
+
+The ``retrieval_mode`` fixture (conftest) parametrizes the entire suite over
+``dense`` and ``hybrid`` so every test runs twice — once per mode.  A
+dedicated ``test_hybrid_sparse_vectors_stored`` test verifies the
+BM25-specific behaviour that is only exercised in hybrid mode.
 """
 
 import uuid
@@ -15,9 +20,6 @@ import httpx
 import pytest
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchValue
-
-OBJ_ID_A = uuid.uuid4()
-OBJ_ID_B = uuid.uuid4()
 
 # Pre-parsed chunks as would be produced by the parsing service.
 _TEST_CHUNKS = [
@@ -70,8 +72,6 @@ async def test_ingest_indexes_chunks(client: httpx.AsyncClient):
 # DELETE /ingest
 # ---------------------------------------------------------------------------
 
-_COLLECTION = "test_collection"
-
 
 @pytest.mark.integration
 @pytest.mark.asyncio
@@ -98,6 +98,7 @@ async def test_delete_nonexistent_obj_id_returns_204(client: httpx.AsyncClient):
 async def test_delete_single_object_removes_only_target(
     client: httpx.AsyncClient,
     qdrant_client: AsyncQdrantClient,
+    collection_name: str,
 ):
     """Ingest two objects, delete one — only that object's chunks disappear."""
     namespace = uuid.uuid4()
@@ -138,7 +139,7 @@ async def test_delete_single_object_removes_only_target(
 
     # obj_id_a chunks must be gone
     a_result = await qdrant_client.count(
-        collection_name=_COLLECTION,
+        collection_name=collection_name,
         count_filter=Filter(
             must=[
                 FieldCondition(
@@ -154,7 +155,7 @@ async def test_delete_single_object_removes_only_target(
 
     # obj_id_b chunks must still be present
     b_result = await qdrant_client.count(
-        collection_name=_COLLECTION,
+        collection_name=collection_name,
         count_filter=Filter(
             must=[
                 FieldCondition(
@@ -174,6 +175,7 @@ async def test_delete_single_object_removes_only_target(
 async def test_delete_namespace_removes_all_chunks(
     client: httpx.AsyncClient,
     qdrant_client: AsyncQdrantClient,
+    collection_name: str,
 ):
     """Namespace deletion wipes all chunks and clears the record manager."""
     namespace = uuid.uuid4()
@@ -191,7 +193,7 @@ async def test_delete_namespace_removes_all_chunks(
 
     # Vectorstore must be empty for this namespace
     result = await qdrant_client.count(
-        collection_name=_COLLECTION,
+        collection_name=collection_name,
         count_filter=Filter(
             must=[
                 FieldCondition(
@@ -214,24 +216,115 @@ async def test_delete_namespace_removes_all_chunks(
 
 
 # ---------------------------------------------------------------------------
-# TODO: extend this suite (Epic 6 / post-Epic 6)
+# Hybrid-mode specific assertions
 # ---------------------------------------------------------------------------
 
-# TODO: test idempotency — ingest the same document twice; assert first run
-#   produces num_added=N / num_skipped=0, second run produces num_added=0 /
-#   num_skipped=N.  Exercises the record-manager deduplication path end-to-end.
 
-# TODO: test retrieval — after a successful ingest, query Qdrant directly (or
-#   via a retrieval endpoint) with a vector in the same namespace and assert at
-#   least one result is returned with the correct namespace in metadata.
-#   Catches corrupt vectors and wrong namespace stamping.
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_hybrid_sparse_vectors_stored(
+    client: httpx.AsyncClient,
+    qdrant_client: AsyncQdrantClient,
+    collection_name: str,
+    retrieval_mode: str,
+):
+    """In hybrid mode every stored point must carry a non-empty BM25 sparse vector.
 
-# TODO: test a TABLE chunk type — send a chunk with type="table" and verify
-#   it is stored correctly (metadata.type == "table" in Qdrant payload).
+    Skipped when running in dense mode — dense collections have no sparse vector
+    field and the assertion would always fail there.
+    """
+    if retrieval_mode != "hybrid":
+        pytest.skip("sparse vector check is only meaningful in hybrid mode")
 
-# TODO: test error handling / robustness:
-#   - Empty chunks list → expect 200 with num_added=0
-#   - Qdrant unavailable at request time → expect 503
-#   - TEI unavailable at request time → expect 503
-#   - Malformed namespace query param → expect 422
-#   - Missing required field in chunk (e.g. no page_content) → expect 422
+    namespace = uuid.uuid4()
+    r = await client.post(
+        "/ingest",
+        params={"namespace": str(namespace)},
+        json=_TEST_CHUNKS,
+    )
+    assert r.status_code == 200
+
+    points, _ = await qdrant_client.scroll(
+        collection_name=collection_name,
+        scroll_filter=Filter(
+            must=[
+                FieldCondition(
+                    key="metadata.namespace_id", match=MatchValue(value=str(namespace))
+                )
+            ]
+        ),
+        with_vectors=True,
+        limit=100,
+    )
+
+    assert len(points) >= 1
+    for point in points:
+        vectors = point.vector
+        assert isinstance(
+            vectors, dict
+        ), f"Point {point.id}: expected named-vector dict, got {type(vectors)}"
+        assert "langchain-sparse" in vectors, (
+            f"Point {point.id} missing 'langchain-sparse' — "
+            f"BM25 sparse vector was not stored in hybrid mode"
+        )
+        sparse = vectors["langchain-sparse"]
+        assert (
+            len(sparse.indices) > 0
+        ), f"Point {point.id} has an empty sparse vector (no BM25 terms indexed)"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_colbert_vectors_stored(
+    client: httpx.AsyncClient,
+    qdrant_client: AsyncQdrantClient,
+    collection_name: str,
+    retrieval_mode: str,
+):
+    """In multi_stage mode every stored point must carry all three vector types:
+    a named dense vector, a BM25 sparse vector, and a ColBERT multi-vector.
+
+    Skipped in dense and hybrid modes — those collections have no ColBERT field.
+    """
+    if retrieval_mode != "multi_stage":
+        pytest.skip("ColBERT vector check is only meaningful in multi_stage mode")
+
+    namespace = uuid.uuid4()
+    r = await client.post(
+        "/ingest",
+        params={"namespace": str(namespace)},
+        json=_TEST_CHUNKS,
+    )
+    assert r.status_code == 200
+
+    points, _ = await qdrant_client.scroll(
+        collection_name=collection_name,
+        scroll_filter=Filter(
+            must=[
+                FieldCondition(
+                    key="metadata.namespace_id", match=MatchValue(value=str(namespace))
+                )
+            ]
+        ),
+        with_vectors=True,
+        limit=100,
+    )
+
+    assert len(points) >= 1
+    for point in points:
+        vectors = point.vector
+        assert isinstance(
+            vectors, dict
+        ), f"Point {point.id}: expected named-vector dict, got {type(vectors)}"
+        assert "dense" in vectors, f"Point {point.id} missing 'dense' vector"
+        assert (
+            "langchain-sparse" in vectors
+        ), f"Point {point.id} missing 'langchain-sparse' vector"
+        assert "colbert" in vectors, f"Point {point.id} missing 'colbert' vector"
+        colbert = vectors["colbert"]
+        assert (
+            isinstance(colbert, list) and len(colbert) > 0
+        ), f"Point {point.id} has empty ColBERT multi-vector"
+        assert all(
+            len(tok) == 128 for tok in colbert
+        ), f"Point {point.id}: ColBERT token vectors are not 128-dim"

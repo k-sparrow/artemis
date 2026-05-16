@@ -9,6 +9,7 @@ py_library(
     deps = [
         "//tests/lib/testcontainers:migrations",
         "//tests/lib/testcontainers/tei:pkg",
+        "//tests/lib/testcontainers/vllm:pkg",
         requirement("asyncpg"),
         requirement("httpx"),
         requirement("pytest"),
@@ -22,6 +23,7 @@ py_test(
     srcs = ["test_smoke.py"],
     data = ["//src/backend/alembic:tarball.dev"],
     env = {"TC_MAX_TRIES": "1000000000"},
+    tags = ["local"],
     deps = [
         ":conftest",
         requirement("httpx"),

@@ -14,8 +14,10 @@ from testcontainers.postgres import PostgresContainer
 from testcontainers.qdrant import QdrantContainer
 
 from tests.lib.testcontainers.tei import TEIContainer
+from tests.lib.testcontainers.vllm import VLLMContainer
 
 _EMBEDDING_MODEL = "sentence-transformers/msmarco-MiniLM-L-12-v3"
+_COLBERT_MODEL = "colbert-ir/colbertv2.0"
 _APP_IMAGE = "artemis/backend-indexing:dev"
 _APP_PORT = 10000
 
@@ -29,6 +31,24 @@ _APP_PORT = 10000
 def docker_network():
     with Network() as network:
         yield network
+
+
+# ---------------------------------------------------------------------------
+# Retrieval mode parametrization
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(
+    scope="session",
+    params=["dense", "hybrid", "multi_stage"],
+    ids=["dense", "hybrid", "multi_stage"],
+)
+def retrieval_mode(request: pytest.FixtureRequest) -> str:
+    """Parametrize the indexing service over all retrieval modes.
+
+    multi_stage requires a GPU-backed vLLM container (local tag).
+    """
+    return request.param
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +79,28 @@ def tei_container(
         TEIContainer(model_id=_EMBEDDING_MODEL)
         .with_network(docker_network)
         .with_network_aliases("tei")
+    )
+    if hf_cache.exists():
+        container.with_hf_cache(str(hf_cache))
+    container.start()
+    request.addfinalizer(container.stop)
+    return container
+
+
+@pytest.fixture(scope="session")
+def vllm_container(
+    retrieval_mode: str,
+    docker_network: Network,
+    request: pytest.FixtureRequest,
+) -> VLLMContainer | None:
+    """vLLM container serving ColBERT — started only for multi_stage mode."""
+    if retrieval_mode != "multi_stage":
+        return None
+    hf_cache = Path.home() / ".cache" / "huggingface"
+    container = (
+        VLLMContainer(model_id=_COLBERT_MODEL)
+        .with_network(docker_network)
+        .with_network_aliases("colbert")
     )
     if hf_cache.exists():
         container.with_hf_cache(str(hf_cache))
@@ -128,21 +170,36 @@ def _wait_for_liveness(url: str, timeout: int = 120000, interval: float = 2.0) -
 
 
 @pytest.fixture(scope="session")
+def collection_name(retrieval_mode: str) -> str:
+    """Qdrant collection name, scoped per retrieval mode to avoid schema conflicts."""
+    return f"test_collection_{retrieval_mode}"
+
+
+@pytest.fixture(scope="session")
 def app_container(
     docker_network: Network,
     qdrant_container: QdrantContainer,
     tei_container: TEIContainer,
+    vllm_container: VLLMContainer | None,
     migrations_container: None,
     postgres_container: PostgresContainer,
+    retrieval_mode: str,
+    collection_name: str,
     request: pytest.FixtureRequest,
 ) -> DockerContainer:
-    """The real indexing service image, wired to testcontainer dependencies."""
+    """The real indexing service image, wired to testcontainer dependencies.
+
+    One container instance per retrieval mode — ``retrieval_mode`` drives the
+    parametrization so every test runs in dense, hybrid, and multi_stage
+    configurations.  multi_stage requires a GPU-backed vLLM container.
+    """
     container = (
         DockerContainer(_APP_IMAGE)
         .with_network(docker_network)
         .with_env("QDRANT_HOST_URL", "http://vectorstore:6333")
-        .with_env("QDRANT_COLLECTION_NAME", "test_collection")
+        .with_env("QDRANT_COLLECTION_NAME", collection_name)
         .with_env("TEI_HOST_URL", "http://tei:80")
+        .with_env("RETRIEVAL_MODE", retrieval_mode)
         .with_env("SQL_DB_USER", postgres_container.username)
         .with_env("SQL_DB_PASSWORD", postgres_container.password)
         .with_env("SQL_DB_HOST", "postgres")
@@ -152,6 +209,11 @@ def app_container(
         .with_env("DEBUG", "true")
         .with_exposed_ports(_APP_PORT)
     )
+    if vllm_container is not None:
+        container.with_env(
+            "COLBERT_HOST_URL", f"http://colbert:{VLLMContainer.HTTP_PORT}"
+        )
+        container.with_env("COLBERT_MODEL_NAME", _COLBERT_MODEL)
     container.start()
     request.addfinalizer(container.stop)
 

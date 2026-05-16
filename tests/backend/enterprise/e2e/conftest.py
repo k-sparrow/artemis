@@ -103,6 +103,25 @@ def compose_file(pytestconfig: pytest.Config) -> Path:
     return Path(pytestconfig.getoption("--compose-file"))
 
 
+@pytest.fixture(
+    scope="session",
+    params=["dense", "hybrid"],
+    ids=["dense", "hybrid"],
+)
+def retrieval_mode(request: pytest.FixtureRequest) -> str:
+    """Parametrize the full pipeline over CPU-only retrieval modes.
+
+    Sets RETRIEVAL_MODE in the process environment before the compose stack
+    starts so docker-compose substitutes it into backend-indexing-ingestion.
+    multi_stage is excluded here — its ai-colbert compose profile requires a
+    GPU-backed vLLM container; it is covered by the indexing smoke tests
+    (tagged local) which use VLLMContainer directly.
+    """
+    mode = request.param
+    os.environ["RETRIEVAL_MODE"] = mode
+    return mode
+
+
 @pytest.fixture(scope="session")
 def tei(request: pytest.FixtureRequest) -> str:
     """Starts a TEI container and returns its base URL (http://localhost:{port}).
@@ -162,8 +181,12 @@ _DIAGNOSTIC_SERVICES = [
 
 @pytest.fixture(scope="session")
 def compose(
-    compose_file: Path, watch_dir: Path, tei: str, request: pytest.FixtureRequest
-):  # tei and watch_dir set env vars first
+    compose_file: Path,
+    watch_dir: Path,
+    tei: str,
+    retrieval_mode: str,  # sets RETRIEVAL_MODE env var before compose starts
+    request: pytest.FixtureRequest,
+):
     dc = DockerCompose(
         context=str(compose_file.parent),
         compose_file_name=[compose_file.name],
@@ -191,6 +214,7 @@ def compose(
     host_ingestion, port_ingestion = dc.get_service_host_and_port(
         "backend-indexing-ingestion", 10000
     )
+    host_parsing, port_parsing = dc.get_service_host_and_port("backend-parsing", 10001)
 
     host_kc, port_kc = dc.get_service_host_and_port("kafka-connect", 8083)
     kc_url = f"http://{host_kc}:{port_kc}"
@@ -200,6 +224,9 @@ def compose(
         wait_for_http(f"http://{host_ds}:{port_ds}/health/liveness")
         wait_for_http(f"http://{host_intake}:{port_intake}/health/liveness")
         wait_for_http(f"http://{host_ingestion}:{port_ingestion}/health/readiness")
+        # backend-parsing depends on docling-serve and can be slow; the Celery
+        # worker calls it synchronously so it must be up before any file is dropped.
+        wait_for_http(f"http://{host_parsing}:{port_parsing}/health/readiness")
         # Both system connectors must be RUNNING before any file is dropped.
         # auto.offset.reset=latest means messages produced before the connector
         # is up would be lost.

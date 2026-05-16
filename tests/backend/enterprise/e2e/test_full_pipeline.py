@@ -25,7 +25,7 @@ import pytest
 import sqlalchemy as sa
 from fastapi import status
 from qdrant_client import QdrantClient
-from qdrant_client.models import FieldCondition, Filter, MatchValue
+from qdrant_client.models import FieldCondition, Filter, MatchValue, SparseVector
 
 from tests.backend.enterprise.e2e.conftest import _wait_connector_running  # noqa: PLC2701
 from tests.lib.polling import poll_until
@@ -283,6 +283,51 @@ class TestSingleNamespaceFullPipeline:
                 f"Expected (subset): {obj_ids}\n"
                 f"Got: {[o['id'] for o in resp.json()]}"
             )
+
+    def test_hybrid_sparse_vectors_stored(
+        self,
+        qdrant_points: list,
+        data_source: dict,
+        qdrant_client: QdrantClient,
+        retrieval_mode: str,
+    ) -> None:
+        """In hybrid mode every stored point must carry a non-empty BM25 sparse vector.
+
+        Skipped when running in dense mode — dense collections have no sparse
+        vector field and the assertion would always fail there.
+        """
+        if retrieval_mode != "hybrid":
+            pytest.skip("sparse vector check is only meaningful in hybrid mode")
+
+        namespace_id: str = data_source["namespace_id"]
+        points, _ = qdrant_client.scroll(
+            collection_name=_QDRANT_COLLECTION,
+            scroll_filter=Filter(
+                must=[
+                    FieldCondition(
+                        key="metadata.namespace_id",
+                        match=MatchValue(value=namespace_id),
+                    )
+                ]
+            ),
+            with_vectors=True,
+            limit=100,
+        )
+
+        assert len(points) >= 1
+        for point in points:
+            vectors = point.vector
+            assert isinstance(
+                vectors, dict
+            ), f"Point {point.id}: expected named-vector dict, got {type(vectors)}"
+            assert "langchain-sparse" in vectors, (
+                f"Point {point.id} missing 'langchain-sparse' — "
+                f"BM25 sparse vector was not stored in hybrid mode"
+            )
+            sparse: SparseVector = vectors["langchain-sparse"]
+            assert (
+                len(sparse.indices) > 0
+            ), f"Point {point.id} has an empty sparse vector (no BM25 terms indexed)"
 
 
 class TestPrivatePathFullPipeline:
