@@ -63,6 +63,7 @@ langchain-core==0.3.44
 langchain-community==0.3.19
 langchain-text-splitters==0.3.6
 langchain-qdrant==0.2.0
+fastembed
 langchain-docling==0.2.0
 huggingface-hub==0.36.0  # for tei endpoints
 docling==2.26.0

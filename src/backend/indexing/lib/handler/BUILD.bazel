@@ -16,7 +16,18 @@ py_library(
     ],
     deps = [
         ":base",
+        ":config",
         ":qdrant",
+    ],
+)
+
+py_library(
+    name = "config",
+    srcs = [
+        "config.py",
+    ],
+    deps = [
+        requirement("qdrant-client"),
     ],
 )
 
@@ -27,7 +38,9 @@ py_library(
     ],
     deps = [
         ":base",
+        ":config",
         "//src/backend/indexing/lib/vectorstore:pkg",
+        "//src/lib/core/adapters/vectorstore:pkg",
         requirement("langchain-core"),
         requirement("langchain-qdrant"),
         requirement("qdrant-client"),

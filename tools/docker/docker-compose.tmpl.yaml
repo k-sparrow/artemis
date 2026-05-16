@@ -360,6 +360,9 @@ services:
       QDRANT_HOST_URL: "http://vectorstore:6333"
       QDRANT_COLLECTION_NAME: "artemis"
       TEI_HOST_URL: "${TEI_HOST_URL:-http://tei:80}"
+      RETRIEVAL_MODE: "${RETRIEVAL_MODE:-dense}"
+      COLBERT_HOST_URL: "${COLBERT_HOST_URL:-http://colbert:8000}"
+      COLBERT_MODEL_NAME: "${COLBERT_MODEL_NAME:-jinaai/jina-colbert-v2}"
       SQL_DB_USER: "postgres"
       SQL_DB_PASSWORD: "testpass"
       SQL_DB_HOST: "postgres"
@@ -605,6 +608,24 @@ services:
       timeout: 30s
       retries: 5
       start_period: 90s
+    networks:
+      - default
+  colbert:
+    profiles: [ai-colbert]
+    image: "vllm/vllm-openai:v0.20.2" # ColBERT late-interaction model{COLBERT_COMMAND_BLOCK}
+    container_name: colbert
+    shm_size: "10g"
+    ipc: host
+    ports:
+      - "11436:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 30s
+      retries: 5
+      start_period: 300s
+    volumes:
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface:ro{COLBERT_GPU_BLOCK}
     networks:
       - default
   # ---------------------------------------------------------------------------

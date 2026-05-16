@@ -11,6 +11,8 @@ The template file uses {PLACEHOLDER} markers:
                        empty string in test mode (CPU-only Docling)
   {TEI_IMAGE}          Full image ref for HuggingFace TEI
   {TEI_MODEL}          Model ID passed to TEI at startup
+  {COLBERT_COMMAND_BLOCK}  Full YAML list-form command block for the ColBERT vLLM service
+  {COLBERT_GPU_BLOCK}      Multi-line YAML block for nvidia runtime + deploy section
 
 Bazel integration
 -----------------
@@ -24,21 +26,34 @@ import argparse
 import os
 import sys
 
+_GPU_DEPLOY_BLOCK = (
+    "\n"
+    "    deploy: # This section is for compatibility with Swarm\n"
+    "      resources:\n"
+    "        reservations:\n"
+    "          devices:\n"
+    "            - driver: nvidia\n"
+    "              count: all\n"
+    "              capabilities: [gpu]\n"
+    "    runtime: nvidia"
+)
+
 _DEV_SUBS: dict[str, str] = {
     "DOCLING_IMAGE": "ghcr.io/docling-project/docling-serve-cu126:main",
-    "DOCLING_GPU_BLOCK": (
-        "\n"
-        "    deploy: # This section is for compatibility with Swarm\n"
-        "      resources:\n"
-        "        reservations:\n"
-        "          devices:\n"
-        "            - driver: nvidia\n"
-        "              count: all\n"
-        "              capabilities: [gpu]\n"
-        "    runtime: nvidia"
-    ),
+    "DOCLING_GPU_BLOCK": _GPU_DEPLOY_BLOCK,
     "TEI_IMAGE": "ghcr.io/huggingface/text-embeddings-inference:1.5",
     "TEI_MODEL": "BAAI/bge-large-en-v1.5",
+    "COLBERT_COMMAND_BLOCK": (
+        "\n"
+        "    command:\n"
+        "      - jinaai/jina-colbert-v2\n"
+        "      - --pooler-config.task\n"
+        "      - token_embed\n"
+        "      - --hf-overrides\n"
+        """      - '{"architectures": ["ColBERTJinaRobertaModel"]}'\n"""
+        "      - --trust-remote-code"
+    ),
+    "COLBERT_GPU_BLOCK": _GPU_DEPLOY_BLOCK,
 }
 
 _TEST_SUBS: dict[str, str] = {
@@ -46,6 +61,14 @@ _TEST_SUBS: dict[str, str] = {
     "DOCLING_GPU_BLOCK": "",
     "TEI_IMAGE": "ghcr.io/huggingface/text-embeddings-inference:cpu-1.5",
     "TEI_MODEL": "BAAI/bge-small-en-v1.5",
+    "COLBERT_COMMAND_BLOCK": (
+        "\n"
+        "    command:\n"
+        "      - colbert-ir/colbertv2.0\n"
+        "      - --pooler-config.task\n"
+        "      - token_embed"
+    ),
+    "COLBERT_GPU_BLOCK": _GPU_DEPLOY_BLOCK,
 }
 
 

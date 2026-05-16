@@ -1,6 +1,7 @@
 from pydantic import computed_field
 from pydantic_settings import BaseSettings
 
+from src.lib.core.adapters.vectorstore.qdrant import RetrievalMode
 from src.lib.core.ingestion.config import PipelineType
 
 __all__ = [
@@ -19,6 +20,10 @@ class IndexingSettings(BaseSettings):
     """
 
     DEBUG: bool = False
+    RETRIEVAL_MODE: RetrievalMode = RetrievalMode.DENSE
+    # ColBERT late-interaction — required when RETRIEVAL_MODE=multi_stage
+    COLBERT_HOST_URL: str | None = None
+    COLBERT_MODEL_NAME: str = "colbert-ir/colbertv2.0"
     # Pipeline algorithm defaults (overridable per-request via query params)
     DEFAULT_PIPELINE_TYPE: PipelineType = PipelineType.SIMPLE
     DEFAULT_CHUNK_SIZE: int = 1024

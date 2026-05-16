@@ -1,0 +1,39 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@pip//:requirements.bzl", "requirement")
+
+package(default_visibility = ["//visibility:private"])
+
+py_test(
+    name = "test_hybrid_retrieval",
+    srcs = [
+        "__init__.py",
+        "conftest.py",
+        "test_hybrid_retrieval.py",
+    ],
+    env = {
+        "TC_MAX_TRIES": "1000000000",
+    },
+    tags = [
+        "integration",
+        "local",
+    ],
+    deps = [
+        "//src/lib/core/adapters/embedding:huggingface",
+        "//src/lib/core/adapters/embedding:late_interaction",
+        "//src/lib/core/adapters/embedding:sparse",
+        "//src/lib/core/adapters/vectorstore:qdrant",
+        "//tests/lib/testcontainers/tei:pkg",
+        "//tests/lib/testcontainers/vllm:pkg",
+        requirement("langchain-core"),
+        requirement("langchain-qdrant"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+        requirement("qdrant-client"),
+        requirement("testcontainers"),
+    ],
+)

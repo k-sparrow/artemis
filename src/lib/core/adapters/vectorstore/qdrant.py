@@ -1,6 +1,18 @@
 """
-Copied from langchain-qdrant dev branch, not currently merged:
+Copied from the langchain-qdrant dev branch (not yet merged at the time):
 https://raw.githubusercontent.com/langchain-ai/langchain/30f5a107af0085aae7b6295ed3a0e991c28b8313/libs/partners/qdrant/langchain_qdrant/qdrant.py  # noqa: E501
+
+Why we maintain this fork instead of using the released langchain-qdrant package:
+- The released package has no native async support (no aadd_texts, asimilarity_search, etc.).
+  This dev branch added AsyncQdrantClient-backed async methods, which we need for the
+  async FastAPI ingestion pipeline.
+- We additionally added multi-tenancy via Qdrant's native tenant isolation (is_tenant=True
+  payload indexes with per-tenant HNSW subgraphs), and MULTI_STAGE retrieval (sparse+dense
+  RRF fusion → ColBERT MaxSim reranking).
+
+Dropping this fork requires migrating to langchain >= 1.0.0 (the upstream async support likely
+shipped alongside that major restructure). That migration will be a significant breaking change
+for this repo. Deferred until after Artemis v1.0.0 is complete and the full system is stable.
 """
 
 from __future__ import annotations
@@ -36,6 +48,7 @@ class RetrievalMode(str, Enum):
     DENSE = "dense"
     SPARSE = "sparse"
     HYBRID = "hybrid"
+    MULTI_STAGE = "multi_stage"
 
 
 class QdrantVectorStore(VectorStore):
@@ -252,6 +265,7 @@ class QdrantVectorStore(VectorStore):
     # https://qdrant.tech/documentation/concepts/collections/#create-a-collection
     VECTOR_NAME: str = ""
     SPARSE_VECTOR_NAME: str = "langchain-sparse"
+    LATE_INTERACTION_VECTOR_NAME: str = "colbert"
 
     def __init__(
         self,
@@ -265,6 +279,8 @@ class QdrantVectorStore(VectorStore):
         distance: models.Distance = models.Distance.COSINE,
         sparse_embedding: SparseEmbeddings | None = None,
         sparse_vector_name: str = SPARSE_VECTOR_NAME,
+        late_interaction_embedding: Any | None = None,
+        late_interaction_vector_name: str = LATE_INTERACTION_VECTOR_NAME,
         validate_embeddings: bool = True,  # noqa: FBT001, FBT002
         validate_collection_config: bool = True,  # noqa: FBT001, FBT002
         async_client: AsyncQdrantClient | None = None,
@@ -299,7 +315,9 @@ class QdrantVectorStore(VectorStore):
         ```
         """
         if validate_embeddings:
-            self._validate_embeddings(retrieval_mode, embedding, sparse_embedding)
+            self._validate_embeddings(
+                retrieval_mode, embedding, sparse_embedding, late_interaction_embedding
+            )
 
         if validate_collection_config:
             self._validate_collection_config(
@@ -323,6 +341,8 @@ class QdrantVectorStore(VectorStore):
         self.distance = distance
         self._sparse_embeddings = sparse_embedding
         self.sparse_vector_name = sparse_vector_name
+        self._late_interaction_embeddings = late_interaction_embedding
+        self.late_interaction_vector_name = late_interaction_vector_name
 
     @property
     def client(self) -> QdrantClient:
@@ -409,6 +429,16 @@ class QdrantVectorStore(VectorStore):
             )
             raise ValueError(msg)
         return self._sparse_embeddings
+
+    @property
+    def late_interaction_embeddings(self) -> Any:
+        if self._late_interaction_embeddings is None:
+            msg = (
+                "Late interaction embeddings are `None`. "
+                "Please set using the `late_interaction_embedding` parameter."
+            )
+            raise ValueError(msg)
+        return self._late_interaction_embeddings
 
     @classmethod
     def from_texts(
@@ -749,6 +779,43 @@ class QdrantVectorStore(VectorStore):
                 **query_options,
             ).points
 
+        elif self.retrieval_mode == RetrievalMode.MULTI_STAGE:
+            embeddings = self._require_embeddings("MULTI_STAGE mode")
+            query_dense_embedding = embeddings.embed_query(query)
+            query_sparse_embedding = self.sparse_embeddings.embed_query(query)
+            query_late_embedding = self.late_interaction_embeddings.embed_query(query)
+            prefetch_limit = k * 10
+            results = self.client.query_points(
+                prefetch=[
+                    models.Prefetch(
+                        prefetch=[
+                            models.Prefetch(
+                                using=self.vector_name,
+                                query=query_dense_embedding,
+                                filter=filter,
+                                limit=prefetch_limit,
+                                params=search_params,
+                            ),
+                            models.Prefetch(
+                                using=self.sparse_vector_name,
+                                query=models.SparseVector(
+                                    indices=query_sparse_embedding.indices,
+                                    values=query_sparse_embedding.values,
+                                ),
+                                filter=filter,
+                                limit=prefetch_limit,
+                                params=search_params,
+                            ),
+                        ],
+                        query=models.FusionQuery(fusion=models.Fusion.RRF),
+                        limit=prefetch_limit,
+                    ),
+                ],
+                query=query_late_embedding,
+                using=self.late_interaction_vector_name,
+                **query_options,
+            ).points
+
         else:
             msg = f"Invalid retrieval mode. {self.retrieval_mode}."
             raise ValueError(msg)
@@ -1001,6 +1068,47 @@ class QdrantVectorStore(VectorStore):
                         ),
                     ],
                     query=hybrid_fusion or models.FusionQuery(fusion=models.Fusion.RRF),
+                    **query_options,
+                )
+            ).points
+
+        elif self.retrieval_mode == RetrievalMode.MULTI_STAGE:
+            embeddings = self._require_embeddings("MULTI_STAGE mode")
+            query_dense_embedding = await embeddings.aembed_query(query)
+            query_sparse_embedding = await self.sparse_embeddings.aembed_query(query)
+            query_late_embedding = await self.late_interaction_embeddings.aembed_query(
+                query
+            )
+            prefetch_limit = k * 10
+            results = (
+                await self._async_client.query_points(
+                    prefetch=[
+                        models.Prefetch(
+                            prefetch=[
+                                models.Prefetch(
+                                    using=self.vector_name,
+                                    query=query_dense_embedding,
+                                    filter=filter,
+                                    limit=prefetch_limit,
+                                    params=search_params,
+                                ),
+                                models.Prefetch(
+                                    using=self.sparse_vector_name,
+                                    query=models.SparseVector(
+                                        indices=query_sparse_embedding.indices,
+                                        values=query_sparse_embedding.values,
+                                    ),
+                                    filter=filter,
+                                    limit=prefetch_limit,
+                                    params=search_params,
+                                ),
+                            ],
+                            query=models.FusionQuery(fusion=models.Fusion.RRF),
+                            limit=prefetch_limit,
+                        ),
+                    ],
+                    query=query_late_embedding,
+                    using=self.late_interaction_vector_name,
                     **query_options,
                 )
             ).points
@@ -1832,6 +1940,27 @@ class QdrantVectorStore(VectorStore):
                 )
             ]
 
+        if self.retrieval_mode == RetrievalMode.MULTI_STAGE:
+            embeddings = self._require_embeddings("MULTI_STAGE mode")
+            texts_list = list(texts)
+            dense_embeddings = embeddings.embed_documents(texts_list)
+            sparse_embeddings = self.sparse_embeddings.embed_documents(texts_list)
+            late_embeddings = self.late_interaction_embeddings.embed_documents(
+                texts_list
+            )
+            return [
+                {
+                    self.vector_name: dense,
+                    self.sparse_vector_name: models.SparseVector(
+                        values=sparse.values, indices=sparse.indices
+                    ),
+                    self.late_interaction_vector_name: late,
+                }
+                for dense, sparse, late in zip(
+                    dense_embeddings, sparse_embeddings, late_embeddings, strict=False
+                )
+            ]
+
         msg = f"Unknown retrieval mode. {self.retrieval_mode} to build vectors."
         raise ValueError(msg)
 
@@ -1888,6 +2017,28 @@ class QdrantVectorStore(VectorStore):
                 }
                 for dense_vector, sparse_vector in zip(
                     dense_embeddings, sparse_embeddings, strict=False
+                )
+            ]
+
+        if self.retrieval_mode == RetrievalMode.MULTI_STAGE:
+            embeddings = self._require_embeddings("MULTI_STAGE mode")
+            dense_embeddings = await embeddings.aembed_documents(texts_list)
+            sparse_embeddings = await self.sparse_embeddings.aembed_documents(
+                texts_list
+            )
+            late_embeddings = await self.late_interaction_embeddings.aembed_documents(
+                texts_list
+            )
+            return [
+                {
+                    self.vector_name: dense,
+                    self.sparse_vector_name: models.SparseVector(
+                        values=sparse.values, indices=sparse.indices
+                    ),
+                    self.late_interaction_vector_name: late,
+                }
+                for dense, sparse, late in zip(
+                    dense_embeddings, sparse_embeddings, late_embeddings, strict=False
                 )
             ]
 
@@ -2067,6 +2218,7 @@ class QdrantVectorStore(VectorStore):
         retrieval_mode: RetrievalMode,
         embedding: Embeddings | None,
         sparse_embedding: SparseEmbeddings | None,
+        late_interaction_embedding: Any | None = None,
     ) -> None:
         if retrieval_mode == RetrievalMode.DENSE and embedding is None:
             msg = "'embedding' cannot be None when retrieval mode is 'dense'"
@@ -2082,6 +2234,19 @@ class QdrantVectorStore(VectorStore):
             msg = (
                 "Both 'embedding' and 'sparse_embedding' cannot be None "
                 "when retrieval mode is 'hybrid'"
+            )
+            raise ValueError(msg)
+
+        if retrieval_mode == RetrievalMode.MULTI_STAGE and any(
+            [
+                embedding is None,
+                sparse_embedding is None,
+                late_interaction_embedding is None,
+            ]
+        ):
+            msg = (
+                "'embedding', 'sparse_embedding', and 'late_interaction_embedding' "
+                "cannot be None when retrieval mode is 'multi_stage'"
             )
             raise ValueError(msg)
 

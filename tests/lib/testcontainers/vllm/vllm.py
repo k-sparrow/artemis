@@ -52,10 +52,17 @@ class VLLMContainer(DockerContainer):
 
     HTTP_PORT = _HTTP_PORT
 
-    def __init__(self, model_id: str, image: str = _DEFAULT_IMAGE) -> None:
+    def __init__(
+        self,
+        model_id: str,
+        image: str = _DEFAULT_IMAGE,
+        gpu_memory_utilization: float = 0.40,
+    ) -> None:
         super().__init__(image)
         self._model_id = model_id
-        self._extra_flags: list[str] = []
+        self._extra_flags: list[str] = [
+            f"--gpu-memory-utilization {gpu_memory_utilization}"
+        ]
 
         self.with_exposed_ports(self.HTTP_PORT)
         self.with_kwargs(
@@ -82,7 +89,9 @@ class VLLMContainer(DockerContainer):
         return self
 
     def with_trust_remote_code(self) -> Self:
-        """Add --trust-remote-code (required by some models, e.g. jinaai/jina-colbert-v2)."""
+        """
+        Add --trust-remote-code (required by some models, e.g. jinaai/jina-colbert-v2).
+        """
         self._extra_flags.append("--trust-remote-code")
         self._apply_command()
         return self

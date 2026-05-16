@@ -14,7 +14,11 @@ from tests.lib.testcontainers.vllm import VLLMContainer
 _MODELS = [
     ("colbert-ir/colbertv2.0", False, None),
     ("jinaai/jina-colbert-v2", True, {"architectures": ["ColBERTJinaRobertaModel"]}),
-    ("lightonai/GTE-ModernColBERT-v1", False, {"architectures": ["ColBERTModernBertModel"]}),
+    (
+        "lightonai/GTE-ModernColBERT-v1",
+        False,
+        {"architectures": ["ColBERTModernBertModel"]},
+    ),
 ]
 
 

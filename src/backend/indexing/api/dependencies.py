@@ -12,10 +12,20 @@ from qdrant_client import AsyncQdrantClient
 
 from src.backend.indexing.api.config import settings
 from src.lib.core.adapters.embedding.huggingface import HuggingFaceEndpointEmbeddings
+from src.lib.core.adapters.embedding.late_interaction import (
+    VLLMLateInteractionEmbeddings,
+)
+from src.lib.core.adapters.embedding.sparse import FastEmbedSparseEmbeddings
 from src.lib.core.adapters.stores.sql.store import SQLDocumentIndex
+from src.lib.core.adapters.vectorstore.qdrant import RetrievalMode
 from src.backend.indexing.lib.handler import (
     QdrantVectorStoreHandler,
     VectorStoreHandler,
+)
+from src.backend.indexing.lib.handler.config import (
+    MULTI_TENANT_DENSE,
+    MULTI_TENANT_HYBRID,
+    MULTI_TENANT_MULTI_STAGE,
 )
 from src.lib.core.ingestion import (
     BasePipeline,
@@ -140,10 +150,41 @@ embeddings_dependency = Annotated[
 async def get_vectorstore_handler(
     embeddings: embeddings_dependency,
 ) -> VectorStoreHandler:
+    mode = settings.RETRIEVAL_MODE
+    if mode == RetrievalMode.MULTI_STAGE:
+        if not settings.COLBERT_HOST_URL:
+            raise RuntimeError(
+                "COLBERT_HOST_URL must be set when RETRIEVAL_MODE=multi_stage"
+            )
+        return QdrantVectorStoreHandler(
+            embeddings=embeddings,
+            collection_name=settings.QDRANT_COLLECTION_NAME,
+            base_url=settings.QDRANT_HOST_URI,
+            collection_config=MULTI_TENANT_MULTI_STAGE,
+            retrieval_mode=mode,
+            sparse_embedding=FastEmbedSparseEmbeddings(),
+            late_interaction_embedding=VLLMLateInteractionEmbeddings(
+                url=settings.COLBERT_HOST_URL,
+                model=settings.COLBERT_MODEL_NAME,
+            ),
+            eager=False,
+        )
+    if mode == RetrievalMode.HYBRID:
+        return QdrantVectorStoreHandler(
+            embeddings=embeddings,
+            collection_name=settings.QDRANT_COLLECTION_NAME,
+            base_url=settings.QDRANT_HOST_URI,
+            collection_config=MULTI_TENANT_HYBRID,
+            retrieval_mode=mode,
+            sparse_embedding=FastEmbedSparseEmbeddings(),
+            eager=False,
+        )
     return QdrantVectorStoreHandler(
         embeddings=embeddings,
         collection_name=settings.QDRANT_COLLECTION_NAME,
         base_url=settings.QDRANT_HOST_URI,
+        collection_config=MULTI_TENANT_DENSE,
+        retrieval_mode=mode,
         eager=False,
     )
 
