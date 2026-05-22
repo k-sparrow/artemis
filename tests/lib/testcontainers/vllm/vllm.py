@@ -2,7 +2,7 @@
 # Copyright (c) 2026, Dror Kabely
 # -------------------------------------
 #
-"""vLLM testcontainer for ColBERT late-interaction embedding models."""
+"""vLLM testcontainer for ColBERT late-interaction embedding and reranking."""
 
 from __future__ import annotations
 
@@ -115,5 +115,5 @@ class VLLMContainer(DockerContainer):
         return f"http://{host}:{port}"
 
     def _apply_command(self) -> None:
-        parts = [self._model_id, "--pooler-config.task token_embed"] + self._extra_flags
+        parts = [self._model_id] + self._extra_flags
         self.with_command(" ".join(parts))
