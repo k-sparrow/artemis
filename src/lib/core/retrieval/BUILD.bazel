@@ -16,6 +16,7 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         ":configurable",
+        ":params",
     ],
 )
 
@@ -26,5 +27,16 @@ py_library(
     ],
     deps = [
         requirement("langchain"),
+    ],
+)
+
+py_library(
+    name = "params",
+    srcs = [
+        "params.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        requirement("qdrant-client"),
     ],
 )

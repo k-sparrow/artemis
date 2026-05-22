@@ -16,6 +16,7 @@ py_library(
     visibility = ["//src/lib/core:__subpackages__"],
     deps = [
         ":base",
+        ":qdrant",
         ":semi_structured",
         ":simple",
     ],
@@ -53,5 +54,17 @@ py_library(
         requirement("langchain"),
         requirement("langchain_core"),
         requirement("typing_extensions"),
+    ],
+)
+
+py_library(
+    name = "qdrant",
+    srcs = [
+        "qdrant.py",
+    ],
+    deps = [
+        "//src/lib/core/adapters/vectorstore:qdrant",
+        "//src/lib/core/retrieval:params",
+        requirement("langchain_core"),
     ],
 )

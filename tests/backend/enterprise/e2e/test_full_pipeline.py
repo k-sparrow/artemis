@@ -320,11 +320,11 @@ class TestSingleNamespaceFullPipeline:
             assert isinstance(
                 vectors, dict
             ), f"Point {point.id}: expected named-vector dict, got {type(vectors)}"
-            assert "langchain-sparse" in vectors, (
-                f"Point {point.id} missing 'langchain-sparse' — "
+            assert "sparse" in vectors, (
+                f"Point {point.id} missing 'sparse' — "
                 f"BM25 sparse vector was not stored in hybrid mode"
             )
-            sparse: SparseVector = vectors["langchain-sparse"]
+            sparse: SparseVector = vectors["sparse"]
             assert (
                 len(sparse.indices) > 0
             ), f"Point {point.id} has an empty sparse vector (no BM25 terms indexed)"

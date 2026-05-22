@@ -125,10 +125,8 @@ class TestHybridRetrievalMode:
             assert isinstance(
                 vectors, dict
             ), "Expected named-vector dict; got single-vector format"
-            assert (
-                "langchain-sparse" in vectors
-            ), f"Point {point.id} missing 'langchain-sparse' vector"
-            sparse: models.SparseVector = vectors["langchain-sparse"]
+            assert "sparse" in vectors, f"Point {point.id} missing 'sparse' vector"
+            sparse: models.SparseVector = vectors["sparse"]
             assert (
                 len(sparse.indices) > 0
             ), f"Point {point.id} has empty sparse vector (no BM25 terms indexed)"
@@ -221,9 +219,7 @@ class TestMultiStageRetrievalMode:
             vectors = point.vector
             assert isinstance(vectors, dict), "Expected named-vector dict"
             assert "dense" in vectors, f"Point {point.id} missing 'dense' vector"
-            assert (
-                "langchain-sparse" in vectors
-            ), f"Point {point.id} missing 'langchain-sparse' vector"
+            assert "sparse" in vectors, f"Point {point.id} missing 'sparse' vector"
             assert "colbert" in vectors, f"Point {point.id} missing 'colbert' vector"
 
     def test_colbert_vectors_are_token_matrices(

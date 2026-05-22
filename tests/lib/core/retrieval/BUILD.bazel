@@ -1,0 +1,25 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@pip//:requirements.bzl", "requirement")
+
+package(
+    default_visibility = ["//visibility:private"],
+)
+
+py_test(
+    name = "test_params",
+    srcs = [
+        "__init__.py",
+        "test_params.py",
+    ],
+    tags = ["unit"],
+    deps = [
+        "//src/lib/core/retrieval:params",
+        requirement("pytest"),
+        requirement("qdrant-client"),
+    ],
+)

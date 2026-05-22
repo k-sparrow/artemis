@@ -14,6 +14,7 @@ import pytest
 from langchain.indexes import SQLRecordManager
 from langchain_core.documents import Document
 from qdrant_client import AsyncQdrantClient, QdrantClient
+from qdrant_client.models import Distance, VectorParams
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from testcontainers.postgres import PostgresContainer
@@ -118,7 +119,7 @@ def vectorstore(
     sync_client = QdrantClient(host=host, port=port, prefer_grpc=False)
     sync_client.create_collection(
         collection_name=collection_name,
-        vectors_config={"size": vector_size, "distance": "Cosine"},
+        vectors_config={"dense": VectorParams(size=vector_size, distance=Distance.COSINE)},
     )
 
     def _teardown() -> None:

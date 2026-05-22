@@ -12,7 +12,7 @@ from src.backend.indexing.lib.handler.config import (
     QdrantCollectionConfig,
 )
 from src.backend.indexing.lib.vectorstore import AsyncQdrantVectorStore
-from src.lib.core.adapters.vectorstore.qdrant import RetrievalMode
+from src.lib.core.adapters.vectorstore.qdrant import QdrantVectorStore, RetrievalMode
 
 if TYPE_CHECKING:
     from langchain_qdrant.sparse_embeddings import SparseEmbeddings
@@ -21,7 +21,7 @@ __all__ = [
     "QdrantVectorStoreHandler",
 ]
 
-_DENSE_VECTOR_NAME = "dense"
+_DENSE_VECTOR_NAME = QdrantVectorStore.VECTOR_NAME
 
 
 class QdrantVectorStoreHandler(BaseVectorHandler):
@@ -74,11 +74,6 @@ class QdrantVectorStoreHandler(BaseVectorHandler):
                     f"Failed to initialise Qdrant collection '{self._collection_name}'"
                 ) from e
 
-        # When multi_vectors are present the dense vector must be named so that
-        # Qdrant can distinguish it from the multi-vector fields.
-        is_multi = bool(self._collection_config.multi_vectors)
-        vector_name = _DENSE_VECTOR_NAME if is_multi else ""
-
         self.vectorstore = AsyncQdrantVectorStore(
             client=self.client,
             async_client=self.async_client,
@@ -87,29 +82,23 @@ class QdrantVectorStoreHandler(BaseVectorHandler):
             retrieval_mode=self._retrieval_mode,
             sparse_embedding=self._sparse_embedding,
             late_interaction_embedding=self._late_interaction_embedding,
-            vector_name=vector_name,
+            vector_name=_DENSE_VECTOR_NAME,
             validate_collection_config=False,
         )
 
         return self.vectorstore
 
-    def _build_vectors_config(
-        self, dense_size: int
-    ) -> models.VectorParams | dict[str, models.VectorParams]:
+    def _build_vectors_config(self, dense_size: int) -> dict[str, models.VectorParams]:
         """Return vectors_config for collection creation.
 
-        When multi_vectors are present, returns a named dict so Qdrant can
-        hold both the dense vector and the multi-vector fields under distinct names.
-        Otherwise returns a single unnamed VectorParams for backward compatibility.
+        Always returns a named dict so every collection uses the ``"dense"``
+        vector name consistently across modes.
         """
-        dense_params = models.VectorParams(
-            size=dense_size,
-            distance=self._collection_config.distance,
-        )
-        if not self._collection_config.multi_vectors:
-            return dense_params
         return {
-            _DENSE_VECTOR_NAME: dense_params,
+            _DENSE_VECTOR_NAME: models.VectorParams(
+                size=dense_size,
+                distance=self._collection_config.distance,
+            ),
             **self._collection_config.multi_vectors,
         }
 

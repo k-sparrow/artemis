@@ -223,7 +223,7 @@ services:
         condition: service_healthy
       artemis-db-migrations:
         condition: service_completed_successfully
-      backend-indexing-retrieval:
+      backend-indexing-ingestion:
         condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -245,7 +245,7 @@ services:
       JWT_ALGORITHM: *jwt_alg
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: llama3.1:8b-instruct-fp16
-      RETRIEVER_SERVICE_BASE_URL: http://backend-indexing-retrieval:10006
+      RETRIEVER_SERVICE_BASE_URL: http://backend-indexing-ingestion:10000
       RETRIEVER_SERVICE_HEALTH_ENDPOINT: /health
       RETRIEVER_SERVICE_RETRIEVE_ENDPOINT: /retrieve
       CHAT_HISTORY_PLACEHOLDER: "chat_history"
@@ -376,42 +376,6 @@ services:
       - "10000"
     ports:
       - "10000:10000"
-    networks:
-      - default
-  backend-indexing-retrieval:
-    profiles: [backend]
-    image: artemis/backend-indexing-retrieval:dev
-    depends_on:
-      vectorstore:
-        condition: service_healthy
-      backend-indexing-ingestion:
-        condition: service_healthy
-    healthcheck:
-      test: wget http://localhost:10006/health || exit 1
-      interval: 30s
-      timeout: 20s
-      retries: 5
-      start_period: 20s
-    environment:
-      QDRANT_HOST_URL: "http://vectorstore:6333"
-      QDRANT_COLLECTION_NAME: "artemis"
-      SQL_DB_USER: postgres
-      SQL_DB_PASSWORD: testpass
-      SQL_DB_HOST: postgres
-      SQL_DB_PORT: 5432
-      SQL_DB_DATABASE: documents
-      SQL_DRIVER: postgresql+asyncpg
-      TEXT_EMBEDDING_INFERENCE_EMBEDDING_HOST_URL: "${TEI_HOST_URL:-http://tei:80}"
-      SESSION_ID_CONFIG_KEYWORD: "chat_id"
-      SESSION_ID_VECTORSTORE_INDEX_KEYWORD: "metadata.chat_id"
-      NAMESPACE_CONFIG_KEYWORD: "namespace"
-      NAMESPACE_VECTORSTORE_INDEX_KEYWORD: "metadata.namespace"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    expose:
-      - "10006"
-    ports:
-      - "10006:10006"
     networks:
       - default
   # ---------------------------------------------------------------------------
@@ -796,7 +760,7 @@ services:
       BACKEND_AUTH_URL: http://backend-main:10001
       BACKEND_STORAGE_URL: http://backend-storage:7000
       BACKEND_CHAT_URL: http://backend-main-chat:10010
-      BACKEND_CATALOG_URL: http://backend-indexing-retrieval:10006/catalog
+      BACKEND_CATALOG_URL: http://backend-indexing-ingestion:10000/catalog
       JWT_SECRET: *jwt_secret
       JWT_ISS: *jwt_iss
       JWT_ALGORITHM: *jwt_alg

@@ -116,10 +116,11 @@ def dense_vectorstore(
     vector_size = len(embeddings.embed_query("dummy"))
     sync_client.create_collection(
         collection_name=collection_name,
-        vectors_config=models.VectorParams(
-            size=vector_size,
-            distance=models.Distance.COSINE,
-        ),
+        vectors_config={
+            QdrantVectorStore.VECTOR_NAME: models.VectorParams(
+                size=vector_size, distance=models.Distance.COSINE
+            )
+        },
         hnsw_config=models.HnswConfigDiff(payload_m=16, m=0),
     )
 
@@ -143,33 +144,29 @@ def hybrid_vectorstore(
 ) -> QdrantVectorStore:
     """Fresh Qdrant hybrid collection per test — deleted on teardown.
 
-    The collection has an unnamed dense vector and a BM25 sparse vector
-    named ``langchain-sparse`` with server-side IDF weighting.
+    Two vector spaces: named ``dense`` (COSINE) and BM25 ``sparse`` with
+    server-side IDF weighting.
     """
     collection_name = uuid.uuid4().hex
-    host = qdrant_container.get_container_host_ip()
-    port = int(qdrant_container.get_exposed_port(6333))
-
-    sync_client = QdrantClient(host=host, port=port, prefer_grpc=False)
-    async_client = AsyncQdrantClient(host=host, port=port, prefer_grpc=False)
+    sync_client, async_client = _qdrant_clients(qdrant_container)
 
     vector_size = len(embeddings.embed_query("dummy"))
     sync_client.create_collection(
         collection_name=collection_name,
-        vectors_config={"size": vector_size, "distance": "Cosine"},
+        vectors_config={
+            QdrantVectorStore.VECTOR_NAME: models.VectorParams(
+                size=vector_size, distance=models.Distance.COSINE
+            )
+        },
         sparse_vectors_config={
-            "langchain-sparse": models.SparseVectorParams(
+            QdrantVectorStore.SPARSE_VECTOR_NAME: models.SparseVectorParams(
                 modifier=models.Modifier.IDF,
                 index=models.SparseIndexParams(on_disk=False),
             )
         },
     )
 
-    def _teardown() -> None:
-        sync_client.delete_collection(collection_name)
-        sync_client.close()
-
-    request.addfinalizer(_teardown)
+    request.addfinalizer(lambda: sync_client.delete_collection(collection_name))
 
     return QdrantVectorStore(
         client=sync_client,
@@ -193,7 +190,7 @@ def multi_stage_vectorstore(
 
     Three vector spaces in one collection:
     - ``dense``           — named dense vector (COSINE)
-    - ``langchain-sparse``— BM25 sparse with IDF modifier
+    - ``sparse``— BM25 sparse with IDF modifier
     - ``colbert``         — 128-dim multi-vector with MaxSim comparator
     """
     collection_name = uuid.uuid4().hex
@@ -203,11 +200,11 @@ def multi_stage_vectorstore(
     sync_client.create_collection(
         collection_name=collection_name,
         vectors_config={
-            "dense": models.VectorParams(
+            QdrantVectorStore.VECTOR_NAME: models.VectorParams(
                 size=vector_size,
                 distance=models.Distance.COSINE,
             ),
-            "colbert": models.VectorParams(
+            QdrantVectorStore.LATE_INTERACTION_VECTOR_NAME: models.VectorParams(
                 size=_COLBERT_DIM,
                 distance=models.Distance.COSINE,
                 multivector_config=models.MultiVectorConfig(
@@ -216,7 +213,7 @@ def multi_stage_vectorstore(
             ),
         },
         sparse_vectors_config={
-            "langchain-sparse": models.SparseVectorParams(
+            QdrantVectorStore.SPARSE_VECTOR_NAME: models.SparseVectorParams(
                 modifier=models.Modifier.IDF,
                 index=models.SparseIndexParams(on_disk=False),
             ),
@@ -234,7 +231,6 @@ def multi_stage_vectorstore(
         retrieval_mode=RetrievalMode.MULTI_STAGE,
         sparse_embedding=FastEmbedSparseEmbeddings(),
         late_interaction_embedding=late_interaction_embeddings,
-        vector_name="dense",
         validate_collection_config=False,
     )
 

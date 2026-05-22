@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from dataclasses import dataclass, field
 from enum import Enum
 from itertools import islice
 from operator import itemgetter
 from typing import (
     TYPE_CHECKING,
     Any,
+    Protocol,
 )
 
 from langchain_core.documents import Document
@@ -42,6 +44,82 @@ class QdrantVectorStoreError(Exception):
     """`QdrantVectorStore` related exceptions."""
 
 
+# ---------------------------------------------------------------------------
+# VectorSpace — building blocks for CUSTOM retrieval mode
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DenseVectorSpace:
+    """A named dense vector space.
+
+    Collection schema (``VectorParams.size``) is inferred from the embedding
+    at collection-creation time via ``len(embedding.embed_query(""))``.
+    """
+
+    name: str
+    embedding: Embeddings
+    distance: models.Distance = field(default=models.Distance.COSINE)
+
+
+@dataclass(frozen=True)
+class SparseVectorSpace:
+    """A named sparse (BM25 / SPLADE) vector space."""
+
+    name: str
+    embedding: SparseEmbeddings
+    modifier: models.Modifier = field(default=models.Modifier.IDF)
+
+
+@dataclass(frozen=True)
+class MultiVectorSpace:
+    """A named multi-vector (late-interaction / ColBERT) space.
+
+    ``size`` must be declared explicitly (ColBERTv2 = 128).
+    The embedding type is ``Any`` to avoid importing the late-interaction
+    adapter here; it must implement ``embed_documents`` / ``aembed_documents``.
+    """
+
+    name: str
+    embedding: Any
+    size: int
+    distance: models.Distance = field(default=models.Distance.COSINE)
+
+
+VectorSpace = DenseVectorSpace | SparseVectorSpace | MultiVectorSpace
+
+
+class QueryBuilder(Protocol):
+    """Protocol for arbitrary Qdrant query topologies in CUSTOM mode.
+
+    Implementations assemble the ``prefetch`` tree and final ``query`` for
+    ``client.query_points``.  The standard per-request parameters
+    (``collection_name``, ``query_filter``, ``limit``, etc.) are applied by
+    the vectorstore; the builder owns only the query topology.
+
+    Returns a ``dict`` that is merged into the ``query_points`` call.  Must
+    contain at least ``"query"``; may include ``"prefetch"`` and ``"using"``.
+
+    Example return value for a two-stage hybrid→ColBERT pipeline::
+
+        {
+            "prefetch": [models.Prefetch(query=FusionQuery(RRF), prefetch=[...])],
+            "query": colbert_token_matrix,
+            "using": "colbert",
+        }
+    """
+
+    def __call__(
+        self,
+        query: str,
+        spaces: dict[str, VectorSpace],
+        *,
+        k: int,
+        filter: models.Filter | None,
+        search_params: models.SearchParams | None,
+    ) -> dict[str, Any]: ...
+
+
 class RetrievalMode(str, Enum):
     """Modes for retrieving vectors from Qdrant."""
 
@@ -49,6 +127,7 @@ class RetrievalMode(str, Enum):
     SPARSE = "sparse"
     HYBRID = "hybrid"
     MULTI_STAGE = "multi_stage"
+    CUSTOM = "custom"
 
 
 class QdrantVectorStore(VectorStore):
@@ -261,10 +340,8 @@ class QdrantVectorStore(VectorStore):
 
     CONTENT_KEY: str = "page_content"
     METADATA_KEY: str = "metadata"
-    # The default/unnamed vector:
-    # https://qdrant.tech/documentation/concepts/collections/#create-a-collection
-    VECTOR_NAME: str = ""
-    SPARSE_VECTOR_NAME: str = "langchain-sparse"
+    VECTOR_NAME: str = "dense"
+    SPARSE_VECTOR_NAME: str = "sparse"
     LATE_INTERACTION_VECTOR_NAME: str = "colbert"
 
     def __init__(
@@ -284,6 +361,9 @@ class QdrantVectorStore(VectorStore):
         validate_embeddings: bool = True,  # noqa: FBT001, FBT002
         validate_collection_config: bool = True,  # noqa: FBT001, FBT002
         async_client: AsyncQdrantClient | None = None,
+        # CUSTOM mode — replaces the individual embedding params
+        vector_spaces: list[VectorSpace] | None = None,
+        query_builder: QueryBuilder | None = None,
     ) -> None:
         """Initialize a new instance of `QdrantVectorStore`.
 
@@ -316,7 +396,12 @@ class QdrantVectorStore(VectorStore):
         """
         if validate_embeddings:
             self._validate_embeddings(
-                retrieval_mode, embedding, sparse_embedding, late_interaction_embedding
+                retrieval_mode,
+                embedding,
+                sparse_embedding,
+                late_interaction_embedding,
+                vector_spaces,
+                query_builder,
             )
 
         if validate_collection_config:
@@ -343,6 +428,11 @@ class QdrantVectorStore(VectorStore):
         self.sparse_vector_name = sparse_vector_name
         self._late_interaction_embeddings = late_interaction_embedding
         self.late_interaction_vector_name = late_interaction_vector_name
+        # CUSTOM mode
+        self._vector_spaces: dict[str, VectorSpace] = (
+            {s.name: s for s in vector_spaces} if vector_spaces else {}
+        )
+        self._query_builder = query_builder
 
     @property
     def client(self) -> QdrantClient:
@@ -816,6 +906,16 @@ class QdrantVectorStore(VectorStore):
                 **query_options,
             ).points
 
+        elif self.retrieval_mode == RetrievalMode.CUSTOM:
+            topology = self._query_builder(
+                query,
+                self._vector_spaces,
+                k=k,
+                filter=filter,
+                search_params=search_params,
+            )
+            results = self.client.query_points(**query_options, **topology).points
+
         else:
             msg = f"Invalid retrieval mode. {self.retrieval_mode}."
             raise ValueError(msg)
@@ -1111,6 +1211,19 @@ class QdrantVectorStore(VectorStore):
                     using=self.late_interaction_vector_name,
                     **query_options,
                 )
+            ).points
+
+        elif self.retrieval_mode == RetrievalMode.CUSTOM:
+            topology = await asyncio.to_thread(
+                self._query_builder,
+                query,
+                self._vector_spaces,
+                k=k,
+                filter=filter,
+                search_params=search_params,
+            )
+            results = (
+                await self._async_client.query_points(**query_options, **topology)
             ).points
 
         else:
@@ -1961,6 +2074,26 @@ class QdrantVectorStore(VectorStore):
                 )
             ]
 
+        if self.retrieval_mode == RetrievalMode.CUSTOM:
+            texts_list = list(texts)
+            result: list[dict[str, Any]] = [{} for _ in texts_list]
+            for name, space in self._vector_spaces.items():
+                if isinstance(space, DenseVectorSpace):
+                    vecs = space.embedding.embed_documents(texts_list)
+                    for i, v in enumerate(vecs):
+                        result[i][name] = v
+                elif isinstance(space, SparseVectorSpace):
+                    sparse_vecs = space.embedding.embed_documents(texts_list)
+                    for i, sv in enumerate(sparse_vecs):
+                        result[i][name] = models.SparseVector(
+                            values=sv.values, indices=sv.indices
+                        )
+                elif isinstance(space, MultiVectorSpace):
+                    late_vecs = space.embedding.embed_documents(texts_list)
+                    for i, lv in enumerate(late_vecs):
+                        result[i][name] = lv
+            return result
+
         msg = f"Unknown retrieval mode. {self.retrieval_mode} to build vectors."
         raise ValueError(msg)
 
@@ -2041,6 +2174,25 @@ class QdrantVectorStore(VectorStore):
                     dense_embeddings, sparse_embeddings, late_embeddings, strict=False
                 )
             ]
+
+        if self.retrieval_mode == RetrievalMode.CUSTOM:
+            result: list[dict[str, Any]] = [{} for _ in texts_list]
+            for name, space in self._vector_spaces.items():
+                if isinstance(space, DenseVectorSpace):
+                    vecs = await space.embedding.aembed_documents(texts_list)
+                    for i, v in enumerate(vecs):
+                        result[i][name] = v
+                elif isinstance(space, SparseVectorSpace):
+                    sparse_vecs = await space.embedding.aembed_documents(texts_list)
+                    for i, sv in enumerate(sparse_vecs):
+                        result[i][name] = models.SparseVector(
+                            values=sv.values, indices=sv.indices
+                        )
+                elif isinstance(space, MultiVectorSpace):
+                    late_vecs = await space.embedding.aembed_documents(texts_list)
+                    for i, lv in enumerate(late_vecs):
+                        result[i][name] = lv
+            return result
 
         msg = f"Unknown retrieval mode. {self.retrieval_mode} to build vectors."
         raise ValueError(msg)
@@ -2219,6 +2371,8 @@ class QdrantVectorStore(VectorStore):
         embedding: Embeddings | None,
         sparse_embedding: SparseEmbeddings | None,
         late_interaction_embedding: Any | None = None,
+        vector_spaces: list[VectorSpace] | None = None,
+        query_builder: QueryBuilder | None = None,
     ) -> None:
         if retrieval_mode == RetrievalMode.DENSE and embedding is None:
             msg = "'embedding' cannot be None when retrieval mode is 'dense'"
@@ -2249,6 +2403,14 @@ class QdrantVectorStore(VectorStore):
                 "cannot be None when retrieval mode is 'multi_stage'"
             )
             raise ValueError(msg)
+
+        if retrieval_mode == RetrievalMode.CUSTOM:
+            if not vector_spaces:
+                msg = "'vector_spaces' must be a non-empty list when retrieval mode is 'custom'"  # noqa: E501
+                raise ValueError(msg)
+            if query_builder is None:
+                msg = "'query_builder' cannot be None when retrieval mode is 'custom'"
+                raise ValueError(msg)
 
     @staticmethod
     def _generate_clients(

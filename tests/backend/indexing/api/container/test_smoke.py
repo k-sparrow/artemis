@@ -263,11 +263,11 @@ async def test_hybrid_sparse_vectors_stored(
         assert isinstance(
             vectors, dict
         ), f"Point {point.id}: expected named-vector dict, got {type(vectors)}"
-        assert "langchain-sparse" in vectors, (
-            f"Point {point.id} missing 'langchain-sparse' — "
+        assert "sparse" in vectors, (
+            f"Point {point.id} missing 'sparse' — "
             f"BM25 sparse vector was not stored in hybrid mode"
         )
-        sparse = vectors["langchain-sparse"]
+        sparse = vectors["sparse"]
         assert (
             len(sparse.indices) > 0
         ), f"Point {point.id} has an empty sparse vector (no BM25 terms indexed)"
@@ -317,9 +317,7 @@ async def test_colbert_vectors_stored(
             vectors, dict
         ), f"Point {point.id}: expected named-vector dict, got {type(vectors)}"
         assert "dense" in vectors, f"Point {point.id} missing 'dense' vector"
-        assert (
-            "langchain-sparse" in vectors
-        ), f"Point {point.id} missing 'langchain-sparse' vector"
+        assert "sparse" in vectors, f"Point {point.id} missing 'sparse' vector"
         assert "colbert" in vectors, f"Point {point.id} missing 'colbert' vector"
         colbert = vectors["colbert"]
         assert (

@@ -48,7 +48,7 @@ MULTI_TENANT_DENSE = QdrantCollectionConfig(
 MULTI_TENANT_HYBRID = QdrantCollectionConfig(
     payload_indexes=(_NAMESPACE_TENANT_INDEX,),
     sparse_vectors={
-        "langchain-sparse": models.SparseVectorParams(
+        "sparse": models.SparseVectorParams(
             modifier=models.Modifier.IDF,
             index=models.SparseIndexParams(on_disk=False),
         ),
@@ -60,7 +60,7 @@ MULTI_TENANT_HYBRID = QdrantCollectionConfig(
 MULTI_TENANT_MULTI_STAGE = QdrantCollectionConfig(
     payload_indexes=(_NAMESPACE_TENANT_INDEX,),
     sparse_vectors={
-        "langchain-sparse": models.SparseVectorParams(
+        "sparse": models.SparseVectorParams(
             modifier=models.Modifier.IDF,
             index=models.SparseIndexParams(on_disk=False),
         ),
