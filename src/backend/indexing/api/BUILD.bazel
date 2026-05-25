@@ -21,6 +21,7 @@ INDEXING_SERVICE_PORT = "10000"
 API_ROUTERS = [
     "//src/backend/indexing/api/health:pkg",
     "//src/backend/indexing/api/index:pkg",
+    "//src/backend/indexing/api/retrieve:pkg",
 ]
 
 py_library(
@@ -80,7 +81,11 @@ py_library(
     deps = [
         ":config",
         ":dependencies",
+        "//src/backend/indexing/api/retrieve:service",
         "//src/lib/backend/logging:pkg",
+        "//src/lib/core/adapters/document_compressors/cohere:pkg",
+        "//src/lib/core/retrieval/adapters:simple",
+        requirement("cohere"),
         requirement("fastapi"),
     ],
 )

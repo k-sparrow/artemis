@@ -28,6 +28,9 @@ class IndexingSettings(BaseSettings):
     DEFAULT_PIPELINE_TYPE: PipelineType = PipelineType.SIMPLE
     DEFAULT_CHUNK_SIZE: int = 1024
     DEFAULT_CHUNK_OVERLAP: int = 100
+    # ColBERT reranker — optional; enables ContextualCompressionRetriever on /retrieve
+    COLBERT_RERANKER_URL: str | None = None
+    RETRIEVE_CANDIDATES_MULTIPLIER: int = 10
     # External service URLs
     QDRANT_HOST_URL: str
     QDRANT_COLLECTION_NAME: str

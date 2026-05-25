@@ -4,6 +4,7 @@
 #
 
 load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
 load("@pip//:requirements.bzl", "requirement")
 
 package(
@@ -21,5 +22,42 @@ py_test(
         "//src/lib/core/retrieval:params",
         requirement("pytest"),
         requirement("qdrant-client"),
+    ],
+)
+
+py_library(
+    name = "conftest",
+    testonly = True,
+    srcs = ["conftest.py"],
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/lib/core/adapters/document_compressors/cohere:pkg",
+        "//src/lib/core/adapters/embedding:huggingface",
+        "//src/lib/core/adapters/vectorstore:qdrant",
+        "//tests/lib/testcontainers/tei:pkg",
+        "//tests/lib/testcontainers/vllm:pkg",
+        requirement("cohere"),
+        requirement("langchain-core"),
+        requirement("pytest"),
+        requirement("qdrant-client"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_namespace_retriever",
+    srcs = [
+        "__init__.py",
+        "test_namespace_retriever.py",
+    ],
+    tags = ["integration"],
+    deps = [
+        ":conftest",
+        "//src/backend/indexing/api/retrieve:retriever",
+        "//src/lib/core/adapters/document_compressors/cohere:pkg",
+        "//src/lib/core/adapters/vectorstore:qdrant",
+        "//src/lib/core/retrieval/adapters:simple",
+        requirement("langchain-core"),
+        requirement("pytest"),
     ],
 )

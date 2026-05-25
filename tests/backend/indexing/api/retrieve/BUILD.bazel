@@ -1,0 +1,85 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "conftest",
+    srcs = ["conftest.py"],
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/backend/indexing/api:utils",
+        "//src/backend/indexing/api/retrieve:service",
+        requirement("pytest"),
+    ],
+)
+
+py_test(
+    name = "test_retriever",
+    srcs = [
+        "__init__.py",
+        "test_retriever.py",
+    ],
+    tags = ["unit"],
+    deps = [
+        "//src/backend/indexing/api/retrieve:retriever",
+        "//src/lib/core/retrieval:params",
+        requirement("langchain"),
+        requirement("langchain-core"),
+        requirement("pytest"),
+    ],
+)
+
+py_test(
+    name = "test_utils",
+    srcs = [
+        "__init__.py",
+        "test_utils.py",
+    ],
+    tags = ["unit"],
+    deps = [
+        "//src/backend/indexing/api/retrieve:utils",
+        requirement("fastapi"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+    ],
+)
+
+py_test(
+    name = "test_service",
+    srcs = [
+        "__init__.py",
+        "test_service.py",
+    ],
+    tags = ["unit"],
+    deps = [
+        "//src/backend/indexing/api/retrieve:service",
+        "//src/lib/core/adapters/vectorstore:qdrant",
+        "//src/lib/core/retrieval/adapters:simple",
+        requirement("langchain-core"),
+        requirement("pytest"),
+    ],
+)
+
+py_test(
+    name = "test_retrieve",
+    srcs = [
+        "__init__.py",
+        "test_retrieve.py",
+    ],
+    tags = ["integration"],
+    deps = [
+        ":conftest",
+        "//src/backend/indexing/api:main",
+        "//src/backend/indexing/api/retrieve:service",
+        requirement("fastapi"),
+        requirement("httpx"),
+        requirement("langchain-core"),
+        requirement("pytest"),
+        requirement("sse-starlette"),
+    ],
+)

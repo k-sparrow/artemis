@@ -6,14 +6,16 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
 load("@pip//:requirements.bzl", "requirement")
 
-package(default_visibility = ["//visibility:private"])
+package(default_visibility = [
+    "//src:__subpackages__",
+    "//tests:__subpackages__",
+])
 
 py_library(
     name = "pkg",
     srcs = [
         "__init__.py",
     ],
-    visibility = ["//src/lib/core:__subpackages__"],
     deps = [
         ":base",
         ":qdrant",

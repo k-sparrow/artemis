@@ -119,7 +119,9 @@ def vectorstore(
     sync_client = QdrantClient(host=host, port=port, prefer_grpc=False)
     sync_client.create_collection(
         collection_name=collection_name,
-        vectors_config={"dense": VectorParams(size=vector_size, distance=Distance.COSINE)},
+        vectors_config={
+            "dense": VectorParams(size=vector_size, distance=Distance.COSINE)
+        },
     )
 
     def _teardown() -> None:
