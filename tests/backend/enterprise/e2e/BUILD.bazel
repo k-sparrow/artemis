@@ -45,6 +45,8 @@ py_test(
         "//tests/lib:polling",
         requirement("fastapi"),
         requirement("httpx"),
+        requirement("langchain-core"),
+        requirement("langserve"),
         requirement("lorem"),
         requirement("psycopg"),
         requirement("pytest"),

@@ -286,6 +286,12 @@ def qdrant_client(compose: DockerCompose) -> QdrantClient:
 
 
 @pytest.fixture(scope="session")
+def indexing_url(compose: DockerCompose) -> str:
+    host, port = compose.get_service_host_and_port("backend-indexing-ingestion", 10000)
+    return f"http://{host}:{port}"
+
+
+@pytest.fixture(scope="session")
 def postgres_engine(compose: DockerCompose) -> sa.Engine:
     host, port = compose.get_service_host_and_port("postgres", 5432)
     engine = sa.create_engine(
