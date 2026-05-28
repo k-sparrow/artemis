@@ -8,6 +8,27 @@ py_library(
     visibility = ["//visibility:public"],
 )
 
+# Contract tests: artemis.ingestion.celery.tasks.routed (Kafka) → RabbitMQ queue
+#
+# Validates the Camel Spring RabbitMQ Sink Connector SMT chain against real
+# Kafka + KafkaConnect + RabbitMQ containers.  No ksqlDB required.
+#
+# Pre-requisites: artemis/cp-kafka-connect:latest image must be loaded.
+py_test(
+    name = "test_kafka_to_rabbitmq",
+    srcs = ["test_kafka_to_rabbitmq.py"],
+    tags = ["integration"],
+    deps = [
+        "//src/lib/core/ingestion:pkg",
+        "//tests/lib/testcontainers/kafka:pkg",
+        requirement("kafka-python-ng"),
+        requirement("pika"),
+        requirement("pytest"),
+        requirement("testcontainers"),
+        requirement("httpx"),
+    ],
+)
+
 # Contract tests: artemis.ingestion.storage.s3 → artemis.ingestion.celery.tasks
 #
 # Validates the ksqlDB stream logic (artemis_init.ksql) against real Kafka +

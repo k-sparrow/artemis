@@ -11,8 +11,7 @@ package(
     default_visibility = [
         "//src/backend:__subpackages__",
         "//src/lib/core:__subpackages__",
-        "//tests/backend:__subpackages__",
-        "//tests/lib/core:__subpackages__",
+        "//tests:__subpackages__",
     ],
 )
 
