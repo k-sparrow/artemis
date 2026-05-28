@@ -7,10 +7,12 @@ py_library(
     testonly = True,
     srcs = ["conftest.py"],
     deps = [
+        "//tests/lib:polling",
         "//tests/lib/testcontainers:migrations",
         requirement("celery"),
         requirement("minio"),
         requirement("pika"),
+        requirement("psycopg"),
         requirement("pytest"),
         requirement("testcontainers"),
     ],

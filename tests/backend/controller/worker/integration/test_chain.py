@@ -26,6 +26,7 @@ from tests.backend.controller.worker.integration.conftest import (
     upload_file,
     wait_until_minio_empty,
     wait_until_stub_called,
+    wait_until_stub_called_n_times,
 )
 
 
@@ -309,3 +310,48 @@ class TestDeleteNamespaceTask:
 
         delete_req = next(r for r in indexing_stub.requests if r["method"] == "DELETE")
         assert "source=" not in delete_req["path"]
+
+
+@pytest.mark.integration
+class TestRetryBehavior:
+    """Verify that tasks retry on transient HTTP failures and eventually succeed.
+
+    The indexing stub's push_response() acts as a scenario: one queued 503
+    followed by the default 200.  The worker must retry tasks.index, hit the
+    stub a second time, and succeed.  tasks.fetch_and_parse must not be retried
+    — only tasks.index autoretries on Exception.
+    """
+
+    def test_index_retries_on_transient_indexing_failure(
+        self,
+        dispatch_app,
+        parsing_stub: StubServer,
+        indexing_stub: StubServer,
+        s3_source_bucket: str,
+        minio_client: Minio,
+        namespace_id: uuid.UUID,
+        worker_container: DockerContainer,
+    ) -> None:
+        """tasks.index retries once after a 503 from the indexing service.
+
+        The stub returns 503 on the first call (triggering autoretry) then
+        falls back to its default 200.  After the retry succeeds:
+          - indexing stub received exactly 2 POST calls (attempt + retry)
+          - parsing stub received exactly 1 POST call (fetch_and_parse not retried)
+          - the parsed-chunks MinIO object is cleaned up (indexing eventually succeeded)
+        """
+        indexing_stub.push_response(503, {"detail": "service unavailable"})
+
+        upload_file(minio_client, s3_source_bucket, "test.md")
+        _dispatch_ingest(dispatch_app, s3_source_bucket, namespace_id)
+
+        # Wait for the retry cycle: indexing stub must be called twice.
+        # First call → 503 (autoretry), second call → 200 (success).
+        # retry_backoff=True means the first retry fires after ~2s.
+        wait_until_stub_called_n_times(indexing_stub, n=2, timeout=60)
+
+        assert sum(1 for r in parsing_stub.requests if r["method"] == "POST") == 1
+        assert sum(1 for r in indexing_stub.requests if r["method"] == "POST") == 2
+
+        # Successful retry means the index task completed — cleanup must follow.
+        wait_until_minio_empty(minio_client, "parsed-chunks", timeout=30)

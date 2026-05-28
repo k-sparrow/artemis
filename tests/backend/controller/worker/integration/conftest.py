@@ -33,12 +33,15 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
+import psycopg
 import pytest
 from minio import Minio
 from testcontainers.core.container import DockerContainer
 from testcontainers.minio import MinioContainer
 from testcontainers.postgres import PostgresContainer
 from testcontainers.rabbitmq import RabbitMqContainer
+
+from tests.lib.polling import poll_until
 
 _IMAGE_TAG = "artemis/backend-controller-worker:latest"
 
@@ -432,29 +435,60 @@ def upload_file(
 def wait_until_stub_called(
     stub: StubServer, timeout: int = 60, method: str = "POST"
 ) -> None:
-    """
-    Block until the stub receives at least one request with *method*,
-    or raise TimeoutError.
-    """
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if any(r["method"] == method for r in stub.requests):
-            return
-        time.sleep(0.5)
-    raise TimeoutError(
-        f"Stub at {stub.url} received no {method} requests within {timeout}s"
+    """Block until the stub receives at least one request with *method*."""
+    poll_until(
+        lambda: any(r["method"] == method for r in stub.requests),
+        timeout=timeout,
+        interval=0.5,
+    )
+
+
+def wait_until_stub_called_n_times(
+    stub: StubServer,
+    n: int,
+    timeout: int = 60,
+    method: str = "POST",
+) -> None:
+    """Block until the stub receives at least *n* requests with *method*."""
+    poll_until(
+        lambda: sum(1 for r in stub.requests if r["method"] == method) >= n,
+        timeout=timeout,
+        interval=0.5,
     )
 
 
 def wait_until_minio_empty(minio_client: Minio, bucket: str, timeout: int = 30) -> None:
     """Block until the bucket has no objects (cleanup complete)."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    def _empty() -> bool:
         try:
-            objects = list(minio_client.list_objects(bucket, recursive=True))
-            if not objects:
-                return
+            return not list(minio_client.list_objects(bucket, recursive=True))
         except Exception:
-            pass
-        time.sleep(0.5)
-    raise AssertionError(f"MinIO bucket '{bucket}' still has objects after {timeout}s")
+            return False
+
+    poll_until(_empty, timeout=timeout, interval=0.5)
+
+
+def wait_for_task(
+    task_id: str,
+    postgres_container: PostgresContainer,
+    timeout: int = 60,
+) -> str:
+    """Poll apollo_celery_taskmeta until the task reaches SUCCESS or FAILURE.
+
+    Returns the final status string. Raises TimeoutError if not done within *timeout*s.
+    """
+    host = postgres_container.get_container_host_ip()
+    port = postgres_container.get_exposed_port(5432)
+    connstr = f"host={host} port={port} dbname=celery_results user=celery password=celery"
+
+    def _terminal_status() -> str | None:
+        with psycopg.connect(connstr) as conn:
+            row = conn.execute(
+                "SELECT status FROM apollo_celery_taskmeta WHERE task_id = %s",
+                (task_id,),
+            ).fetchone()
+        if row and row[0] in ("SUCCESS", "FAILURE"):
+            return row[0]
+        return None
+
+    return poll_until(_terminal_status, timeout=timeout, interval=1.0)
