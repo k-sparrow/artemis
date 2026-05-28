@@ -98,7 +98,6 @@ py_oci_image(
         "0.0.0.0",
         "--port",
         PARSING_SERVICE_PORT,
-        "--reload",
     ],
     exposed_ports = [PARSING_SERVICE_PORT],
     visibility = ["//src/backend:__pkg__"],

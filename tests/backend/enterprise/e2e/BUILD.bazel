@@ -16,6 +16,7 @@ py_library(
     deps = [
         "//tests/lib:polling",
         "//tests/lib/testcontainers/tei:pkg",
+        "//tests/lib/testcontainers/vllm:pkg",
         requirement("httpx"),
         requirement("psycopg"),
         requirement("pytest"),

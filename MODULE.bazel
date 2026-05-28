@@ -11,7 +11,7 @@ module(
 
 PY_RULES_VERSION = "1.0.0"
 
-PY_VERSION = "3.11"
+PY_VERSION = "3.12"
 
 ASPECT_RULES_LINT_VERSION = "1.0.2"
 
@@ -55,11 +55,11 @@ python.toolchain(
     is_default = True,
     python_version = PY_VERSION,
 )
-use_repo(python, "python_3_11")
+use_repo(python, "python_3_12")
 
 # Register an already-defined toolchain so that Bazel can use it during toolchain resolution.
 register_toolchains(
-    "@python_3_11//:all",
+    "@python_3_12//:all",
 )
 
 # This extension allows a user to create modifications to how rules_python

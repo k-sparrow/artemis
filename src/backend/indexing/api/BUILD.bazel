@@ -131,9 +131,10 @@ py_oci_image(
         "0.0.0.0",  # this should allow connections from host
         "--port",
         INDEXING_SERVICE_PORT,
-        "--reload",
     ],
+    env = {"FASTEMBED_CACHE_PATH": "/opt/fastembed"},
     exposed_ports = [INDEXING_SERVICE_PORT],
+    tars = ["//tools/assets/fastembed:bm25_model_layer"],
     visibility = ["//src/backend:__pkg__"],
 )
 

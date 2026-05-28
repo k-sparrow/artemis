@@ -44,6 +44,15 @@ __all__ = [
     "get_vectorstore_handler_solved",
 ]
 
+# FastEmbedSparseEmbeddings loads the Qdrant/bm25 model on instantiation.
+# The model is stateless (corpus statistics live in Qdrant, not here),
+# so one instance is shared across all requests.
+_sparse_embeddings = (
+    FastEmbedSparseEmbeddings()
+    if settings.RETRIEVAL_MODE in ("hybrid", "multi_stage")
+    else None
+)
+
 # ---------------------------------------------------------------------------
 # Pipeline helpers
 # ---------------------------------------------------------------------------
@@ -162,7 +171,7 @@ async def get_vectorstore_handler(
             base_url=settings.QDRANT_HOST_URI,
             collection_config=MULTI_TENANT_MULTI_STAGE,
             retrieval_mode=mode,
-            sparse_embedding=FastEmbedSparseEmbeddings(),
+            sparse_embedding=_sparse_embeddings,
             late_interaction_embedding=VLLMLateInteractionEmbeddings(
                 url=settings.COLBERT_HOST_URL,
                 model=settings.COLBERT_MODEL_NAME,
@@ -176,7 +185,7 @@ async def get_vectorstore_handler(
             base_url=settings.QDRANT_HOST_URI,
             collection_config=MULTI_TENANT_HYBRID,
             retrieval_mode=mode,
-            sparse_embedding=FastEmbedSparseEmbeddings(),
+            sparse_embedding=_sparse_embeddings,
             eager=False,
         )
     return QdrantVectorStoreHandler(

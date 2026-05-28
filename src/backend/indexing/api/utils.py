@@ -30,22 +30,35 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     logger = get_logger("indexing")
 
-    logger.info("lifespan_started")
+    logger.info("lifespan_started", retrieval_mode=settings.RETRIEVAL_MODE)
+
+    logger.info("vectorstore_handler_init_started")
     handler: VectorStoreHandler = await get_vectorstore_handler_solved()
+    logger.info("vectorstore_handler_init_done")
+
+    logger.info("vectorstore_create_started")
     vs = await handler.acreate()
+    logger.info("vectorstore_create_done")
 
     retrieval_adapter = SimpleVectorStoreRetrieverAdapter(vs)
 
     reranker: Optional[CohereRerank] = None
     if settings.COLBERT_RERANKER_URL:
+        logger.info("reranker_init_started", model=settings.COLBERT_MODEL_NAME)
         cohere_client = cohere.ClientV2(
             api_key="not-needed", base_url=settings.COLBERT_RERANKER_URL
         )
-        reranker = CohereRerank(model=settings.COLBERT_MODEL_NAME, client=cohere_client)
+        reranker = CohereRerank(
+            model=settings.COLBERT_MODEL_NAME,
+            client=cohere_client,
+            max_tokens_per_doc=settings.COLBERT_MAX_TOKENS_PER_DOC,
+        )
+        logger.info("reranker_init_done")
 
     retrieve_service.initialize(
         retrieval_adapter, reranker, settings.RETRIEVE_CANDIDATES_MULTIPLIER
     )
+    logger.info("lifespan_ready")
 
     yield
     await handler.aclose()

@@ -363,6 +363,8 @@ services:
       RETRIEVAL_MODE: "${RETRIEVAL_MODE:-dense}"
       COLBERT_HOST_URL: "${COLBERT_HOST_URL:-http://colbert:8000}"
       COLBERT_MODEL_NAME: "${COLBERT_MODEL_NAME:-jinaai/jina-colbert-v2}"
+      COLBERT_RERANKER_URL: "${COLBERT_RERANKER_URL:-}"
+      COLBERT_MAX_TOKENS_PER_DOC: "${COLBERT_MAX_TOKENS_PER_DOC:-511}"
       SQL_DB_USER: "postgres"
       SQL_DB_PASSWORD: "testpass"
       SQL_DB_HOST: "postgres"

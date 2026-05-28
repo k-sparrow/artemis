@@ -38,6 +38,7 @@ from qdrant_client import QdrantClient
 from testcontainers.compose import DockerCompose
 from tests.lib.polling import poll_until, wait_for_http, wait_for_kc_connector
 from tests.lib.testcontainers.tei import TEIContainer
+from tests.lib.testcontainers.vllm import VLLMContainer
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +123,37 @@ def retrieval_mode(request: pytest.FixtureRequest) -> str:
     return mode
 
 
+@pytest.fixture(
+    scope="session",
+    params=["none", "colbert"],
+    ids=["no-reranker", "colbert"],
+)
+def reranker_mode(request: pytest.FixtureRequest) -> str:
+    """Parametrize the full pipeline over ColBERT reranker on/off.
+
+    When "colbert": starts a VLLMContainer serving colbert-ir/colbertv2.0,
+    sets COLBERT_RERANKER_URL / COLBERT_MODEL_NAME / COLBERT_MAX_TOKENS_PER_DOC
+    so docker-compose wires the reranker into backend-indexing-ingestion.
+    Must be requested before the ``compose`` fixture.
+
+    GPU + NVIDIA Docker runtime required for the "colbert" variant.
+    """
+    mode = request.param
+    if mode == "colbert":
+        hf_cache = Path.home() / ".cache/huggingface"
+        container = VLLMContainer("colbert-ir/colbertv2.0")
+        container.with_hf_cache(str(hf_cache))
+        container.start()
+        request.addfinalizer(container.stop)
+        port = container.get_exposed_port(VLLMContainer.HTTP_PORT)
+        os.environ["COLBERT_RERANKER_URL"] = f"http://host.docker.internal:{port}"
+        os.environ["COLBERT_MODEL_NAME"] = "colbert-ir/colbertv2.0"
+        os.environ["COLBERT_MAX_TOKENS_PER_DOC"] = "511"
+    else:
+        os.environ.pop("COLBERT_RERANKER_URL", None)
+    return mode
+
+
 @pytest.fixture(scope="session")
 def tei(request: pytest.FixtureRequest) -> str:
     """Starts a TEI container and returns its base URL (http://localhost:{port}).
@@ -185,6 +217,7 @@ def compose(
     watch_dir: Path,
     tei: str,
     retrieval_mode: str,  # sets RETRIEVAL_MODE env var before compose starts
+    reranker_mode: str,  # sets COLBERT_RERANKER_URL (or nothing) before compose starts
     request: pytest.FixtureRequest,
 ):
     dc = DockerCompose(

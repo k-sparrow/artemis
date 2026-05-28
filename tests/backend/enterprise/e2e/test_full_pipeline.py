@@ -52,6 +52,7 @@ def _invoke_retriever(
     indexing_url: str,
     namespace_id: str,
     *,
+    query: str = "document",
     group_id: str | None = None,
     k: int = _RETRIEVE_K,
 ) -> list[Document]:
@@ -64,7 +65,7 @@ def _invoke_retriever(
         configurable["group_id"] = group_id
     try:
         remote: RemoteRunnable = RemoteRunnable(f"{indexing_url}/retrieve")
-        return remote.invoke("document", config={"configurable": configurable})
+        return remote.invoke(query, config={"configurable": configurable})
     except Exception:
         return []
 
@@ -1125,3 +1126,143 @@ class TestSharedNamespaceTwoConnectors:
         assert (
             resp.status_code == status.HTTP_404_NOT_FOUND
         ), f"Expected namespace to be soft-deleted (404), got {resp.status_code}"
+
+
+class TestColBERTReranking:
+    """ColBERT reranker changes the ordering of retrieved documents.
+
+    Skipped when reranker_mode == "none".  Requires a GPU-backed VLLMContainer
+    (started by the reranker_mode fixture in conftest.py).
+
+    Uses the enterprise pipeline (file drop → Qdrant) as the ingestion path,
+    then queries /retrieve/invoke twice — once with a keyword query that BM25
+    would naturally rank first and once with a semantic query.  With ColBERT
+    reranking active the semantic query must rank the semantically relevant
+    document ahead of the keyword-heavy one.
+
+    Documents are synthetic so that the expected ranking is unambiguous:
+      keyword_doc   — contains a rare out-of-vocabulary token (BM25 signal)
+      semantic_doc  — describes transformer self-attention (semantic signal)
+    """
+
+    _KEYWORD = "ZQXVBYW"  # synthetic OOV token — no embedding model has seen it
+
+    @pytest.fixture(scope="class")
+    def reranker_namespace(
+        self,
+        reranker_mode: str,
+        data_sources_url: str,
+        watch_dir: Path,
+        indexing_url: str,
+    ) -> dict:
+        """Create a data source and index two documents; return namespace metadata.
+
+        Skips the class immediately when the reranker is not enabled so none of
+        the tests in this class run in the no-reranker parametrize leg.
+        """
+        if reranker_mode == "none":
+            pytest.skip("ColBERT reranker not enabled in this parametrize leg")
+
+        (watch_dir / "reranker").mkdir(exist_ok=True)
+        with httpx.Client(base_url=data_sources_url, timeout=15.0) as client:
+            resp = client.post(
+                "/data-sources",
+                json={
+                    "display_name": "e2e-reranker-source",
+                    "path": "/watch/reranker",
+                    "namespace": f"e2e-reranker-{uuid.uuid4().hex[:8]}",
+                    "org_name": "e2e-org",
+                    "recursive": False,
+                },
+            )
+            assert resp.status_code == status.HTTP_201_CREATED, resp.text
+            source = resp.json()
+
+        namespace_id: str = source["namespace_id"]
+
+        (watch_dir / "reranker" / "keyword_doc.md").write_text(
+            f"# Keyword Document\n\n"
+            f"{self._KEYWORD} is a unique synthetic token used to test BM25 keyword "
+            f"matching. This document should rank first for "
+            f"a query containing {self._KEYWORD}. " * 5
+        )
+        (watch_dir / "reranker" / "semantic_doc.md").write_text(
+            "# Transformer Architecture\n\n"
+            "The transformer architecture uses self-attention to model long-range "
+            "dependencies in sequences. Multi-head attention allows the model to "
+            "jointly attend to information from different representation subspaces. "
+            * 5
+        )
+
+        def _both_indexed():
+            docs = _invoke_retriever(indexing_url, namespace_id)
+            obj_ids = {doc.metadata.get("obj_id") for doc in docs}
+            return docs if len(obj_ids) >= 2 else None
+
+        try:
+            poll_until(
+                _both_indexed,
+                timeout=_QDRANT_POLL_TIMEOUT_S,
+                interval=_QDRANT_POLL_INTERVAL_S,
+            )
+        except TimeoutError:
+            pytest.fail(
+                f"reranker test docs not indexed within {_QDRANT_POLL_TIMEOUT_S}s"
+            )
+
+        return {"namespace_id": namespace_id, "source_id": source["id"]}
+
+    def test_semantic_query_ranks_semantic_doc_first(
+        self,
+        reranker_namespace: dict,
+        indexing_url: str,
+    ) -> None:
+        """
+        A semantic query must rank semantic_doc above
+        keyword_doc after ColBERT reranking.
+        """
+        namespace_id = reranker_namespace["namespace_id"]
+        docs = _invoke_retriever(
+            indexing_url,
+            namespace_id,
+            query="how does attention mechanism work in neural networks",
+            k=10,
+        )
+        assert docs, "no documents returned for semantic query"
+
+        top_content = docs[0].page_content
+        assert (
+            "self-attention" in top_content or "transformer" in top_content.lower()
+        ), (
+            f"Expected semantic_doc at rank 1 after ColBERT reranking, "
+            f"got: {top_content[:120]!r}"
+        )
+
+    def test_keyword_query_ranks_keyword_doc_first(
+        self,
+        reranker_namespace: dict,
+        indexing_url: str,
+    ) -> None:
+        """An exact OOV-token query must rank keyword_doc first (BM25 + ColBERT agree)."""
+        namespace_id = reranker_namespace["namespace_id"]
+        docs = _invoke_retriever(indexing_url, namespace_id, k=10)
+        assert docs, "no documents returned for keyword query"
+
+        # Re-invoke with the keyword as the actual query string
+        try:
+            from langserve import RemoteRunnable
+
+            remote: RemoteRunnable = RemoteRunnable(f"{indexing_url}/retrieve")
+            keyword_docs = remote.invoke(
+                self._KEYWORD,
+                config={"configurable": {"namespace_id": namespace_id, "k": 10}},
+            )
+        except Exception as exc:
+            pytest.fail(f"keyword query failed: {exc}")
+
+        assert keyword_docs, "no documents returned for keyword query"
+        top_content = keyword_docs[0].page_content
+        assert self._KEYWORD in top_content, (
+            f"Expected keyword_doc at rank 1 for OOV query {self._KEYWORD!r}, "
+            f"got: {top_content[:120]!r}"
+        )

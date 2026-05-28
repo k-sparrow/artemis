@@ -30,6 +30,9 @@ class IndexingSettings(BaseSettings):
     DEFAULT_CHUNK_OVERLAP: int = 100
     # ColBERT reranker — optional; enables ContextualCompressionRetriever on /retrieve
     COLBERT_RERANKER_URL: str | None = None
+    # max_tokens_per_doc passed to the rerank call; must be < model max_model_len.
+    # colbert-ir/colbertv2.0 → 511 (max 512), jinaai/jina-colbert-v2 → 8191 (max 8192).
+    COLBERT_MAX_TOKENS_PER_DOC: int = 511
     RETRIEVE_CANDIDATES_MULTIPLIER: int = 10
     # External service URLs
     QDRANT_HOST_URL: str

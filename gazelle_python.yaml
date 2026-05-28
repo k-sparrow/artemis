@@ -40,6 +40,7 @@ manifest:
     click_didyoumean: click_didyoumean
     click_plugins: click_plugins
     click_repl: click_repl
+    cohere: cohere
     comm: comm
     cryptography: cryptography
     cuda.bindings: cuda_bindings
@@ -67,6 +68,8 @@ manifest:
     fastapi_healthchecks: fastapi_healthchecks
     fastapi_users: fastapi_users
     fastapi_users_db_sqlalchemy: fastapi_users_db_sqlalchemy
+    fastavro: fastavro
+    fastembed: fastembed
     fastjsonschema: fastjsonschema
     filelock: filelock
     filetype: filetype
@@ -129,6 +132,7 @@ manifest:
     kafka_connect: kafka_connect_py
     kombu: kombu
     langchain: langchain
+    langchain_cohere: langchain_cohere
     langchain_community: langchain_community
     langchain_core: langchain_core
     langchain_docling: langchain_docling
@@ -139,6 +143,7 @@ manifest:
     lark: lark
     latex2mathml: latex2mathml
     lazy_loader: lazy_loader
+    loguru: loguru
     lorem: lorem
     lxml: lxml
     makefun: makefun
@@ -152,6 +157,7 @@ manifest:
     mdurl: mdurl
     minio: minio
     mistune: mistune
+    mmh3: mmh3
     mpire: mpire
     mpmath: mpmath
     multidict: multidict
@@ -188,7 +194,6 @@ manifest:
     opentelemetry.util.types: opentelemetry_api
     opentelemetry.version: opentelemetry_api
     orjson: orjson
-    overrides: overrides
     packaging: packaging
     pandas: pandas
     pandocfilters: pandocfilters
@@ -212,6 +217,7 @@ manifest:
     pure_eval: pure_eval
     pwdlib: pwdlib
     py: pytest
+    py_rust_stemmers: py_rust_stemmers
     pybreaker: pybreaker
     pyclipper: pyclipper
     pycodestyle: pycodestyle
@@ -261,6 +267,7 @@ manifest:
     sqlalchemy: SQLAlchemy
     sqlalchemy_utils: SQLAlchemy_Utils
     sqlmodel: sqlmodel
+    sse_starlette: sse_starlette
     stack_data: stack_data
     starlette: starlette
     structlog: structlog
@@ -359,4 +366,4 @@ manifest:
     zstandard: zstandard
   pip_repository:
     name: pip
-integrity: bef013955f3188d92272398410b3951a80464dae2e1a9f7199e1101815830e99
+integrity: 3dbbaa50f9867408ca72572d0787397a465a3e316531c054b290fef37ddf49d4
