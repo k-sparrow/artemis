@@ -356,6 +356,136 @@ class TestSingleNamespaceFullPipeline:
             ), f"Point {point.id} has an empty sparse vector (no BM25 terms indexed)"
 
 
+class TestDeduplicationFullPipeline:
+    """Re-uploading the same file must not create duplicate Qdrant vectors.
+
+    Uses the private upload path (POST /namespaces/{id}/objects) to upload the
+    same file twice.  The storage service derives obj_id = uuid5(namespace_id,
+    filename), so identical filenames in the same namespace always get the same
+    obj_id — which is exactly what the RecordManager uses as its dedup key.
+
+    A sentinel file is uploaded after the duplicate to provide a reliable
+    pipeline-progress signal: when the sentinel's obj_id appears in Qdrant, both
+    prior uploads have been processed.
+    """
+
+    @pytest.fixture(scope="class")
+    def namespace(self, storage_url: str) -> dict:
+        resp = httpx.post(
+            f"{storage_url}/namespaces",
+            json={"type": "private"},
+            headers={"X-Owner-Id": str(uuid.uuid4())},
+            timeout=10.0,
+        )
+        assert resp.status_code == status.HTTP_201_CREATED, resp.text
+        return resp.json()
+
+    def _upload(
+        self,
+        storage_url: str,
+        namespace_id: str,
+        filename: str,
+        content: str,
+    ) -> None:
+        resp = httpx.post(
+            f"{storage_url}/namespaces/{namespace_id}/objects",
+            files={"file": (filename, content.encode(), "text/markdown")},
+            timeout=15.0,
+        )
+        assert resp.status_code == status.HTTP_202_ACCEPTED, resp.text
+
+    def test_same_file_twice_vector_count_unchanged(
+        self,
+        namespace: dict,
+        storage_url: str,
+        indexing_url: str,
+        qdrant_client: QdrantClient,
+    ) -> None:
+        """
+        Re-uploading an identical file leaves the per-obj_id Qdrant chunk
+        count unchanged.
+        """
+        namespace_id = str(namespace["id"])
+        content = "# Dedup Test\n\n" + lorem.paragraph()
+
+        # Phase 1: first upload — wait for the document to appear in the retriever
+        # and record the obj_id + chunk count.
+        self._upload(storage_url, namespace_id, "dedup_doc.md", content)
+
+        def _first_indexed():
+            docs = _invoke_retriever(indexing_url, namespace_id)
+            return docs or None
+
+        try:
+            docs = poll_until(
+                _first_indexed,
+                timeout=_QDRANT_POLL_TIMEOUT_S,
+                interval=_QDRANT_POLL_INTERVAL_S,
+            )
+        except TimeoutError:
+            pytest.fail(f"dedup_doc.md not retrievable after {_QDRANT_POLL_TIMEOUT_S}s")
+
+        obj_id = docs[0].metadata.get("obj_id")
+        assert obj_id, "indexed document must carry obj_id metadata"
+
+        baseline = qdrant_client.count(
+            collection_name=_QDRANT_COLLECTION,
+            count_filter=Filter(
+                must=[
+                    FieldCondition(
+                        key="metadata.obj_id", match=MatchValue(value=obj_id)
+                    )
+                ]
+            ),
+            exact=True,
+        ).count
+
+        # Phase 2: re-upload the same file + a sentinel (different filename → different
+        # obj_id).  When the sentinel's obj_id appears in Qdrant, both prior uploads
+        # have been evaluated by the pipeline.
+        self._upload(storage_url, namespace_id, "dedup_doc.md", content)
+        self._upload(
+            storage_url,
+            namespace_id,
+            "sentinel.md",
+            "# Sentinel\n\nA distinct document used as a pipeline-progress probe.\n",
+        )
+
+        def _sentinel_indexed():
+            docs = _invoke_retriever(indexing_url, namespace_id)
+            obj_ids = {d.metadata.get("obj_id") for d in docs}
+            return obj_ids if len(obj_ids) >= 2 else None
+
+        try:
+            poll_until(
+                _sentinel_indexed,
+                timeout=_QDRANT_POLL_TIMEOUT_S,
+                interval=_QDRANT_POLL_INTERVAL_S,
+            )
+        except TimeoutError:
+            pytest.fail(
+                f"Sentinel not indexed within {_QDRANT_POLL_TIMEOUT_S}s "
+                f"— cannot confirm re-upload was processed"
+            )
+
+        after = qdrant_client.count(
+            collection_name=_QDRANT_COLLECTION,
+            count_filter=Filter(
+                must=[
+                    FieldCondition(
+                        key="metadata.obj_id", match=MatchValue(value=obj_id)
+                    )
+                ]
+            ),
+            exact=True,
+        ).count
+
+        assert after == baseline, (
+            f"Expected {baseline} vectors for obj_id={obj_id} after re-upload "
+            f"(RecordManager dedup should skip), got {after}"
+        )
+
+
 class TestPrivatePathFullPipeline:
     """Private upload path: POST /objects → retrieve → CDC → DELETE → cleanup."""
 

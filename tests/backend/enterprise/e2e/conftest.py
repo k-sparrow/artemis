@@ -219,7 +219,7 @@ def compose(
     retrieval_mode: str,  # sets RETRIEVAL_MODE env var before compose starts
     reranker_mode: str,  # sets COLBERT_RERANKER_URL (or nothing) before compose starts
     request: pytest.FixtureRequest,
-):
+) -> DockerCompose:
     dc = DockerCompose(
         context=str(compose_file.parent),
         compose_file_name=[compose_file.name],
@@ -284,7 +284,8 @@ def compose(
 
     yield dc
 
-    _dump_service_logs(dc)
+    if request.session.testsfailed:
+        _dump_service_logs(dc)
     dc.stop()
 
 

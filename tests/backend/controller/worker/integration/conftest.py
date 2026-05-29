@@ -325,14 +325,15 @@ def worker_container(
         ) from None
 
     def _stop_and_dump():
-        stdout, stderr = container.get_logs()
-        print(  # always visible in pytest -s / in the log file
-            "\n=== Worker container stdout ===\n"
-            + stdout.decode(errors="replace")
-            + "\n=== Worker container stderr ===\n"
-            + stderr.decode(errors="replace"),
-            flush=True,
-        )
+        if request.session.testsfailed:
+            stdout, stderr = container.get_logs()
+            print(
+                "\n=== Worker container stdout ===\n"
+                + stdout.decode(errors="replace")
+                + "\n=== Worker container stderr ===\n"
+                + stderr.decode(errors="replace"),
+                flush=True,
+            )
         container.stop()
 
     request.addfinalizer(_stop_and_dump)
@@ -459,6 +460,7 @@ def wait_until_stub_called_n_times(
 
 def wait_until_minio_empty(minio_client: Minio, bucket: str, timeout: int = 30) -> None:
     """Block until the bucket has no objects (cleanup complete)."""
+
     def _empty() -> bool:
         try:
             return not list(minio_client.list_objects(bucket, recursive=True))
@@ -479,7 +481,9 @@ def wait_for_task(
     """
     host = postgres_container.get_container_host_ip()
     port = postgres_container.get_exposed_port(5432)
-    connstr = f"host={host} port={port} dbname=celery_results user=celery password=celery"
+    connstr = (
+        f"host={host} port={port} dbname=celery_results user=celery password=celery"
+    )
 
     def _terminal_status() -> str | None:
         with psycopg.connect(connstr) as conn:
