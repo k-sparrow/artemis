@@ -1,0 +1,33 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "conftest",
+    testonly = True,
+    srcs = ["conftest.py"],
+    deps = [
+        requirement("httpx"),
+        requirement("pytest"),
+        requirement("testcontainers"),
+        requirement("wiremock"),
+    ],
+)
+
+py_test(
+    name = "test_smoke",
+    srcs = ["test_smoke.py"],
+    env = {"TC_MAX_TRIES": "1000000000"},
+    tags = ["integration"],
+    deps = [
+        ":conftest",
+        requirement("httpx"),
+        requirement("mcp"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+    ],
+)

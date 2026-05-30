@@ -17,6 +17,7 @@ manifest:
     aiosqlite: aiosqlite
     alembic: alembic
     amqp: amqp
+    annotated_doc: annotated_doc
     annotated_types: annotated_types
     anyio: anyio
     argon2: argon2_cffi
@@ -154,6 +155,7 @@ manifest:
     marshmallow: marshmallow
     matplotlib_inline: matplotlib_inline
     mccabe: mccabe
+    mcp: mcp
     mdurl: mdurl
     minio: minio
     mistune: mistune
@@ -262,7 +264,6 @@ manifest:
     shellingham: shellingham
     six: six
     skimage: scikit_image
-    sniffio: sniffio
     soupsieve: soupsieve
     sqlalchemy: SQLAlchemy
     sqlalchemy_utils: SQLAlchemy_Utils
@@ -366,4 +367,4 @@ manifest:
     zstandard: zstandard
   pip_repository:
     name: pip
-integrity: 3dbbaa50f9867408ca72572d0787397a465a3e316531c054b290fef37ddf49d4
+integrity: e4f3b8aa28b2e05960f9abe6ef625282f40b89963a29b002f1b131a26163fef2

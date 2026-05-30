@@ -88,7 +88,10 @@ async def list_namespaces(
 ) -> list[Namespace]:
     result = await session.execute(
         sa.select(Namespace).where(
-            Namespace.owner_id == owner_id,
+            sa.or_(
+                Namespace.owner_id == owner_id,
+                Namespace.type == NamespaceType.SHARED,
+            ),
             Namespace.deleted_at.is_(None),
         )
     )

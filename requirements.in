@@ -4,10 +4,10 @@
 #
 
 # networking
-httpx==0.27.2
+httpx==0.28.1
 
 # backend
-fastapi==0.114.2
+fastapi>=0.115.12
 fastapi-users==14.0.1
 fastapi-users-db-sqlalchemy==7.0.0
 fastapi-healthchecks==1.1.0
@@ -21,6 +21,7 @@ openapi-python-client==0.24.3
 attrs==25.3.0
 langserve==0.3.2
 sse-starlette
+mcp>=1.0
 structlog==25.5.0
 opentelemetry-api==1.39.1
 qdrant-client==1.17.0

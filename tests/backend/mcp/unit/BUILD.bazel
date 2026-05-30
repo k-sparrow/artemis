@@ -1,0 +1,26 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@pip//:requirements.bzl", "requirement")
+
+py_test(
+    name = "test_tools",
+    srcs = ["test_tools.py"],
+    env = {
+        "INDEXING_SERVICE_URL": "http://localhost:10000",
+        "STORAGE_SERVICE_URL": "http://localhost:7000",
+    },
+    tags = ["unit"],
+    deps = [
+        "//src/backend/mcp/api:client",
+        "//src/backend/mcp/api:settings",
+        "//src/backend/mcp/api:tools",
+        requirement("mcp"),
+        requirement("httpx"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+        requirement("respx"),
+    ],
+)

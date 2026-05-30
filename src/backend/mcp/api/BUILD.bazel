@@ -1,0 +1,117 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+# gazelle:python_root
+
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+load("@rules_oci//oci:defs.bzl", "oci_push", oci_load = "oci_tarball")
+load("//tools/backend:uvicorn.bzl", "uvicorn_server")
+load("//tools/oci:py_layer.bzl", "py_oci_image")
+
+package(default_visibility = [
+    "//src/backend:__subpackages__",
+    "//src/backend/mcp/api:__subpackages__",
+    "//tests:__subpackages__",
+])
+
+MCP_SERVICE_PORT = "11000"
+
+API_ROUTERS = [
+    "//src/backend/mcp/api/health:pkg",
+]
+
+py_library(
+    name = "settings",
+    srcs = ["settings.py"],
+    deps = [
+        requirement("pydantic"),
+        requirement("pydantic-settings"),
+    ],
+)
+
+py_library(
+    name = "client",
+    srcs = ["client.py"],
+    deps = [
+        ":settings",
+        requirement("httpx"),
+    ],
+)
+
+py_library(
+    name = "utils",
+    srcs = ["utils.py"],
+    deps = [
+        ":client",
+        ":settings",
+        "//src/lib/backend/logging:pkg",
+        requirement("fastapi"),
+    ],
+)
+
+py_library(
+    name = "tools",
+    srcs = ["tools.py"],
+    deps = [
+        ":client",
+        ":settings",
+        requirement("mcp"),
+        requirement("httpx"),
+        requirement("pydantic"),
+    ],
+)
+
+py_library(
+    name = "main",
+    srcs = [
+        "__init__.py",
+        "main.py",
+    ],
+    imports = ["."],
+    deps = [
+        ":tools",
+        ":utils",
+        requirement("fastapi"),
+        requirement("mcp"),
+    ] + API_ROUTERS,
+)
+
+uvicorn_server(
+    name = "artemis-mcp",
+    app = "src.backend.mcp.api.main:app",
+    host = "0.0.0.0",
+    port = MCP_SERVICE_PORT,
+    deps = [":main"],
+)
+
+py_oci_image(
+    name = "image.dev",
+    base = "//tools/oci/images/ubuntu:noble",
+    binary = ":artemis-mcp.dev",
+    entrypoint = [
+        "/src/backend/mcp/api/artemis-mcp.dev",
+        "src.backend.mcp.api.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        MCP_SERVICE_PORT,
+    ],
+    exposed_ports = [MCP_SERVICE_PORT],
+    visibility = ["//src/backend:__pkg__"],
+)
+
+oci_load(
+    name = "tarball.dev",
+    image = ":image.dev",
+    repo_tags = ["artemis/backend-mcp:dev"],
+    visibility = ["//src:__pkg__"],
+)
+
+oci_push(
+    name = "push.dev",
+    image = ":image.dev",
+    remote_tags = ["dev"],
+    repository = "localhost:5000/artemis-backend-mcp",
+)
