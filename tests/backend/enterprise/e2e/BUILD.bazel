@@ -35,6 +35,7 @@ py_test(
     ],
     data = [
         "//src/backend/alembic:tarball.dev",
+        "//src/backend/mcp/api:tarball.dev",
         "//tools/docker:docker_compose_test",
     ],
     tags = [
@@ -49,6 +50,7 @@ py_test(
         requirement("langchain-core"),
         requirement("langserve"),
         requirement("lorem"),
+        requirement("mcp"),
         requirement("psycopg"),
         requirement("pytest"),
         requirement("qdrant-client"),

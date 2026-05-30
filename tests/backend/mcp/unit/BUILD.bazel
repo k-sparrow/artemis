@@ -35,8 +35,8 @@ py_test(
     },
     tags = ["unit"],
     deps = [
-        "//src/backend/mcp/api:tools",
         "//src/backend/mcp/api:settings",
+        "//src/backend/mcp/api:tools",
         requirement("mcp"),
         requirement("pytest"),
         requirement("pytest-asyncio"),

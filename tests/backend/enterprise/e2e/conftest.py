@@ -202,6 +202,7 @@ _DIAGNOSTIC_SERVICES = [
     "backend-indexing-ingestion",
     "backend-indexing-controller-celery-worker",
     "backend-parsing",
+    "backend-mcp",
     "kafka-connect",
     "artemis-kafka-connect-init",
     "ksqldb-server",
@@ -223,7 +224,7 @@ def compose(
     dc = DockerCompose(
         context=str(compose_file.parent),
         compose_file_name=[compose_file.name],
-        profiles=["infra", "enterprise", "ai"],
+        profiles=["infra", "enterprise", "ai", "mcp"],
         pull=False,
         build=False,
     )
@@ -260,6 +261,9 @@ def compose(
         # backend-parsing depends on docling-serve and can be slow; the Celery
         # worker calls it synchronously so it must be up before any file is dropped.
         wait_for_http(f"http://{host_parsing}:{port_parsing}/health/readiness")
+        # MCP server is stateless — just wait for its liveness probe.
+        host_mcp, port_mcp = dc.get_service_host_and_port("backend-mcp", 11000)
+        wait_for_http(f"http://{host_mcp}:{port_mcp}/health/liveness")
         # Both system connectors must be RUNNING before any file is dropped.
         # auto.offset.reset=latest means messages produced before the connector
         # is up would be lost.
@@ -322,6 +326,12 @@ def qdrant_client(compose: DockerCompose) -> QdrantClient:
 @pytest.fixture(scope="session")
 def indexing_url(compose: DockerCompose) -> str:
     host, port = compose.get_service_host_and_port("backend-indexing-ingestion", 10000)
+    return f"http://{host}:{port}"
+
+
+@pytest.fixture(scope="session")
+def mcp_url(compose: DockerCompose) -> str:
+    host, port = compose.get_service_host_and_port("backend-mcp", 11000)
     return f"http://{host}:{port}"
 
 

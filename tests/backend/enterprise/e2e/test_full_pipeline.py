@@ -16,6 +16,9 @@ Proves the complete pipeline end-to-end:
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import json
 import uuid
 from pathlib import Path
 
@@ -27,11 +30,16 @@ import sqlalchemy as sa
 from fastapi import status
 from langchain_core.documents import Document
 from langserve import RemoteRunnable
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
 from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchValue, SparseVector
 
 from tests.backend.enterprise.e2e.conftest import _wait_connector_running  # noqa: PLC2701
 from tests.lib.polling import poll_until
+
+# X-Owner-Id forwarded by the MCP server's stub auth header (settings.STUB_OWNER_ID default).
+_MCP_STUB_OWNER_ID = "00000000-0000-0000-0000-000000000000"
 
 _QDRANT_COLLECTION = "artemis"
 
@@ -1396,3 +1404,99 @@ class TestColBERTReranking:
             f"Expected keyword_doc at rank 1 for OOV query {self._KEYWORD!r}, "
             f"got: {top_content[:120]!r}"
         )
+
+
+class TestMCPRetrieve:
+    """MCP layer e2e: upload via MCP upload_file → index → retrieve via MCP retrieve.
+
+    Creates a PRIVATE namespace owned by STUB_OWNER_ID (the static owner the MCP
+    server forwards while auth is not yet wired), uploads a document through the
+    MCP upload_file tool, waits for the indexing pipeline to complete, then calls
+    the MCP retrieve tool and asserts that relevant chunks are returned.
+    """
+
+    @pytest.fixture(scope="class")
+    def mcp_namespace(self, storage_url: str) -> dict:
+        """Create a PRIVATE namespace under STUB_OWNER_ID; return the namespace dict."""
+        resp = httpx.post(
+            f"{storage_url}/namespaces",
+            json={"type": "private"},
+            headers={"X-Owner-Id": _MCP_STUB_OWNER_ID},
+            timeout=10.0,
+        )
+        assert resp.status_code == status.HTTP_201_CREATED, resp.text
+        return resp.json()
+
+    @pytest.fixture(scope="class")
+    def mcp_indexed(
+        self,
+        mcp_namespace: dict,
+        mcp_url: str,
+        indexing_url: str,
+    ) -> str:
+        """Upload a document via the MCP upload_file tool; poll until indexed.
+
+        Returns the namespace_id so tests can call retrieve against it.
+        """
+        namespace_id = str(mcp_namespace["id"])
+        content = "# Artemis MCP E2E Test\n\n" + lorem.paragraph()
+        encoded = base64.b64encode(content.encode()).decode()
+
+        async def _upload():
+            async with streamable_http_client(f"{mcp_url}/mcp") as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.call_tool(
+                        "upload_file",
+                        {
+                            "namespace_id": namespace_id,
+                            "filename": "mcp_e2e.md",
+                            "content_base64": encoded,
+                            "content_type": "text/markdown",
+                        },
+                    )
+            assert not result.isError, f"upload_file returned error: {result.content}"
+
+        asyncio.run(_upload())
+
+        def _retrieve():
+            docs = _invoke_retriever(indexing_url, namespace_id)
+            return docs or None
+
+        try:
+            poll_until(
+                _retrieve,
+                timeout=_QDRANT_POLL_TIMEOUT_S,
+                interval=_QDRANT_POLL_INTERVAL_S,
+            )
+        except TimeoutError:
+            pytest.fail(
+                f"No documents indexed for MCP namespace_id={namespace_id} "
+                f"after {_QDRANT_POLL_TIMEOUT_S}s"
+            )
+
+        return namespace_id
+
+    def test_retrieve_returns_chunks(
+        self,
+        mcp_indexed: str,
+        mcp_url: str,
+    ) -> None:
+        """MCP retrieve tool returns at least one chunk for the indexed document."""
+        namespace_id = mcp_indexed
+
+        async def _retrieve():
+            async with streamable_http_client(f"{mcp_url}/mcp") as (read, write, _):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    return await session.call_tool(
+                        "retrieve",
+                        {"namespace_id": namespace_id, "query": "document"},
+                    )
+
+        result = asyncio.run(_retrieve())
+        assert not result.isError, f"retrieve returned error: {result.content}"
+        assert len(result.content) >= 1, "retrieve returned no chunks"
+        chunk = json.loads(result.content[0].text)
+        assert "content" in chunk
+        assert "source" in chunk
