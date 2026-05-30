@@ -65,7 +65,7 @@ async def test_tool_schema_contract():
 
     snapshot = json.loads(_SNAPSHOT_PATH.read_text())
     assert current == snapshot, (
-        "MCP tool schema has changed. If this is intentional, regenerate the snapshot:\n\n"
+        "MCP tool schema has changed. If this is intentional, regenerate the snapshot:\n\n"  # noqa: E501
         "    UPDATE_SNAPSHOTS=1 pytest tests/backend/mcp/unit/test_tool_contract.py\n\n"
         f"Got:\n{json.dumps(current, indent=2)}\n\n"
         f"Expected:\n{json.dumps(snapshot, indent=2)}"

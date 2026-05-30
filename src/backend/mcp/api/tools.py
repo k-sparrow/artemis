@@ -2,6 +2,7 @@ import base64
 from typing import Annotated
 
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
@@ -10,7 +11,13 @@ from src.backend.mcp.api.settings import settings
 
 __all__ = ["mcp"]
 
-mcp = FastMCP("artemis")
+# DNS rebinding protection is delegated to APISIX at the gateway layer.
+# Disabling it here lets the server accept requests from any upstream host
+# (internal Docker names, external domains) without an explicit allowlist.
+mcp = FastMCP(
+    "artemis",
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+)
 
 
 def _owner_headers() -> dict[str, str]:

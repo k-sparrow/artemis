@@ -38,7 +38,8 @@ from qdrant_client.models import FieldCondition, Filter, MatchValue, SparseVecto
 from tests.backend.enterprise.e2e.conftest import _wait_connector_running  # noqa: PLC2701
 from tests.lib.polling import poll_until
 
-# X-Owner-Id forwarded by the MCP server's stub auth header (settings.STUB_OWNER_ID default).
+# X-Owner-Id forwarded by the MCP server's stub auth header
+# (settings.STUB_OWNER_ID default).
 _MCP_STUB_OWNER_ID = "00000000-0000-0000-0000-000000000000"
 
 _QDRANT_COLLECTION = "artemis"

@@ -332,6 +332,10 @@ def indexing_url(compose: DockerCompose) -> str:
 @pytest.fixture(scope="session")
 def mcp_url(compose: DockerCompose) -> str:
     host, port = compose.get_service_host_and_port("backend-mcp", 11000)
+    # MCP SDK rejects "0.0.0.0" as an invalid Host header (DNS rebinding protection).
+    # The port is mapped to all host interfaces, so localhost is always reachable.
+    if host == "0.0.0.0":
+        host = "localhost"
     return f"http://{host}:{port}"
 
 
