@@ -42,6 +42,7 @@ def _render_http_sink_connector(*, connector_name: str, intake_url: str) -> dict
             "key.converter.schemas.enable": "false",
             "value.converter": "org.apache.kafka.connect.json.JsonConverter",
             "value.converter.schemas.enable": "false",
+            "http.headers.content.type": "application/json",
             "errors.tolerance": "all",
             "errors.deadletterqueue.topic.name": "artemis.datasource.filesystem.intake.dlq",  # noqa: E501
             "errors.deadletterqueue.topic.replication.factor": "1",

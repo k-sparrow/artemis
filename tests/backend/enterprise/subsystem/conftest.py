@@ -566,6 +566,7 @@ def http_sink_connector(
         "key.converter.schemas.enable": "false",
         "value.converter": "org.apache.kafka.connect.json.JsonConverter",
         "value.converter.schemas.enable": "false",
+        "http.headers.content.type": "application/json",
         "errors.tolerance": "all",
         "errors.deadletterqueue.topic.name": f"{_INTAKE_TOPIC}.dlq",
         "errors.deadletterqueue.topic.replication.factor": "1",
