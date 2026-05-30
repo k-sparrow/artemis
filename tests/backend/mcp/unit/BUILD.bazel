@@ -24,3 +24,21 @@ py_test(
         requirement("respx"),
     ],
 )
+
+py_test(
+    name = "test_tool_contract",
+    srcs = ["test_tool_contract.py"],
+    data = ["tool_schema_snapshot.json"],
+    env = {
+        "INDEXING_SERVICE_URL": "http://localhost:10000",
+        "STORAGE_SERVICE_URL": "http://localhost:7000",
+    },
+    tags = ["unit"],
+    deps = [
+        "//src/backend/mcp/api:tools",
+        "//src/backend/mcp/api:settings",
+        requirement("mcp"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+    ],
+)
