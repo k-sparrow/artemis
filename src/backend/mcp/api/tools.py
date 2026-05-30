@@ -186,12 +186,8 @@ async def upload_file(
     content = base64.b64decode(content_base64)
     resp = await client.storage_client.post(
         f"/namespaces/{namespace_id}/objects",
-        content=content,
-        headers={
-            **_owner_headers(),
-            "Content-Type": content_type,
-            "X-Filename": filename,
-        },
+        files={"file": (filename, content, content_type)},
+        headers=_owner_headers(),
     )
     resp.raise_for_status()
     return resp.json()

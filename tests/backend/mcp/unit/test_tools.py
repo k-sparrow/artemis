@@ -161,9 +161,11 @@ async def test_upload_file():
     assert result == upload_response
     sent = route.calls[0].request
     assert sent.headers["x-owner-id"] == _OWNER_ID
-    assert sent.headers["content-type"] == "text/markdown"
-    assert sent.headers["x-filename"] == "hello.md"
-    assert sent.content == content
+    # multipart/form-data — content-type includes a boundary parameter
+    assert sent.headers["content-type"].startswith("multipart/form-data")
+    # filename and file bytes are encoded in the multipart body
+    assert b"hello.md" in sent.content
+    assert content in sent.content
 
 
 # ---------------------------------------------------------------------------

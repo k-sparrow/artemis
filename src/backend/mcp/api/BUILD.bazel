@@ -106,7 +106,10 @@ oci_load(
     name = "tarball.dev",
     image = ":image.dev",
     repo_tags = ["artemis/backend-mcp:dev"],
-    visibility = ["//src:__pkg__"],
+    visibility = [
+        "//src:__pkg__",
+        "//tests:__subpackages__",
+    ],
 )
 
 oci_push(
