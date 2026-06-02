@@ -1,0 +1,29 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "conftest",
+    testonly = True,
+    srcs = ["conftest.py"],
+    deps = [
+        "//tests/lib:polling",
+        requirement("httpx"),
+        requirement("pytest"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_smoke",
+    srcs = ["test_smoke.py"],
+    tags = [
+        "integration",
+        "local",
+    ],
+    deps = [
+        ":conftest",
+        requirement("httpx"),
+        requirement("pytest"),
+    ],
+)

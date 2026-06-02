@@ -889,9 +889,10 @@ filegroup(
     srcs = [
         "//tools/oci/images/{tool}:image".format(tool = tool)
         for tool in [
-            "kong",
             "ksqldb",
         ]
+    ] + [
+        "//tools/oci/images/apisix:init_image",
     ] + [
         ":artemis-kafka-connect-init",
         ":kafka-connect",
@@ -906,7 +907,6 @@ filegroup(
         command = "//tools/oci/images/{tool}:tarball".format(tool = tool),
     )
     for tool in [
-        "kong",
         "ksqldb",
     ]
 ]
@@ -919,9 +919,10 @@ multirun(
             "kafka-connect",
             "kafka-connect-init",
             "artemis-kafka-connect-init",
-            "kong",
             "ksqldb",
         ]
+    ] + [
+        "//tools/oci/images/apisix:init_tarball",
     ] + [
         "//tools/oci/images/ksqldb:load.all",
     ],

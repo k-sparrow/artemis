@@ -1,0 +1,48 @@
+load("@aspect_bazel_lib//lib:tar.bzl", "mtree_mutate", "mtree_spec", "tar")
+load("@rules_oci//oci:defs.bzl", "oci_image", oci_load = "oci_tarball")
+
+_INIT_DIR = "home/appuser"
+
+# ---------------------------------------------------------------------------
+# init.sh — Admin API route registration (baked into curl init image)
+# ---------------------------------------------------------------------------
+
+mtree_spec(
+    name = "init.sh.spec",
+    srcs = [":init.sh"],
+)
+
+mtree_mutate(
+    name = "init.sh.mtree",
+    mtree = ":init.sh.spec",
+    package_dir = _INIT_DIR,
+    strip_prefix = package_name(),
+)
+
+tar(
+    name = "init.sh.pkg",
+    srcs = [":init.sh"],
+    mtree = ":init.sh.mtree",
+)
+
+# ---------------------------------------------------------------------------
+# APISIX init image — one-shot container that registers routes via Admin API
+# ---------------------------------------------------------------------------
+
+oci_image(
+    name = "init_image",
+    base = "@curl",
+    entrypoint = [
+        "sh",
+        "/" + _INIT_DIR + "/init.sh",
+    ],
+    tars = [":init.sh.pkg"],
+    visibility = ["//tools/oci/images:__pkg__"],
+)
+
+oci_load(
+    name = "init_tarball",
+    image = ":init_image",
+    repo_tags = ["artemis/apisix-init:latest"],
+    visibility = ["//tools/oci/images:__pkg__"],
+)

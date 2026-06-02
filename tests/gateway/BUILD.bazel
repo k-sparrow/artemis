@@ -1,0 +1,1 @@
+package(default_visibility = ["//tests/gateway:__subpackages__"])

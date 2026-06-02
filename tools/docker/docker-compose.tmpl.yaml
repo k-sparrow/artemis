@@ -4,12 +4,6 @@ x-jwt-common: &jwt-common
   # TODO: replace this with a real secret
   JWT_SECRET: &jwt_secret "DONOTUSE"
   JWT_ALGORITHM: &jwt_alg "HS256"
-x-kong-config: &kong-env-common
-  KONG_DATABASE: postgres
-  KONG_PG_HOST: kong-ee-database
-  KONG_PG_DATABASE: kong
-  KONG_PG_USER: kong
-  KONG_PG_PASSWORD: kong
 x-minio-common: &minio-common
   image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
   command: server --console-address ":9090" /mnt/data
@@ -674,127 +668,88 @@ services:
     networks:
       - default
   # ---------------------------------------------------------------------------
-  # Frontend
+  # API Gateway
   # ---------------------------------------------------------------------------
-  frontend:
-    profiles: [frontend]
-    image: artemis/frontend:latest
-    restart: unless-stopped
-    depends_on:
-      kong-cp:
-        condition: service_healthy
-    healthcheck:
-      test: wget http://localhost:8501/healthz || exit 1
-      interval: 20s
-      timeout: 20s
-      retries: 5
-      start_period: 30s
-    expose:
-      - "8501"
-    ports:
-      - "8511:8501"
-    environment:
-      BACKEND_BASE_URL: http://kong-cp:8000
-      BACKEND_AUTH_ENDPOINT: /auth
-      BACKEND_STORAGE_ENDPOINT: /storage
-      BACKEND_CHAT_ENDPOINT: /chat
-    networks:
-      - default
-  # ---------------------------------------------------------------------------
-  # API Gateway (Kong)
-  # ---------------------------------------------------------------------------
-  kong-ee-database:
+  apisix-etcd:
     profiles: [gateway]
-    container_name: kong-ee-database
-    image: postgres:latest
-    restart: on-failure
-    volumes:
-      - kong_db_data:/var/lib/postgresql/data
-    networks:
-      - kong-ee-net
-    environment:
-      POSTGRES_USER: kong
-      POSTGRES_DB: kong
-      POSTGRES_PASSWORD: kong
+    image: gcr.io/etcd-development/etcd:v3.5.18
+    container_name: apisix-etcd
+    command: >
+      etcd --listen-client-urls http://0.0.0.0:2379 --advertise-client-urls http://apisix-etcd:2379 --data-dir /tmp/etcd
+
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "kong"]
+      test: ["CMD", "etcdctl", "--endpoints=http://localhost:2379", "endpoint", "health"]
       interval: 5s
-      timeout: 10s
+      timeout: 5s
       retries: 10
     expose:
-      - "5432"
-  kong-bootstrap:
-    profiles: [gateway]
-    image: "${GW_IMAGE:-kong/kong-gateway:3.11.0.2}"
-    container_name: kong-bootstrap
+      - "2379"
     networks:
       - default
-      - kong-ee-net
-    depends_on:
-      kong-ee-database:
-        condition: service_healthy
-    restart: on-failure
-    environment:
-      !!merge <<: *kong-env-common
-      KONG_PASSWORD: handyshake
-    command: kong migrations bootstrap
-  kong-cp:
+  apisix:
     profiles: [gateway]
-    image: "${GW_IMAGE:-kong/kong-gateway:3.11.0.2}"
-    container_name: kong-cp
-    restart: on-failure
+    image: apache/apisix:3.16.0-debian
+    container_name: apisix
+    depends_on:
+      apisix-etcd:
+        condition: service_healthy
+    configs:
+      - source: apisix-config
+        target: /usr/local/apisix/conf/config.yaml
     healthcheck:
-      test: ["CMD", "kong", "health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:9090/v1/health"]
       interval: 10s
-      timeout: 10s
+      timeout: 5s
       retries: 10
+    ports:
+      - "9080:9080"
     networks:
       - default
-      - kong-ee-net
-    environment:
-      !!merge <<: *kong-env-common
-      KONG_ADMIN_LISTEN: 0.0.0.0:8001, 0.0.0.0:8444 ssl
-      KONG_ADMIN_GUI_LISTEN: 0.0.0.0:8002, 0.0.0.0:8445 ssl
-      KONG_ADMIN_GUI_URL: http://${GW_HOST:-localhost}:8002
-      KONG_PASSWORD: handyshake
-    depends_on:
-      kong-bootstrap:
-        condition: service_completed_successfully
-    ports:
-      - "8000:8000"
-      - "8443:8443"
-      - "8001:8001"
-      - "8444:8444"
-      - "8002:8002"
-      - "8445:8445"
-  api-gateway-connect-init:
+  artemis-apisix-init:
     profiles: [gateway]
-    image: artemis/api-gateway-connect-init:latest
+    image: artemis/apisix-init:latest
+    container_name: artemis-apisix-init
     depends_on:
-      kong-bootstrap:
-        condition: service_completed_successfully
-      kong-cp:
+      apisix:
         condition: service_healthy
-      backend-storage:
-        condition: service_healthy
-    networks:
-      - kong-ee-net
     environment:
-      KONG_CP_ADMIN_API: http://kong-cp:8001
-      BACKEND_AUTH_URL: http://backend-main:10001
-      BACKEND_STORAGE_URL: http://backend-storage:7000
-      BACKEND_CHAT_URL: http://backend-main-chat:10010
-      BACKEND_CATALOG_URL: http://backend-indexing-ingestion:10000/catalog
-      JWT_SECRET: *jwt_secret
-      JWT_ISS: *jwt_iss
-      JWT_ALGORITHM: *jwt_alg
+      APISIX_ADMIN_URL: http://apisix:9180
+      APISIX_ADMIN_KEY: artemis-apisix-admin-key
+    networks:
+      - default
 networks:
   default:
-    driver: bridge
-  kong-ee-net:
     driver: bridge
 volumes:
   qdrant-vectorstore:
   db-storage:
   s3-storage:
-  kong_db_data: {}
+configs:
+  apisix-config:
+    content: |
+      deployment:
+        role: traditional
+        traditional:
+          config_provider: etcd
+        etcd:
+          host:
+            - "http://apisix-etcd:2379"
+          prefix: /apisix
+          timeout: 30
+        admin:
+          admin_key_required: true
+          admin_key:
+            - name: admin
+              key: artemis-apisix-admin-key
+              role: admin
+          allow_admin:
+            - 0.0.0.0/0
+          admin_listen:
+            ip: 0.0.0.0
+            port: 9180
+      apisix:
+        node_listen: 9080
+        enable_control: true
+        control:
+          ip: "0.0.0.0"
+          port: 9090
