@@ -12,8 +12,6 @@ so runs are fully isolated.
 from __future__ import annotations
 
 import uuid
-from pathlib import Path
-
 import pytest
 from qdrant_client import AsyncQdrantClient, QdrantClient, models
 from testcontainers.qdrant import QdrantContainer
@@ -47,10 +45,7 @@ def qdrant_container(request: pytest.FixtureRequest) -> QdrantContainer:
 
 @pytest.fixture(scope="session")
 def tei_container(request: pytest.FixtureRequest) -> TEIContainer:
-    hf_cache = Path.home() / ".cache" / "huggingface"
     container = TEIContainer(model_id=_EMBEDDING_MODEL)
-    if hf_cache.exists():
-        container.with_hf_cache(str(hf_cache))
     container.start()
     request.addfinalizer(container.stop)
     return container
@@ -58,10 +53,7 @@ def tei_container(request: pytest.FixtureRequest) -> TEIContainer:
 
 @pytest.fixture(scope="session")
 def vllm_container(request: pytest.FixtureRequest) -> VLLMContainer:
-    hf_cache = Path.home() / ".cache" / "huggingface"
     container = VLLMContainer(model_id=_COLBERT_MODEL)
-    if hf_cache.exists():
-        container.with_hf_cache(str(hf_cache))
     container.start()
     request.addfinalizer(container.stop)
     return container

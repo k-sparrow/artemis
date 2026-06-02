@@ -3,7 +3,6 @@
 # -------------------------------------
 #
 
-from pathlib import Path
 from collections.abc import Sequence
 
 import cohere
@@ -20,9 +19,7 @@ _COLBERT_MODEL = "colbert-ir/colbertv2.0"
 
 @pytest.fixture(scope="session")
 def vllm_rerank_url(request: FixtureRequest) -> str:
-    hf_cache = Path.home() / ".cache/huggingface"
     container = VLLMContainer(model_id=_COLBERT_MODEL)
-    container.with_hf_cache(str(hf_cache))
     container.start()
     request.addfinalizer(lambda: container.stop())
     return container.get_url()

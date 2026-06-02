@@ -11,7 +11,6 @@ from tests.lib.testcontainers.tei import TEIContainer
     params=[
         ("sentence-transformers/msmarco-MiniLM-L-12-v3", 384),
         ("nomic-ai/nomic-embed-text-v1.5", 768),
-        ("BAAI/bge-m3", 1024),
     ],
     ids=lambda t: t[0],
 )

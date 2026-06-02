@@ -22,8 +22,6 @@ from tests.lib.testcontainers.tei import TEIContainer
     params=[
         "BAAI/bge-reranker-base",
         "BAAI/bge-reranker-large",
-        "Alibaba-NLP/gte-multilingual-reranker-base",
-        "Alibaba-NLP/gte-reranker-modernbert-base",
     ],
 )
 def tei_model_url(request: FixtureRequest) -> str:

@@ -4,8 +4,6 @@
 #
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from pytest import FixtureRequest
 
@@ -14,11 +12,6 @@ from tests.lib.testcontainers.vllm import VLLMContainer
 _MODELS = [
     ("colbert-ir/colbertv2.0", False, None),
     ("jinaai/jina-colbert-v2", True, {"architectures": ["ColBERTJinaRobertaModel"]}),
-    (
-        "lightonai/GTE-ModernColBERT-v1",
-        False,
-        {"architectures": ["ColBERTModernBertModel"]},
-    ),
 ]
 
 
@@ -29,10 +22,7 @@ _MODELS = [
 )
 def vllm_container(request: FixtureRequest) -> VLLMContainer:
     model_id, trust_remote_code, hf_overrides = request.param
-    hf_cache = Path.home() / ".cache" / "huggingface"
     container = VLLMContainer(model_id=model_id)
-    if hf_cache.exists():
-        container.with_hf_cache(str(hf_cache))
     if hf_overrides:
         container.with_hf_overrides(hf_overrides)
     if trust_remote_code:

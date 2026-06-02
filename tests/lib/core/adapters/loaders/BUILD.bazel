@@ -15,6 +15,7 @@ py_library(
 py_test(
     name = "test_loaders",
     srcs = ["test_loaders.py"],
+    env = {"HF_HOME": "/tmp/hf_cache"},
     tags = ["unit"],
     deps = [
         "//src/lib/core/adapters/loaders:config",
@@ -43,6 +44,7 @@ py_test(
 py_test(
     name = "test_docling_loader_integration",
     srcs = ["test_docling_loader_integration.py"],
+    env = {"HF_HOME": "/tmp/hf_cache"},
     tags = ["integration"],
     deps = [
         ":conftest",
