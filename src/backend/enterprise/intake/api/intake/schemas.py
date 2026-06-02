@@ -46,6 +46,11 @@ class IntakeRequest(BaseModel):
         default=None,
         description="Logical group owner (connector_id for enterprise sources).",
     )
+    owner_id: uuid.UUID = Field(
+        description=(
+            "Namespace owner UUID, " "forwarded as X-Owner-Id to the storage service."
+        ),
+    )
 
 
 class IntakeResponse(BaseModel):

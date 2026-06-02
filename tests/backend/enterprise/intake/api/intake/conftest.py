@@ -26,8 +26,14 @@ from src.backend.enterprise.intake.api.main import app  # noqa: E402
 
 _NAMESPACE_ID = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
 _TASK_ID = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+_OWNER_ID = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
 
-NAMESPACE_RESPONSE = {"id": str(_NAMESPACE_ID), "type": "shared", "name": "acme"}
+NAMESPACE_RESPONSE = {
+    "id": str(_NAMESPACE_ID),
+    "type": "shared",
+    "name": "acme",
+    "owner_id": str(_OWNER_ID),
+}
 UPLOAD_RESPONSE = {"task_id": str(_TASK_ID)}
 
 

@@ -16,12 +16,14 @@
 --   artemis.namespace                  : namespace name
 --   artemis.namespace_id               : namespace UUID
 --   artemis.org_name                   : organisation name
+--   artemis.owner_id                   : owner UUID (uuid5 of org_name, set at connector creation)
 --
 -- IntakeRequest JSON schema (output)
 -- -----------------------------------
 --   source       : { type: "filesystem", path: str }
 --   display_name : str
 --   namespace_id : str (UUID)
+--   owner_id     : str (UUID)
 
 SET 'auto.offset.reset' = 'earliest';
 
@@ -37,7 +39,8 @@ CREATE STREAM IF NOT EXISTS `artemis-enterprise-datasource-filesystem` (
     `namespace`    BYTES HEADER('artemis.namespace'),
     `namespace_id` BYTES HEADER('artemis.namespace_id'),
     `org_name`     BYTES HEADER('artemis.org_name'),
-    `group_id`     BYTES HEADER('artemis.group_id')
+    `group_id`     BYTES HEADER('artemis.group_id'),
+    `owner_id`     BYTES HEADER('artemis.owner_id')
 )
 WITH (
     KAFKA_TOPIC  = 'artemis.datasource.filesystem',
@@ -63,6 +66,7 @@ AS SELECT
     ) AS `source`,
     FROM_BYTES(`display_name`, 'utf8') AS `display_name`,
     FROM_BYTES(`namespace_id`, 'utf8') AS `namespace_id`,
-    FROM_BYTES(`group_id`, 'utf8') AS `group_id`
+    FROM_BYTES(`group_id`, 'utf8') AS `group_id`,
+    FROM_BYTES(`owner_id`, 'utf8') AS `owner_id`
 FROM `artemis-enterprise-datasource-filesystem`
 EMIT CHANGES;

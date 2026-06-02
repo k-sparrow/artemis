@@ -202,6 +202,7 @@ async def create_data_source(
         namespace=namespace,
         namespace_id=str(namespace_id),
         org_name=org_name,
+        owner_id=str(owner_id),
         recursive=recursive,
     )
 

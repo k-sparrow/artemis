@@ -14,6 +14,7 @@ Input  topic: artemis.datasource.filesystem
     artemis.namespace_id              : bytes — namespace UUID
     artemis.org_name                  : bytes — organisation name
     artemis.group_id                  : bytes | absent — connector id (UUID)
+    artemis.owner_id                  : bytes — owner UUID (uuid5 of org_name)
 
 Output topic: artemis.datasource.filesystem.intake  (VALUE_FORMAT='JSON')
   value: {
@@ -21,6 +22,7 @@ Output topic: artemis.datasource.filesystem.intake  (VALUE_FORMAT='JSON')
     "display_name": str,
     "namespace_id": str (UUID),
     "group_id":     str | null,
+    "owner_id":     str (UUID),
   }
 """
 
@@ -86,6 +88,7 @@ def _produce_file_event(
     namespace: str,
     namespace_id: str,
     org_name: str,
+    owner_id: str,
     group_id: str | None,
 ) -> None:
     """Produce a raw FileSource event to the source topic with the artemis SMT headers."""
@@ -95,6 +98,7 @@ def _produce_file_event(
         ("artemis.namespace", namespace.encode()),
         ("artemis.namespace_id", namespace_id.encode()),
         ("artemis.org_name", org_name.encode()),
+        ("artemis.owner_id", owner_id.encode()),
     ]
     if group_id is not None:
         headers.append(("artemis.group_id", group_id.encode()))
@@ -133,6 +137,7 @@ class TestFilesystemStreamContract:
             namespace="e2e-ns",
             namespace_id=namespace_id,
             org_name="e2e-org",
+            owner_id=str(uuid.uuid4()),
             group_id=None,
         )
 
@@ -152,6 +157,7 @@ class TestFilesystemStreamContract:
             namespace="e2e-ns",
             namespace_id=namespace_id,
             org_name="e2e-org",
+            owner_id=str(uuid.uuid4()),
             group_id=None,
         )
 
@@ -161,6 +167,7 @@ class TestFilesystemStreamContract:
             "display_name",
             "namespace_id",
             "group_id",
+            "owner_id",
         }
 
     def test_source_struct_shape(self, bootstrap_server: str, streams: None) -> None:
@@ -175,6 +182,7 @@ class TestFilesystemStreamContract:
             namespace="e2e-ns",
             namespace_id=namespace_id,
             org_name="e2e-org",
+            owner_id=str(uuid.uuid4()),
             group_id=None,
         )
 
@@ -188,6 +196,7 @@ class TestFilesystemStreamContract:
         namespace_id = str(uuid.uuid4())
 
         start = _end_offset(bootstrap_server, _OUTPUT_TOPIC)
+        owner_id = str(uuid.uuid4())
         _produce_file_event(
             bootstrap_server,
             path="/watch/enterprise/notes.md",
@@ -195,12 +204,14 @@ class TestFilesystemStreamContract:
             namespace="e2e-ns",
             namespace_id=namespace_id,
             org_name="e2e-org",
+            owner_id=owner_id,
             group_id=None,
         )
 
         record = _consume_one(bootstrap_server, _OUTPUT_TOPIC, start)
         assert record["display_name"] == "notes.md"
         assert record["namespace_id"] == namespace_id
+        assert record["owner_id"] == owner_id
 
     def test_group_id_null_when_header_absent(
         self, bootstrap_server: str, streams: None
@@ -220,6 +231,7 @@ class TestFilesystemStreamContract:
             namespace="e2e-ns",
             namespace_id=namespace_id,
             org_name="e2e-org",
+            owner_id=str(uuid.uuid4()),
             group_id=None,
         )
 
@@ -239,6 +251,7 @@ class TestFilesystemStreamContract:
         group_id = str(uuid.uuid4())
 
         start = _end_offset(bootstrap_server, _OUTPUT_TOPIC)
+        owner_id = str(uuid.uuid4())
         _produce_file_event(
             bootstrap_server,
             path="/watch/enterprise/doc.txt",
@@ -246,8 +259,10 @@ class TestFilesystemStreamContract:
             namespace="e2e-ns",
             namespace_id=namespace_id,
             org_name="e2e-org",
+            owner_id=owner_id,
             group_id=group_id,
         )
 
         record = _consume_one(bootstrap_server, _OUTPUT_TOPIC, start)
         assert record["group_id"] == group_id
+        assert record["owner_id"] == owner_id

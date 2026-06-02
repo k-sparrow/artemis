@@ -21,6 +21,7 @@ import uuid
 
 from tests.backend.enterprise.intake.api.intake.conftest import (
     _NAMESPACE_ID,
+    _OWNER_ID,
     _TASK_ID,
 )
 
@@ -29,6 +30,7 @@ _GROUP_ID = uuid.uuid4()
 _COMMON = {
     "display_name": "doc.pdf",
     "namespace_id": str(_NAMESPACE_ID),
+    "owner_id": str(_OWNER_ID),
 }
 
 
@@ -80,6 +82,18 @@ class TestFilesystemSource:
         # filetype cannot identify arbitrary bytes -
         # falls back to mimetypes (filename ext)
         assert files["file"][2] == "application/pdf"
+
+    def test_owner_id_forwarded_as_header(
+        self, client: TestClient, mock_http: MagicMock, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "doc.pdf"
+        f.write_bytes(b"content")
+
+        _post(client, {"type": "filesystem", "path": str(f)})
+
+        upload_call = mock_http.post.call_args_list[0]
+        headers = upload_call.kwargs.get("headers", {})
+        assert headers.get("X-Owner-Id") == str(_OWNER_ID)
 
     def test_missing_file_returns_404(self, client: TestClient) -> None:
         resp = _post(

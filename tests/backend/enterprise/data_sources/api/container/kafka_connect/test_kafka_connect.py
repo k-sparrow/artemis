@@ -30,6 +30,7 @@ _NAMESPACE = "test-ns"
 _NAMESPACE_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 _CONNECTOR_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 _ORG_NAME = "test-org"
+_OWNER_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 
 
 def _kc_client(kafka_connect_url: str) -> KafkaConnect:
@@ -142,6 +143,7 @@ class TestFilesourceConnector:
             namespace=_NAMESPACE,
             namespace_id=_NAMESPACE_ID,
             org_name=_ORG_NAME,
+            owner_id=_OWNER_ID,
         )
         client.create_connector(config)
         self._connector_name = connector_name
@@ -175,6 +177,7 @@ class TestFilesourceConnector:
             pytest.param("artemis.namespace_id", _NAMESPACE_ID, id="namespace_id"),
             pytest.param("artemis.org_name", _ORG_NAME, id="org_name"),
             pytest.param("artemis.group_id", _CONNECTOR_ID, id="group_id"),
+            pytest.param("artemis.owner_id", _OWNER_ID, id="owner_id"),
         ],
     )
     def test_static_header_present_and_correct(

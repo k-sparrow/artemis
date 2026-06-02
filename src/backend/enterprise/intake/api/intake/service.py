@@ -112,6 +112,7 @@ async def intake_file(
         f"/namespaces/{request.namespace_id}/objects",
         files={"file": (request.display_name, data, content_type)},
         params=params,
+        headers={"X-Owner-Id": str(request.owner_id)},
     )
     if upload_resp.status_code != status.HTTP_202_ACCEPTED:
         raise StorageServiceError(upload_resp.status_code, upload_resp.text)

@@ -23,6 +23,7 @@ def render_filesystem_connector(
     namespace: str,
     namespace_id: str,
     org_name: str,
+    owner_id: str,
     recursive: bool = True,
 ) -> dict[str, Any]:
     """Render a Camel FileSource connector config.
@@ -98,6 +99,7 @@ def render_filesystem_connector(
                     "InjectNamespaceIdHeader",
                     "InjectOrgNameHeader",
                     "InjectGroupIdHeader",
+                    "InjectOwnerIdHeader",
                 ]
             ),
             # ── Key transforms ───────────────────────────────────────────────
@@ -157,5 +159,10 @@ def render_filesystem_connector(
             ),
             "transforms.InjectGroupIdHeader.header": "artemis.group_id",
             "transforms.InjectGroupIdHeader.value.literal": connector_id,
+            "transforms.InjectOwnerIdHeader.type": (
+                "org.apache.kafka.connect.transforms.InsertHeader"
+            ),
+            "transforms.InjectOwnerIdHeader.header": "artemis.owner_id",
+            "transforms.InjectOwnerIdHeader.value.literal": owner_id,
         },
     }
