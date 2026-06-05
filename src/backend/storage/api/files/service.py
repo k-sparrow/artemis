@@ -52,12 +52,18 @@ async def upload_file(
     session: AsyncSession,
     bucket: str,
     namespace_id: uuid.UUID,
+    caller_owner_id: uuid.UUID,
     filename: str | None,
     content_type: str | None,
     data: bytes,
     group_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
-    await _fetch_namespace(session=session, namespace_id=namespace_id)
+    await _fetch_namespace(
+        session=session,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+        require_write=True,
+    )
     task_id = uuid.uuid4()
     source_label = filename or str(uuid.uuid4())
     obj_id = uuid.uuid5(namespace_id, source_label)
@@ -95,13 +101,19 @@ async def reingest_file(
     session: AsyncSession,
     bucket: str,
     namespace_id: uuid.UUID,
+    caller_owner_id: uuid.UUID,
     obj_id: uuid.UUID,
     filename: str | None,
     content_type: str | None,
     data: bytes,
     group_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
-    await _fetch_namespace(session=session, namespace_id=namespace_id)
+    await _fetch_namespace(
+        session=session,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+        require_write=True,
+    )
     await _fetch_ingested_object(
         session=session, namespace_id=namespace_id, obj_id=obj_id
     )
@@ -143,6 +155,7 @@ async def delete_file(
     session: AsyncSession,
     bucket: str,
     namespace_id: uuid.UUID,
+    caller_owner_id: uuid.UUID,
     obj_id: uuid.UUID,
     task_id: uuid.UUID,
 ) -> None:
@@ -151,7 +164,12 @@ async def delete_file(
     The MinIO PUT fires an S3 event → Kafka → RabbitMQ sink → Celery worker,
     which performs the actual hard-delete of the Qdrant vectors and S3 objects.
     """
-    await _fetch_namespace(session=session, namespace_id=namespace_id)
+    await _fetch_namespace(
+        session=session,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+        require_write=True,
+    )
     ingested = await _fetch_ingested_object(
         session=session, namespace_id=namespace_id, obj_id=obj_id
     )
@@ -186,13 +204,19 @@ async def delete_group(
     session: AsyncSession,
     bucket: str,
     namespace_id: uuid.UUID,
+    caller_owner_id: uuid.UUID,
     group_id: uuid.UUID,
 ) -> list[uuid.UUID]:
     """Tombstone all objects belonging to a group.
 
     Returns the list of task_ids dispatched (one per object).
     """
-    await _fetch_namespace(session=session, namespace_id=namespace_id)
+    await _fetch_namespace(
+        session=session,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+        require_write=True,
+    )
     result = await session.execute(
         sa.select(IngestedObject).where(
             IngestedObject.namespace_id == namespace_id,
@@ -232,9 +256,14 @@ async def delete_group(
 async def list_files(
     session: AsyncSession,
     namespace_id: uuid.UUID,
+    caller_owner_id: uuid.UUID,
     group_id: uuid.UUID | None = None,
 ) -> list[IngestedObject]:
-    await _fetch_namespace(session=session, namespace_id=namespace_id)
+    await _fetch_namespace(
+        session=session,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+    )
     filters = [IngestedObject.namespace_id == namespace_id]
     if group_id is not None:
         filters.append(IngestedObject.group_id == group_id)
@@ -245,8 +274,13 @@ async def list_files(
 async def list_tasks(
     session: AsyncSession,
     namespace_id: uuid.UUID,
+    caller_owner_id: uuid.UUID,
 ) -> list[IngestionTask]:
-    await _fetch_namespace(session=session, namespace_id=namespace_id)
+    await _fetch_namespace(
+        session=session,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+    )
     result = await session.execute(
         sa.select(IngestionTask).where(IngestionTask.namespace_id == namespace_id)
     )
@@ -256,9 +290,14 @@ async def list_tasks(
 async def get_task_status(
     session: AsyncSession,
     namespace_id: uuid.UUID,
+    caller_owner_id: uuid.UUID,
     task_id: uuid.UUID,
 ) -> IngestionTask:
-    await _fetch_namespace(session=session, namespace_id=namespace_id)
+    await _fetch_namespace(
+        session=session,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+    )
     result = await session.execute(
         sa.select(IngestionTask).where(
             IngestionTask.task_id == task_id,

@@ -18,11 +18,13 @@ from fastapi.testclient import TestClient
 
 from src.backend.storage.api.models import NamespaceType
 from src.backend.storage.api.namespaces.exceptions import (
-    InvalidOwnerIdError,
     NamespaceAlreadyExistsError,
     OnlyPrivateNamespaceCanBeRenamedError,
 )
-from src.backend.storage.api.exceptions import NamespaceNotFoundError
+from src.backend.storage.api.exceptions import (
+    NamespaceAccessDeniedError,
+    NamespaceNotFoundError,
+)
 
 _SERVICE = "src.backend.storage.api.namespaces.service"
 
@@ -73,8 +75,6 @@ class TestCreateNamespace:
         assert response.json()["name"] == "my-project"
 
     def test_shared_without_name_returns_422(self, client: TestClient) -> None:
-        # Rejected by NamespaceCreate.shared_requires_name model_validator before
-        # the service is ever called.
         response = client.post(
             "/namespaces",
             json={"type": "shared"},
@@ -100,21 +100,17 @@ class TestCreateNamespace:
             )
         assert response.status_code == 409
 
-    def test_invalid_owner_id_returns_400(self, client: TestClient) -> None:
-        with patch(
-            f"{_SERVICE}.parse_owner_id",
-            side_effect=InvalidOwnerIdError(),
-        ):
-            response = client.post(
-                "/namespaces",
-                json={"type": "private"},
-                headers={"X-Owner-Id": "not-a-uuid"},
-            )
-        assert response.status_code == 400
+    def test_invalid_owner_id_returns_401(self, client: TestClient) -> None:
+        response = client.post(
+            "/namespaces",
+            json={"type": "private"},
+            headers={"X-Owner-Id": "not-a-uuid"},
+        )
+        assert response.status_code == 401
 
-    def test_missing_owner_header_returns_422(self, client: TestClient) -> None:
+    def test_missing_owner_header_returns_401(self, client: TestClient) -> None:
         response = client.post("/namespaces", json={"type": "private"})
-        assert response.status_code == 422
+        assert response.status_code == 401
 
     def test_missing_type_returns_422(self, client: TestClient) -> None:
         response = client.post("/namespaces", json={}, headers={"X-Owner-Id": OWNER_ID})
@@ -142,9 +138,49 @@ class TestListNamespaces:
         assert response.status_code == 200
         assert response.json() == []
 
-    def test_missing_owner_header_returns_422(self, client: TestClient) -> None:
+    def test_missing_owner_header_returns_401(self, client: TestClient) -> None:
         response = client.get("/namespaces")
-        assert response.status_code == 422
+        assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# GET /namespaces/by-name/{name}
+# ---------------------------------------------------------------------------
+
+
+class TestGetNamespaceByName:
+    def test_returns_namespace(self, client: TestClient) -> None:
+        ns = _namespace(NamespaceType.SHARED, name="acme")
+        with patch(f"{_SERVICE}.get_namespace_by_name", new=AsyncMock(return_value=ns)):
+            response = client.get(
+                "/namespaces/by-name/acme", headers={"X-Owner-Id": OWNER_ID}
+            )
+        assert response.status_code == 200
+        assert response.json()["name"] == "acme"
+
+    def test_not_found_returns_404(self, client: TestClient) -> None:
+        with patch(
+            f"{_SERVICE}.get_namespace_by_name",
+            new=AsyncMock(side_effect=NamespaceNotFoundError()),
+        ):
+            response = client.get(
+                "/namespaces/by-name/missing", headers={"X-Owner-Id": OWNER_ID}
+            )
+        assert response.status_code == 404
+
+    def test_access_denied_returns_403(self, client: TestClient) -> None:
+        with patch(
+            f"{_SERVICE}.get_namespace_by_name",
+            new=AsyncMock(side_effect=NamespaceAccessDeniedError()),
+        ):
+            response = client.get(
+                "/namespaces/by-name/acme", headers={"X-Owner-Id": OWNER_ID}
+            )
+        assert response.status_code == 403
+
+    def test_missing_owner_header_returns_401(self, client: TestClient) -> None:
+        response = client.get("/namespaces/by-name/acme")
+        assert response.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +192,9 @@ class TestGetNamespace:
     def test_returns_namespace(self, client: TestClient) -> None:
         ns = _namespace()
         with patch(f"{_SERVICE}.get_namespace", new=AsyncMock(return_value=ns)):
-            response = client.get(f"/namespaces/{ns.id}")
+            response = client.get(
+                f"/namespaces/{ns.id}", headers={"X-Owner-Id": OWNER_ID}
+            )
         assert response.status_code == 200
         assert response.json()["id"] == str(ns.id)
 
@@ -165,11 +203,29 @@ class TestGetNamespace:
             f"{_SERVICE}.get_namespace",
             new=AsyncMock(side_effect=NamespaceNotFoundError()),
         ):
-            response = client.get(f"/namespaces/{uuid.uuid4()}")
+            response = client.get(
+                f"/namespaces/{uuid.uuid4()}", headers={"X-Owner-Id": OWNER_ID}
+            )
         assert response.status_code == 404
 
+    def test_access_denied_returns_403(self, client: TestClient) -> None:
+        with patch(
+            f"{_SERVICE}.get_namespace",
+            new=AsyncMock(side_effect=NamespaceAccessDeniedError()),
+        ):
+            response = client.get(
+                f"/namespaces/{uuid.uuid4()}", headers={"X-Owner-Id": OWNER_ID}
+            )
+        assert response.status_code == 403
+
+    def test_missing_owner_header_returns_401(self, client: TestClient) -> None:
+        response = client.get(f"/namespaces/{uuid.uuid4()}")
+        assert response.status_code == 401
+
     def test_invalid_namespace_id_returns_422(self, client: TestClient) -> None:
-        response = client.get("/namespaces/not-a-uuid")
+        response = client.get(
+            "/namespaces/not-a-uuid", headers={"X-Owner-Id": OWNER_ID}
+        )
         assert response.status_code == 422
 
 
@@ -182,7 +238,11 @@ class TestRenameNamespace:
     def test_renames_and_returns_updated_namespace(self, client: TestClient) -> None:
         ns = _namespace(name="new-name")
         with patch(f"{_SERVICE}.rename_namespace", new=AsyncMock(return_value=ns)):
-            response = client.patch(f"/namespaces/{ns.id}", json={"name": "new-name"})
+            response = client.patch(
+                f"/namespaces/{ns.id}",
+                json={"name": "new-name"},
+                headers={"X-Owner-Id": OWNER_ID},
+            )
         assert response.status_code == 200
         assert response.json()["name"] == "new-name"
 
@@ -192,7 +252,9 @@ class TestRenameNamespace:
             new=AsyncMock(side_effect=OnlyPrivateNamespaceCanBeRenamedError()),
         ):
             response = client.patch(
-                f"/namespaces/{uuid.uuid4()}", json={"name": "new-name"}
+                f"/namespaces/{uuid.uuid4()}",
+                json={"name": "new-name"},
+                headers={"X-Owner-Id": OWNER_ID},
             )
         assert response.status_code == 409
 
@@ -202,12 +264,36 @@ class TestRenameNamespace:
             new=AsyncMock(side_effect=NamespaceNotFoundError()),
         ):
             response = client.patch(
-                f"/namespaces/{uuid.uuid4()}", json={"name": "new-name"}
+                f"/namespaces/{uuid.uuid4()}",
+                json={"name": "new-name"},
+                headers={"X-Owner-Id": OWNER_ID},
             )
         assert response.status_code == 404
 
+    def test_access_denied_returns_403(self, client: TestClient) -> None:
+        with patch(
+            f"{_SERVICE}.rename_namespace",
+            new=AsyncMock(side_effect=NamespaceAccessDeniedError()),
+        ):
+            response = client.patch(
+                f"/namespaces/{uuid.uuid4()}",
+                json={"name": "new-name"},
+                headers={"X-Owner-Id": OWNER_ID},
+            )
+        assert response.status_code == 403
+
+    def test_missing_owner_header_returns_401(self, client: TestClient) -> None:
+        response = client.patch(
+            f"/namespaces/{uuid.uuid4()}", json={"name": "new-name"}
+        )
+        assert response.status_code == 401
+
     def test_missing_name_returns_422(self, client: TestClient) -> None:
-        response = client.patch(f"/namespaces/{uuid.uuid4()}", json={})
+        response = client.patch(
+            f"/namespaces/{uuid.uuid4()}",
+            json={},
+            headers={"X-Owner-Id": OWNER_ID},
+        )
         assert response.status_code == 422
 
 
@@ -221,7 +307,9 @@ class TestSoftDeleteNamespace:
         with patch(
             f"{_SERVICE}.soft_delete_namespace", new=AsyncMock(return_value=None)
         ):
-            response = client.delete(f"/namespaces/{uuid.uuid4()}")
+            response = client.delete(
+                f"/namespaces/{uuid.uuid4()}", headers={"X-Owner-Id": OWNER_ID}
+            )
         assert response.status_code == 202
 
     def test_not_found_returns_404(self, client: TestClient) -> None:
@@ -229,5 +317,21 @@ class TestSoftDeleteNamespace:
             f"{_SERVICE}.soft_delete_namespace",
             new=AsyncMock(side_effect=NamespaceNotFoundError()),
         ):
-            response = client.delete(f"/namespaces/{uuid.uuid4()}")
+            response = client.delete(
+                f"/namespaces/{uuid.uuid4()}", headers={"X-Owner-Id": OWNER_ID}
+            )
         assert response.status_code == 404
+
+    def test_access_denied_returns_403(self, client: TestClient) -> None:
+        with patch(
+            f"{_SERVICE}.soft_delete_namespace",
+            new=AsyncMock(side_effect=NamespaceAccessDeniedError()),
+        ):
+            response = client.delete(
+                f"/namespaces/{uuid.uuid4()}", headers={"X-Owner-Id": OWNER_ID}
+            )
+        assert response.status_code == 403
+
+    def test_missing_owner_header_returns_401(self, client: TestClient) -> None:
+        response = client.delete(f"/namespaces/{uuid.uuid4()}")
+        assert response.status_code == 401

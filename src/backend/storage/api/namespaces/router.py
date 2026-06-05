@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Header, status
+from fastapi import APIRouter, status
 
-from src.backend.storage.api.dependencies import db_session_dependency
+from src.backend.storage.api.dependencies import (
+    caller_owner_id_dependency,
+    db_session_dependency,
+)
 from src.backend.storage.api.namespaces import service
 from src.backend.storage.api.namespaces.schemas import (
     NamespaceCreate,
@@ -30,17 +33,16 @@ log = get_logger(__name__)
 async def create_namespace_endpoint(
     body: NamespaceCreate,
     session: db_session_dependency,
-    owner_id: str = Header(..., alias="X-Owner-Id"),
+    caller_owner_id: caller_owner_id_dependency,
 ) -> NamespaceResponse:
-    owner_uuid = service.parse_owner_id(owner_id)
     namespace = await service.create_namespace(
         session=session,
-        owner_id=owner_uuid,
+        owner_id=caller_owner_id,
         type_=body.type,
         name=body.name,
     )
     log.info(
-        "namespace_created", id=namespace.id, type=namespace.type, owner=owner_uuid
+        "namespace_created", id=namespace.id, type=namespace.type, owner=caller_owner_id
     )
     return NamespaceResponse.model_validate(namespace)
 
@@ -48,10 +50,11 @@ async def create_namespace_endpoint(
 @router.get("", response_model=list[NamespaceResponse])
 async def list_namespaces_endpoint(
     session: db_session_dependency,
-    owner_id: str = Header(..., alias="X-Owner-Id"),
+    caller_owner_id: caller_owner_id_dependency,
 ) -> list[NamespaceResponse]:
-    owner_uuid = service.parse_owner_id(owner_id)
-    namespaces = await service.list_namespaces(session=session, owner_id=owner_uuid)
+    namespaces = await service.list_namespaces(
+        session=session, owner_id=caller_owner_id
+    )
     return [NamespaceResponse.model_validate(n) for n in namespaces]
 
 
@@ -59,8 +62,11 @@ async def list_namespaces_endpoint(
 async def get_namespace_by_name_endpoint(
     name: str,
     session: db_session_dependency,
+    caller_owner_id: caller_owner_id_dependency,
 ) -> NamespaceResponse:
-    namespace = await service.get_namespace_by_name(session=session, name=name)
+    namespace = await service.get_namespace_by_name(
+        session=session, name=name, caller_owner_id=caller_owner_id
+    )
     return NamespaceResponse.model_validate(namespace)
 
 
@@ -68,8 +74,13 @@ async def get_namespace_by_name_endpoint(
 async def get_namespace_endpoint(
     namespace_id: uuid.UUID,
     session: db_session_dependency,
+    caller_owner_id: caller_owner_id_dependency,
 ) -> NamespaceResponse:
-    namespace = await service.get_namespace(session=session, namespace_id=namespace_id)
+    namespace = await service.get_namespace(
+        session=session,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+    )
     return NamespaceResponse.model_validate(namespace)
 
 
@@ -78,9 +89,13 @@ async def rename_namespace_endpoint(
     namespace_id: uuid.UUID,
     body: NamespaceRename,
     session: db_session_dependency,
+    caller_owner_id: caller_owner_id_dependency,
 ) -> NamespaceResponse:
     namespace = await service.rename_namespace(
-        session=session, namespace_id=namespace_id, new_name=body.name
+        session=session,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+        new_name=body.name,
     )
     return NamespaceResponse.model_validate(namespace)
 
@@ -89,7 +104,12 @@ async def rename_namespace_endpoint(
 async def soft_delete_namespace_endpoint(
     namespace_id: uuid.UUID,
     session: db_session_dependency,
+    caller_owner_id: caller_owner_id_dependency,
 ) -> None:
-    await service.soft_delete_namespace(session=session, namespace_id=namespace_id)
+    await service.soft_delete_namespace(
+        session=session,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+    )
     log.info("namespace_soft_deleted", id=namespace_id)
     # TODO(epic-1.2): dispatch delete_namespace Celery task via apply_async()

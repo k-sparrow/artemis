@@ -38,12 +38,16 @@ from src.backend.enterprise.intake.api.intake.schemas import (
 )
 
 
-async def _verify_namespace(http: httpx.AsyncClient, namespace_id: uuid.UUID) -> None:
-    """Verify the namespace exists on the storage service.
-
-    Raises StorageServiceError (→ 422) if the namespace is not found.
-    """
-    resp = await http.get(f"/namespaces/{namespace_id}")
+async def _verify_namespace(
+    http: httpx.AsyncClient,
+    namespace_id: uuid.UUID,
+    owner_id: uuid.UUID,
+) -> None:
+    """Verify the namespace exists and is accessible by the caller."""
+    resp = await http.get(
+        f"/namespaces/{namespace_id}",
+        headers={"X-Owner-Id": str(owner_id)},
+    )
     if resp.status_code == status.HTTP_404_NOT_FOUND:
         raise NamespaceNotFoundError(str(namespace_id))
     if resp.status_code != status.HTTP_200_OK:
@@ -99,7 +103,7 @@ async def intake_file(
 ) -> uuid.UUID:
     """Verify namespace → resolve bytes → infer content type → upload to storage."""
     # 1. Verify the namespace exists.
-    await _verify_namespace(http, request.namespace_id)
+    await _verify_namespace(http, request.namespace_id, request.owner_id)
 
     # 2. Materialise bytes and infer content type from the source.
     data, content_type = await _resolve_bytes(request.source)

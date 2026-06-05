@@ -69,17 +69,27 @@ async def create_namespace(
 async def get_namespace(
     session: AsyncSession,
     namespace_id: uuid.UUID,
+    caller_owner_id: uuid.UUID,
 ) -> Namespace:
-    return await _fetch_namespace(session=session, namespace_id=namespace_id)
+    return await _fetch_namespace(
+        session=session,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+    )
 
 
 async def get_namespace_by_name(
     session: AsyncSession,
     name: str,
+    caller_owner_id: uuid.UUID,
 ) -> Namespace:
     """Look up a SHARED namespace by name, computing UUID5 server-side."""
     ns_id = uuid.uuid5(ARTEMIS_NS, name)
-    return await _fetch_namespace(session=session, namespace_id=ns_id)
+    return await _fetch_namespace(
+        session=session,
+        namespace_id=ns_id,
+        caller_owner_id=caller_owner_id,
+    )
 
 
 async def list_namespaces(
@@ -101,9 +111,15 @@ async def list_namespaces(
 async def rename_namespace(
     session: AsyncSession,
     namespace_id: uuid.UUID,
+    caller_owner_id: uuid.UUID,
     new_name: str,
 ) -> Namespace:
-    namespace = await _fetch_namespace(session=session, namespace_id=namespace_id)
+    namespace = await _fetch_namespace(
+        session=session,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+        require_write=True,
+    )
     if namespace.type != NamespaceType.PRIVATE:
         raise OnlyPrivateNamespaceCanBeRenamedError()
     namespace.name = new_name
@@ -116,7 +132,13 @@ async def rename_namespace(
 async def soft_delete_namespace(
     session: AsyncSession,
     namespace_id: uuid.UUID,
+    caller_owner_id: uuid.UUID,
 ) -> None:
-    namespace = await _fetch_namespace(session=session, namespace_id=namespace_id)
+    namespace = await _fetch_namespace(
+        session=session,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+        require_write=True,
+    )
     namespace.deleted_at = datetime.now(timezone.utc)
     await session.commit()

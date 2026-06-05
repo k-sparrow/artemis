@@ -66,6 +66,17 @@ class TestFilesystemSource:
         mock_http.get.assert_called_once()
         assert mock_http.get.call_args.args[0] == f"/namespaces/{_NAMESPACE_ID}"
 
+    def test_owner_id_forwarded_on_namespace_check(
+        self, client: TestClient, mock_http: MagicMock, tmp_path: Path
+    ) -> None:
+        f = tmp_path / "doc.pdf"
+        f.write_bytes(b"content")
+
+        _post(client, {"type": "filesystem", "path": str(f)})
+
+        headers = mock_http.get.call_args.kwargs.get("headers", {})
+        assert headers.get("X-Owner-Id") == str(_OWNER_ID)
+
     def test_file_bytes_uploaded_to_storage(
         self, client: TestClient, mock_http: MagicMock, tmp_path: Path
     ) -> None:

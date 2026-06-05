@@ -12,6 +12,7 @@ from fastapi import APIRouter, Query, UploadFile, status
 
 from src.backend.storage.api.config import settings
 from src.backend.storage.api.dependencies import (
+    caller_owner_id_dependency,
     db_session_dependency,
     minio_client_dependency,
 )
@@ -43,6 +44,7 @@ async def upload_object_endpoint(
     file: UploadFile,
     session: db_session_dependency,
     minio: minio_client_dependency,
+    caller_owner_id: caller_owner_id_dependency,
     group_id: uuid.UUID | None = Query(default=None),
 ) -> ObjectUploadResponse:
     data = await file.read()
@@ -51,6 +53,7 @@ async def upload_object_endpoint(
         session=session,
         bucket=settings.S3_ARTEMIS_BUCKET,
         namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
         filename=file.filename,
         content_type=file.content_type,
         data=data,
@@ -76,6 +79,7 @@ async def reingest_object_endpoint(
     file: UploadFile,
     session: db_session_dependency,
     minio: minio_client_dependency,
+    caller_owner_id: caller_owner_id_dependency,
     group_id: uuid.UUID | None = Query(default=None),
 ) -> ObjectUploadResponse:
     data = await file.read()
@@ -84,6 +88,7 @@ async def reingest_object_endpoint(
         session=session,
         bucket=settings.S3_ARTEMIS_BUCKET,
         namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
         obj_id=obj_id,
         filename=file.filename,
         content_type=file.content_type,
@@ -106,12 +111,14 @@ async def delete_group_endpoint(
     group_id: uuid.UUID,
     session: db_session_dependency,
     minio: minio_client_dependency,
+    caller_owner_id: caller_owner_id_dependency,
 ) -> GroupDeleteResponse:
     task_ids = await service.delete_group(
         minio=minio,
         session=session,
         bucket=settings.S3_ARTEMIS_BUCKET,
         namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
         group_id=group_id,
     )
     log.info(
@@ -129,6 +136,7 @@ async def delete_object_endpoint(
     obj_id: uuid.UUID,
     session: db_session_dependency,
     minio: minio_client_dependency,
+    caller_owner_id: caller_owner_id_dependency,
 ) -> None:
     task_id = uuid.uuid4()
     await service.delete_file(
@@ -136,6 +144,7 @@ async def delete_object_endpoint(
         session=session,
         bucket=settings.S3_ARTEMIS_BUCKET,
         namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
         obj_id=obj_id,
         task_id=task_id,
     )
@@ -153,10 +162,14 @@ async def delete_object_endpoint(
 async def list_objects_endpoint(
     namespace_id: uuid.UUID,
     session: db_session_dependency,
+    caller_owner_id: caller_owner_id_dependency,
     group_id: uuid.UUID | None = Query(default=None),
 ) -> list[IngestedObjectResponse]:
     objects = await service.list_files(
-        session=session, namespace_id=namespace_id, group_id=group_id
+        session=session,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+        group_id=group_id,
     )
     return [IngestedObjectResponse.model_validate(o) for o in objects]
 
@@ -165,8 +178,13 @@ async def list_objects_endpoint(
 async def list_tasks_endpoint(
     namespace_id: uuid.UUID,
     session: db_session_dependency,
+    caller_owner_id: caller_owner_id_dependency,
 ) -> list[IngestionTaskResponse]:
-    tasks = await service.list_tasks(session=session, namespace_id=namespace_id)
+    tasks = await service.list_tasks(
+        session=session,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+    )
     return [IngestionTaskResponse.model_validate(t) for t in tasks]
 
 
@@ -175,8 +193,12 @@ async def get_task_status_endpoint(
     namespace_id: uuid.UUID,
     task_id: uuid.UUID,
     session: db_session_dependency,
+    caller_owner_id: caller_owner_id_dependency,
 ) -> IngestionTaskResponse:
     task = await service.get_task_status(
-        session=session, namespace_id=namespace_id, task_id=task_id
+        session=session,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+        task_id=task_id,
     )
     return IngestionTaskResponse.model_validate(task)

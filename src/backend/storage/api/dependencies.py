@@ -1,6 +1,7 @@
+import uuid
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, Header, HTTPException, status
 from minio import Minio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -11,6 +12,8 @@ __all__ = [
     "get_minio_client",
     "get_minio_client_sync",
     "get_db_session",
+    "get_caller_owner_id",
+    "caller_owner_id_dependency",
     "minio_client_dependency",
     "session_factory",
     "db_session_dependency",
@@ -60,3 +63,34 @@ async def get_db_session():
 
 
 db_session_dependency = Annotated[AsyncSession, Depends(get_db_session)]
+
+
+# ---------------------------------------------------------------------------
+# Caller identity (from gateway-injected X-Owner-Id header)
+# ---------------------------------------------------------------------------
+
+
+async def get_caller_owner_id(
+    owner_id: str | None = Header(default=None, alias="X-Owner-Id"),
+) -> uuid.UUID:
+    """Parse the X-Owner-Id header injected by the API gateway.
+
+    Returns the caller's owner UUID. Raises 401 if the header is absent
+    or not a valid UUID — the gateway is responsible for authentication so
+    a missing header means the request bypassed it or is unauthenticated.
+    """
+    if owner_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing X-Owner-Id header",
+        )
+    try:
+        return uuid.UUID(owner_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid X-Owner-Id header",
+        )
+
+
+caller_owner_id_dependency = Annotated[uuid.UUID, Depends(get_caller_owner_id)]
