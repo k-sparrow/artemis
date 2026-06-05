@@ -141,6 +141,7 @@ def mcp_container(
         .with_env("STORAGE_SERVICE_URL", wiremock_url)
         .with_env("INDEXING_SERVICE_URL", wiremock_url)
         .with_env("STUB_OWNER_ID", _STUB_OWNER_ID)
+        .with_env("ENABLE_UPLOAD", "true")
         .with_env("DEBUG", "true")
         .with_exposed_ports(_MCP_PORT)
     )

@@ -151,15 +151,6 @@ async def get_object(
     return resp.json()
 
 
-@mcp.tool(
-    annotations=ToolAnnotations(
-        title="Upload File",
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=False,
-        openWorldHint=False,
-    )
-)
 async def upload_file(
     namespace_id: Annotated[
         str,
@@ -198,6 +189,18 @@ async def upload_file(
     )
     resp.raise_for_status()
     return resp.json()
+
+
+if settings.ENABLE_UPLOAD:
+    mcp.tool(
+        annotations=ToolAnnotations(
+            title="Upload File",
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        )
+    )(upload_file)
 
 
 @mcp.tool(

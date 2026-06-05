@@ -212,6 +212,17 @@ _DIAGNOSTIC_SERVICES = [
 ]
 
 
+@pytest.fixture(scope="session", autouse=True)
+def mcp_enable_upload() -> None:
+    """Enable the upload_file MCP tool for e2e tests.
+
+    The tool is off by default (requires gateway auth); e2e tests run against
+    the full compose stack where ownership is not yet enforced end-to-end,
+    so enabling it here is safe for test purposes.
+    """
+    os.environ["MCP_ENABLE_UPLOAD"] = "true"
+
+
 @pytest.fixture(scope="session")
 def compose(
     compose_file: Path,
@@ -219,6 +230,7 @@ def compose(
     tei: str,
     retrieval_mode: str,  # sets RETRIEVAL_MODE env var before compose starts
     reranker_mode: str,  # sets COLBERT_RERANKER_URL (or nothing) before compose starts
+    mcp_enable_upload: None,  # sets MCP_ENABLE_UPLOAD before compose starts
     request: pytest.FixtureRequest,
 ) -> DockerCompose:
     dc = DockerCompose(

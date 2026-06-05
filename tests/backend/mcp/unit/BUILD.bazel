@@ -42,3 +42,22 @@ py_test(
         requirement("pytest-asyncio"),
     ],
 )
+
+py_test(
+    name = "test_tool_contract_upload_enabled",
+    srcs = ["test_tool_contract.py"],
+    data = ["tool_schema_snapshot_upload_enabled.json"],
+    env = {
+        "ENABLE_UPLOAD": "true",
+        "INDEXING_SERVICE_URL": "http://localhost:10000",
+        "STORAGE_SERVICE_URL": "http://localhost:7000",
+    },
+    tags = ["unit"],
+    deps = [
+        "//src/backend/mcp/api:settings",
+        "//src/backend/mcp/api:tools",
+        requirement("mcp"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+    ],
+)

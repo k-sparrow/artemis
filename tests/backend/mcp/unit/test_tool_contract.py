@@ -29,9 +29,15 @@ from pathlib import Path
 
 import pytest
 
+from src.backend.mcp.api.settings import settings
 from src.backend.mcp.api.tools import mcp
 
-_SNAPSHOT_PATH = Path(__file__).parent / "tool_schema_snapshot.json"
+_SNAPSHOT_DIR = Path(__file__).parent
+
+
+def _snapshot_path() -> Path:
+    suffix = "_upload_enabled" if settings.ENABLE_UPLOAD else ""
+    return _SNAPSHOT_DIR / f"tool_schema_snapshot{suffix}.json"
 
 
 def _dump_tools(tools) -> list[dict]:
@@ -53,17 +59,17 @@ def _dump_tools(tools) -> list[dict]:
 async def test_tool_schema_contract():
     tools = await mcp.list_tools()
     current = _dump_tools(tools)
+    path = _snapshot_path()
 
     if os.environ.get("UPDATE_SNAPSHOTS"):
-        _SNAPSHOT_PATH.write_text(json.dumps(current, indent=2) + "\n")
+        path.write_text(json.dumps(current, indent=2) + "\n")
         return
 
-    assert _SNAPSHOT_PATH.exists(), (
-        f"Snapshot not found at {_SNAPSHOT_PATH}. "
-        "Run with UPDATE_SNAPSHOTS=1 to generate it."
+    assert path.exists(), (
+        f"Snapshot not found at {path}. " "Run with UPDATE_SNAPSHOTS=1 to generate it."
     )
 
-    snapshot = json.loads(_SNAPSHOT_PATH.read_text())
+    snapshot = json.loads(path.read_text())
     assert current == snapshot, (
         "MCP tool schema has changed. If this is intentional, regenerate the snapshot:\n\n"  # noqa: E501
         "    UPDATE_SNAPSHOTS=1 pytest tests/backend/mcp/unit/test_tool_contract.py\n\n"

@@ -192,47 +192,5 @@
       "idempotentHint": true,
       "openWorldHint": false
     }
-  },
-  {
-    "name": "upload_file",
-    "inputSchema": {
-      "properties": {
-        "namespace_id": {
-          "description": "UUID of the target namespace. Must exist before uploading.",
-          "title": "Namespace Id",
-          "type": "string"
-        },
-        "filename": {
-          "description": "Original filename including extension, e.g. 'report.pdf'.",
-          "title": "Filename",
-          "type": "string"
-        },
-        "content_base64": {
-          "description": "Base64-encoded file content.",
-          "title": "Content Base64",
-          "type": "string"
-        },
-        "content_type": {
-          "default": "application/octet-stream",
-          "description": "MIME type of the file, e.g. 'application/pdf' or 'text/markdown'. Defaults to 'application/octet-stream'.",
-          "title": "Content Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "namespace_id",
-        "filename",
-        "content_base64"
-      ],
-      "title": "upload_fileArguments",
-      "type": "object"
-    },
-    "annotations": {
-      "title": "Upload File",
-      "readOnlyHint": false,
-      "destructiveHint": false,
-      "idempotentHint": false,
-      "openWorldHint": false
-    }
   }
 ]

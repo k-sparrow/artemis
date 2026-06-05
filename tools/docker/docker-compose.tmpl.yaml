@@ -604,6 +604,7 @@ services:
     environment:
       STORAGE_SERVICE_URL: "http://backend-storage:7000"
       INDEXING_SERVICE_URL: "http://backend-indexing-ingestion:10000"
+      ENABLE_UPLOAD: "${MCP_ENABLE_UPLOAD:-false}"
     expose:
       - "11000"
     ports:
