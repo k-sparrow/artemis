@@ -120,8 +120,12 @@ async def _upsert_namespace(
 async def _soft_delete_namespace(
     http: httpx.AsyncClient,
     namespace_id: uuid.UUID,
+    owner_id: uuid.UUID,
 ) -> None:
-    resp = await http.delete(f"/namespaces/{namespace_id}")
+    resp = await http.delete(
+        f"/namespaces/{namespace_id}",
+        headers={"X-Owner-Id": str(owner_id)},
+    )
     if resp.status_code not in (
         http_status.HTTP_202_ACCEPTED,
         http_status.HTTP_404_NOT_FOUND,
@@ -133,10 +137,12 @@ async def _delete_group(
     http: httpx.AsyncClient,
     namespace_id: uuid.UUID,
     group_id: uuid.UUID,
+    owner_id: uuid.UUID,
 ) -> None:
     resp = await http.delete(
         f"/namespaces/{namespace_id}/objects",
         params={"group_id": str(group_id)},
+        headers={"X-Owner-Id": str(owner_id)},
     )
     if resp.status_code not in (
         http_status.HTTP_202_ACCEPTED,
@@ -261,6 +267,7 @@ async def delete_data_source(
     source_id: uuid.UUID,
 ) -> None:
     row = await _fetch_row(session, source_id)
+    owner_id = uuid.uuid5(ARTEMIS_NS, row.org_name)
 
     # Only soft-delete the namespace when no other active data source shares it.
     sibling_result = await session.execute(
@@ -281,10 +288,10 @@ async def delete_data_source(
 
     # Delete all objects that belong to this connector (group_id = source_id).
     # This is unconditional: each connector owns its own group regardless of siblings.
-    await _delete_group(http, row.namespace_id, source_id)
+    await _delete_group(http, row.namespace_id, source_id, owner_id)
 
     if not has_siblings:
-        await _soft_delete_namespace(http, row.namespace_id)
+        await _soft_delete_namespace(http, row.namespace_id, owner_id)
 
     row.deleted_at = datetime.now(timezone.utc)
     await session.commit()

@@ -183,14 +183,14 @@ class TestCreateDataSource:
             "/data-sources",
             json={"path": "/data/acme", "namespace": "acme", "org_name": "acme-corp"},
         )
-        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     def test_missing_path_returns_422(self, client: TestClient) -> None:
         resp = client.post(
             "/data-sources",
             json={"display_name": "Acme", "namespace": "acme", "org_name": "acme-corp"},
         )
-        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 
 class TestListDataSources:

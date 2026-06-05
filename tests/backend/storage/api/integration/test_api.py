@@ -72,7 +72,7 @@ class TestCreateNamespaceIntegration:
         ns_id = body["id"]
 
         # Verify round-trip: GET returns the same record
-        get_resp = client.get(f"/namespaces/{ns_id}")
+        get_resp = client.get(f"/namespaces/{ns_id}", headers={"X-Owner-Id": owner_id})
         assert get_resp.status_code == 200
         assert get_resp.json()["id"] == ns_id
         assert get_resp.json()["type"] == "private"
@@ -102,9 +102,9 @@ class TestCreateNamespaceIntegration:
         assert r2.status_code == 409
         assert r2.json()["id"] == expected_id
 
-    def test_missing_owner_id_header_returns_422(self, client: TestClient) -> None:
+    def test_missing_owner_id_header_returns_401(self, client: TestClient) -> None:
         response = client.post("/namespaces", json={"type": "private"})
-        assert response.status_code == 422
+        assert response.status_code == 401
 
     def test_shared_without_name_returns_422(
         self, client: TestClient, owner_id: str
@@ -116,13 +116,13 @@ class TestCreateNamespaceIntegration:
         )
         assert response.status_code == 422
 
-    def test_invalid_owner_id_returns_400(self, client: TestClient) -> None:
+    def test_invalid_owner_id_returns_401(self, client: TestClient) -> None:
         response = client.post(
             "/namespaces",
             json={"type": "private"},
             headers={"X-Owner-Id": "not-a-uuid"},
         )
-        assert response.status_code == 400
+        assert response.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -131,8 +131,12 @@ class TestCreateNamespaceIntegration:
 
 
 class TestGetNamespaceIntegration:
-    def test_get_missing_namespace_returns_404(self, client: TestClient) -> None:
-        response = client.get(f"/namespaces/{uuid.uuid4()}")
+    def test_get_missing_namespace_returns_404(
+        self, client: TestClient, owner_id: str
+    ) -> None:
+        response = client.get(
+            f"/namespaces/{uuid.uuid4()}", headers={"X-Owner-Id": owner_id}
+        )
         assert response.status_code == 404
 
     def test_get_by_name_returns_shared_namespace(
@@ -145,13 +149,20 @@ class TestGetNamespaceIntegration:
             headers={"X-Owner-Id": owner_id},
         ).json()
 
-        resp = client.get(f"/namespaces/by-name/{name}")
+        resp = client.get(
+            f"/namespaces/by-name/{name}", headers={"X-Owner-Id": owner_id}
+        )
         assert resp.status_code == 200
         assert resp.json()["id"] == created["id"]
         assert resp.json()["name"] == name
 
-    def test_get_by_name_missing_returns_404(self, client: TestClient) -> None:
-        resp = client.get("/namespaces/by-name/nonexistent-namespace")
+    def test_get_by_name_missing_returns_404(
+        self, client: TestClient, owner_id: str
+    ) -> None:
+        resp = client.get(
+            "/namespaces/by-name/nonexistent-namespace",
+            headers={"X-Owner-Id": owner_id},
+        )
         assert resp.status_code == 404
 
     def test_list_returns_only_owner_namespaces(self, client: TestClient) -> None:
@@ -176,9 +187,9 @@ class TestGetNamespaceIntegration:
         assert resp_b.status_code == 200
         assert len(resp_b.json()) == 1
 
-    def test_list_missing_owner_id_header_returns_422(self, client: TestClient) -> None:
+    def test_list_missing_owner_id_header_returns_401(self, client: TestClient) -> None:
         response = client.get("/namespaces")
-        assert response.status_code == 422
+        assert response.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -196,10 +207,14 @@ class TestRenameNamespaceIntegration:
             headers={"X-Owner-Id": owner_id},
         ).json()["id"]
 
-        patch_resp = client.patch(f"/namespaces/{ns_id}", json={"name": "renamed"})
+        patch_resp = client.patch(
+            f"/namespaces/{ns_id}",
+            json={"name": "renamed"},
+            headers={"X-Owner-Id": owner_id},
+        )
         assert patch_resp.status_code == 200
 
-        get_resp = client.get(f"/namespaces/{ns_id}")
+        get_resp = client.get(f"/namespaces/{ns_id}", headers={"X-Owner-Id": owner_id})
         assert get_resp.json()["name"] == "renamed"
 
     def test_rename_shared_returns_409(self, client: TestClient, owner_id: str) -> None:
@@ -209,11 +224,21 @@ class TestRenameNamespaceIntegration:
             headers={"X-Owner-Id": owner_id},
         ).json()["id"]
 
-        response = client.patch(f"/namespaces/{ns_id}", json={"name": "new-name"})
+        response = client.patch(
+            f"/namespaces/{ns_id}",
+            json={"name": "new-name"},
+            headers={"X-Owner-Id": owner_id},
+        )
         assert response.status_code == 409
 
-    def test_rename_missing_namespace_returns_404(self, client: TestClient) -> None:
-        response = client.patch(f"/namespaces/{uuid.uuid4()}", json={"name": "x"})
+    def test_rename_missing_namespace_returns_404(
+        self, client: TestClient, owner_id: str
+    ) -> None:
+        response = client.patch(
+            f"/namespaces/{uuid.uuid4()}",
+            json={"name": "x"},
+            headers={"X-Owner-Id": owner_id},
+        )
         assert response.status_code == 404
 
 
@@ -232,10 +257,17 @@ class TestDeleteNamespaceIntegration:
             headers={"X-Owner-Id": owner_id},
         ).json()["id"]
 
-        del_resp = client.delete(f"/namespaces/{ns_id}")
+        del_resp = client.delete(
+            f"/namespaces/{ns_id}", headers={"X-Owner-Id": owner_id}
+        )
         assert del_resp.status_code == 202
 
-        assert client.get(f"/namespaces/{ns_id}").status_code == 404
+        assert (
+            client.get(
+                f"/namespaces/{ns_id}", headers={"X-Owner-Id": owner_id}
+            ).status_code
+            == 404
+        )
 
     def test_deleted_namespace_excluded_from_list(
         self, client: TestClient, owner_id: str
@@ -245,14 +277,18 @@ class TestDeleteNamespaceIntegration:
             json={"type": "private"},
             headers={"X-Owner-Id": owner_id},
         ).json()["id"]
-        client.delete(f"/namespaces/{ns_id}")
+        client.delete(f"/namespaces/{ns_id}", headers={"X-Owner-Id": owner_id})
 
         resp = client.get("/namespaces", headers={"X-Owner-Id": owner_id})
         assert resp.status_code == 200
         assert all(ns["id"] != ns_id for ns in resp.json())
 
-    def test_delete_missing_namespace_returns_404(self, client: TestClient) -> None:
-        response = client.delete(f"/namespaces/{uuid.uuid4()}")
+    def test_delete_missing_namespace_returns_404(
+        self, client: TestClient, owner_id: str
+    ) -> None:
+        response = client.delete(
+            f"/namespaces/{uuid.uuid4()}", headers={"X-Owner-Id": owner_id}
+        )
         assert response.status_code == 404
 
     def test_double_delete_returns_404(self, client: TestClient, owner_id: str) -> None:
@@ -261,8 +297,10 @@ class TestDeleteNamespaceIntegration:
             json={"type": "private"},
             headers={"X-Owner-Id": owner_id},
         ).json()["id"]
-        client.delete(f"/namespaces/{ns_id}")
-        response = client.delete(f"/namespaces/{ns_id}")
+        client.delete(f"/namespaces/{ns_id}", headers={"X-Owner-Id": owner_id})
+        response = client.delete(
+            f"/namespaces/{ns_id}", headers={"X-Owner-Id": owner_id}
+        )
         assert response.status_code == 404
 
 
@@ -287,6 +325,7 @@ class TestUploadObjectIntegration:
         response = client.post(
             f"/namespaces/{ns_id}/objects",
             files=_file_bytes(),
+            headers={"X-Owner-Id": owner_id},
         )
         assert response.status_code == 202
         task_id = response.json()["task_id"]
@@ -300,10 +339,13 @@ class TestUploadObjectIntegration:
         contract = json.loads(stat.metadata.get("x-amz-meta-contract"))
         assert contract["upload_action"] == IngestionTaskType.CREATE
 
-    def test_upload_to_missing_namespace_returns_404(self, client: TestClient) -> None:
+    def test_upload_to_missing_namespace_returns_404(
+        self, client: TestClient, owner_id: str
+    ) -> None:
         response = client.post(
             f"/namespaces/{uuid.uuid4()}/objects",
             files=_file_bytes(),
+            headers={"X-Owner-Id": owner_id},
         )
         assert response.status_code == 404
 
@@ -333,6 +375,7 @@ class TestReingestObjectIntegration:
         response = client.put(
             f"/namespaces/{ns_id}/objects/{obj_id}",
             files=_file_bytes(b"updated content"),
+            headers={"X-Owner-Id": owner_id},
         )
         assert response.status_code == 202
         s3_key = f"{ns_id}/{obj_id}"
@@ -355,6 +398,7 @@ class TestReingestObjectIntegration:
         response = client.put(
             f"/namespaces/{ns_id}/objects/{uuid.uuid4()}",
             files=_file_bytes(),
+            headers={"X-Owner-Id": owner_id},
         )
         assert response.status_code == 404
 
@@ -382,7 +426,10 @@ class TestDeleteObjectIntegration:
         obj_id = _seed_ingested_object(storage_session_factory, ns_id)
         s3_key = f"{ns_id}/{obj_id}"
 
-        response = client.delete(f"/namespaces/{ns_id}/objects/{obj_id}")
+        response = client.delete(
+            f"/namespaces/{ns_id}/objects/{obj_id}",
+            headers={"X-Owner-Id": owner_id},
+        )
         assert response.status_code == 202
 
         import os
@@ -401,7 +448,10 @@ class TestDeleteObjectIntegration:
             headers={"X-Owner-Id": owner_id},
         ).json()["id"]
 
-        response = client.delete(f"/namespaces/{ns_id}/objects/{uuid.uuid4()}")
+        response = client.delete(
+            f"/namespaces/{ns_id}/objects/{uuid.uuid4()}",
+            headers={"X-Owner-Id": owner_id},
+        )
         assert response.status_code == 404
 
 
@@ -426,7 +476,9 @@ class TestListObjectsIntegration:
         )
         _seed_ingested_object(storage_session_factory, ns_id)
 
-        response = client.get(f"/namespaces/{ns_id}/objects")
+        response = client.get(
+            f"/namespaces/{ns_id}/objects", headers={"X-Owner-Id": owner_id}
+        )
         assert response.status_code == 200
         assert len(response.json()) == 1
 
@@ -453,7 +505,9 @@ class TestListObjectsIntegration:
         _seed_ingested_object(storage_session_factory, ns_a)
         _seed_ingested_object(storage_session_factory, ns_b)
 
-        resp_a = client.get(f"/namespaces/{ns_a}/objects")
+        resp_a = client.get(
+            f"/namespaces/{ns_a}/objects", headers={"X-Owner-Id": owner_id}
+        )
         assert len(resp_a.json()) == 1
         assert resp_a.json()[0]["namespace_id"] == str(ns_a)
 
@@ -472,7 +526,9 @@ class TestListObjectsIntegration:
         )
         obj_id = _seed_ingested_object(storage_session_factory, ns_id)
 
-        response = client.get(f"/namespaces/{ns_id}/objects")
+        response = client.get(
+            f"/namespaces/{ns_id}/objects", headers={"X-Owner-Id": owner_id}
+        )
         assert response.status_code == 200
         objects = response.json()
         assert len(objects) == 1
@@ -486,9 +542,11 @@ class TestListObjectsIntegration:
         assert o["group_id"] is None
 
     def test_list_objects_on_missing_namespace_returns_404(
-        self, client: TestClient
+        self, client: TestClient, owner_id: str
     ) -> None:
-        response = client.get(f"/namespaces/{uuid.uuid4()}/objects")
+        response = client.get(
+            f"/namespaces/{uuid.uuid4()}/objects", headers={"X-Owner-Id": owner_id}
+        )
         assert response.status_code == 404
 
     def test_list_objects_filtered_by_group_id(
@@ -513,7 +571,9 @@ class TestListObjectsIntegration:
         )
 
         resp = client.get(
-            f"/namespaces/{ns_id}/objects", params={"group_id": str(group_id)}
+            f"/namespaces/{ns_id}/objects",
+            params={"group_id": str(group_id)},
+            headers={"X-Owner-Id": owner_id},
         )
         assert resp.status_code == 200
         objects = resp.json()
@@ -539,6 +599,7 @@ class TestListObjectsIntegration:
             f"/namespaces/{ns_id}/objects",
             files=_file_bytes(),
             params={"group_id": str(group_id)},
+            headers={"X-Owner-Id": owner_id},
         )
         assert response.status_code == 202
         s3_key = f"{ns_id}/{uuid.uuid5(uuid.UUID(ns_id), 'report.pdf')}"

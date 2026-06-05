@@ -39,7 +39,7 @@ def _namespace_not_found_handler(
     req: Request, exc: NamespaceNotFoundError
 ) -> JSONResponse:
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content={"detail": f"Namespace not found: {exc.namespace_id}"},
     )
 

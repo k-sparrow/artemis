@@ -93,7 +93,8 @@ CREATE OR REPLACE STREAM `artemis-enterprise-datasource-filesystem` (
     `namespace`    BYTES HEADER('artemis.namespace'),
     `namespace_id` BYTES HEADER('artemis.namespace_id'),
     `org_name`     BYTES HEADER('artemis.org_name'),
-    `group_id`     BYTES HEADER('artemis.group_id')
+    `group_id`     BYTES HEADER('artemis.group_id'),
+    `owner_id`     BYTES HEADER('artemis.owner_id')
 )
 WITH (
     KAFKA_TOPIC  = 'artemis.datasource.filesystem',
@@ -116,7 +117,8 @@ AS SELECT
     ) AS `source`,
     FROM_BYTES(`display_name`, 'utf8') AS `display_name`,
     FROM_BYTES(`namespace_id`, 'utf8') AS `namespace_id`,
-    FROM_BYTES(`group_id`, 'utf8') AS `group_id`
+    FROM_BYTES(`group_id`, 'utf8') AS `group_id`,
+    FROM_BYTES(`owner_id`, 'utf8') AS `owner_id`
 FROM `artemis-enterprise-datasource-filesystem`
 EMIT CHANGES;
 """
@@ -341,6 +343,8 @@ def wiremock(
     wm = WireMockContainer(secure=False)
     wm.with_network(docker_network)
     wm.with_network_aliases("wiremock")
+    _owner_id_required = {"X-Owner-Id": {"matches": ".+"}}
+
     wm.with_mapping(
         "namespace-create.json",
         {
@@ -349,6 +353,7 @@ def wiremock(
             "request": {
                 "method": "POST",
                 "url": "/namespaces",
+                "headers": _owner_id_required,
                 "bodyPatterns": [
                     {"matchesJsonPath": f"$[?(@.name == '{_NAMESPACE}')]"}
                 ],
@@ -366,7 +371,11 @@ def wiremock(
             # Priority 2: catch-all for lifecycle connectors — returns a distinct ID
             # so they don't appear as siblings of the session-scoped connector in the DB.
             "priority": 2,
-            "request": {"method": "POST", "url": "/namespaces"},
+            "request": {
+                "method": "POST",
+                "url": "/namespaces",
+                "headers": _owner_id_required,
+            },
             "response": {
                 "status": 201,
                 "headers": {"Content-Type": "application/json"},
@@ -381,7 +390,11 @@ def wiremock(
     wm.with_mapping(
         "namespace-get.json",
         {
-            "request": {"method": "GET", "urlPattern": "/namespaces/.*"},
+            "request": {
+                "method": "GET",
+                "urlPattern": "/namespaces/.*",
+                "headers": _owner_id_required,
+            },
             "response": {
                 "status": 200,
                 "headers": {"Content-Type": "application/json"},
@@ -392,7 +405,11 @@ def wiremock(
     wm.with_mapping(
         "namespace-upload.json",
         {
-            "request": {"method": "POST", "urlPathPattern": "/namespaces/.*/objects"},
+            "request": {
+                "method": "POST",
+                "urlPathPattern": "/namespaces/.*/objects",
+                "headers": _owner_id_required,
+            },
             "response": {
                 "status": 202,
                 "headers": {"Content-Type": "application/json"},
@@ -405,7 +422,11 @@ def wiremock(
     wm.with_mapping(
         "namespace-delete.json",
         {
-            "request": {"method": "DELETE", "urlPattern": "/namespaces/.*"},
+            "request": {
+                "method": "DELETE",
+                "urlPattern": "/namespaces/.*",
+                "headers": _owner_id_required,
+            },
             "response": {"status": 202},
         },
     )

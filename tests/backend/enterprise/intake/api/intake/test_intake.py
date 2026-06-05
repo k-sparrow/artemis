@@ -295,7 +295,7 @@ class TestStorageServiceErrors:
         f.write_bytes(b"content")
         resp = _post(client, {"type": "filesystem", "path": str(f)})
 
-        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
         assert str(_NAMESPACE_ID) in resp.json()["detail"]
 
     def test_namespace_check_storage_error_returns_502(
@@ -336,11 +336,11 @@ class TestStorageServiceErrors:
 class TestRequestValidation:
     def test_missing_source_returns_422(self, client: TestClient) -> None:
         resp = client.post("/intake", json={**_COMMON})
-        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     def test_unknown_source_type_returns_422(self, client: TestClient) -> None:
         resp = _post(client, {"type": "unknown"})
-        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     def test_missing_display_name_returns_422(self, client: TestClient) -> None:
         resp = client.post(
@@ -350,7 +350,7 @@ class TestRequestValidation:
                 "namespace_id": str(_NAMESPACE_ID),
             },
         )
-        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     def test_missing_namespace_id_returns_422(self, client: TestClient) -> None:
         resp = client.post(
@@ -360,7 +360,7 @@ class TestRequestValidation:
                 "display_name": "doc.txt",
             },
         )
-        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     def test_invalid_namespace_id_uuid_returns_422(self, client: TestClient) -> None:
         resp = client.post(
@@ -371,16 +371,16 @@ class TestRequestValidation:
                 "source": {"type": "inline", "content": "x"},
             },
         )
-        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     def test_filesystem_missing_path_returns_422(self, client: TestClient) -> None:
         resp = _post(client, {"type": "filesystem"})
-        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     def test_url_missing_url_returns_422(self, client: TestClient) -> None:
         resp = _post(client, {"type": "url"})
-        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
     def test_inline_missing_content_returns_422(self, client: TestClient) -> None:
         resp = _post(client, {"type": "inline"})
-        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT

@@ -42,6 +42,10 @@ from tests.lib.polling import poll_until
 # (settings.STUB_OWNER_ID default).
 _MCP_STUB_OWNER_ID = "00000000-0000-0000-0000-000000000000"
 
+# Used for read-only calls against shared (enterprise) namespaces where the
+# storage service only requires a valid UUID — no ownership check on reads.
+_TEST_CALLER_ID = str(uuid.uuid4())
+
 _QDRANT_COLLECTION = "artemis"
 
 # CPU Docling is slow; 5 minutes is intentionally generous.
@@ -295,7 +299,9 @@ class TestSingleNamespaceFullPipeline:
 
         def _objects():
             resp = httpx.get(
-                f"{storage_url}/namespaces/{namespace_id}/objects", timeout=10.0
+                f"{storage_url}/namespaces/{namespace_id}/objects",
+                headers={"X-Owner-Id": _TEST_CALLER_ID},
+                timeout=10.0,
             )
             resp.raise_for_status()
             found = {o["id"] for o in resp.json()}
@@ -307,7 +313,9 @@ class TestSingleNamespaceFullPipeline:
             )
         except TimeoutError:
             resp = httpx.get(
-                f"{storage_url}/namespaces/{namespace_id}/objects", timeout=10.0
+                f"{storage_url}/namespaces/{namespace_id}/objects",
+                headers={"X-Owner-Id": _TEST_CALLER_ID},
+                timeout=10.0,
             )
             pytest.fail(
                 f"Storage API does not reflect expected obj_ids.\n"
@@ -380,14 +388,17 @@ class TestDeduplicationFullPipeline:
 
     @pytest.fixture(scope="class")
     def namespace(self, storage_url: str) -> dict:
+        owner_id = str(uuid.uuid4())
         resp = httpx.post(
             f"{storage_url}/namespaces",
             json={"type": "private"},
-            headers={"X-Owner-Id": str(uuid.uuid4())},
+            headers={"X-Owner-Id": owner_id},
             timeout=10.0,
         )
         assert resp.status_code == status.HTTP_201_CREATED, resp.text
-        return resp.json()
+        body = resp.json()
+        body["_owner_id"] = owner_id
+        return body
 
     def _upload(
         self,
@@ -395,10 +406,12 @@ class TestDeduplicationFullPipeline:
         namespace_id: str,
         filename: str,
         content: str,
+        owner_id: str,
     ) -> None:
         resp = httpx.post(
             f"{storage_url}/namespaces/{namespace_id}/objects",
             files={"file": (filename, content.encode(), "text/markdown")},
+            headers={"X-Owner-Id": owner_id},
             timeout=15.0,
         )
         assert resp.status_code == status.HTTP_202_ACCEPTED, resp.text
@@ -415,11 +428,12 @@ class TestDeduplicationFullPipeline:
         count unchanged.
         """
         namespace_id = str(namespace["id"])
+        owner_id: str = namespace["_owner_id"]
         content = "# Dedup Test\n\n" + lorem.paragraph()
 
         # Phase 1: first upload — wait for the document to appear in the retriever
         # and record the obj_id + chunk count.
-        self._upload(storage_url, namespace_id, "dedup_doc.md", content)
+        self._upload(storage_url, namespace_id, "dedup_doc.md", content, owner_id)
 
         def _first_indexed():
             docs = _invoke_retriever(indexing_url, namespace_id)
@@ -452,12 +466,13 @@ class TestDeduplicationFullPipeline:
         # Phase 2: re-upload the same file + a sentinel (different filename → different
         # obj_id).  When the sentinel's obj_id appears in Qdrant, both prior uploads
         # have been evaluated by the pipeline.
-        self._upload(storage_url, namespace_id, "dedup_doc.md", content)
+        self._upload(storage_url, namespace_id, "dedup_doc.md", content, owner_id)
         self._upload(
             storage_url,
             namespace_id,
             "sentinel.md",
             "# Sentinel\n\nA distinct document used as a pipeline-progress probe.\n",
+            owner_id,
         )
 
         def _sentinel_indexed():
@@ -501,14 +516,17 @@ class TestPrivatePathFullPipeline:
     @pytest.fixture(scope="class")
     def namespace(self, storage_url: str) -> dict:
         """Create a PRIVATE namespace; return the response dict."""
+        owner_id = str(uuid.uuid4())
         resp = httpx.post(
             f"{storage_url}/namespaces",
             json={"type": "private"},
-            headers={"X-Owner-Id": str(uuid.uuid4())},
+            headers={"X-Owner-Id": owner_id},
             timeout=10.0,
         )
         assert resp.status_code == status.HTTP_201_CREATED, resp.text
-        return resp.json()
+        body = resp.json()
+        body["_owner_id"] = owner_id
+        return body
 
     @pytest.fixture(scope="class")
     def indexed_documents(
@@ -519,11 +537,13 @@ class TestPrivatePathFullPipeline:
     ) -> list[Document]:
         """Upload a file directly to the storage service and poll until retrievable."""
         namespace_id: str = str(namespace["id"])
+        owner_id: str = namespace["_owner_id"]
 
         content = "# Artemis Private Path E2E Test\n\n" + lorem.paragraph()
         resp = httpx.post(
             f"{storage_url}/namespaces/{namespace_id}/objects",
             files={"file": ("private_doc.md", content.encode(), "text/markdown")},
+            headers={"X-Owner-Id": owner_id},
             timeout=15.0,
         )
         assert resp.status_code == status.HTTP_202_ACCEPTED, resp.text
@@ -649,8 +669,10 @@ class TestPrivatePathFullPipeline:
         assert len(obj_ids) == 1, f"expected exactly one object, got {obj_ids}"
         obj_id = obj_ids[0]
 
+        owner_id: str = namespace["_owner_id"]
         resp = httpx.delete(
             f"{storage_url}/namespaces/{namespace_id}/objects/{obj_id}",
+            headers={"X-Owner-Id": owner_id},
             timeout=10.0,
         )
         assert resp.status_code == status.HTTP_202_ACCEPTED, resp.text
@@ -710,7 +732,9 @@ class TestPrivatePathFullPipeline:
 
         # Storage API: object must no longer appear in the namespace listing
         resp = httpx.get(
-            f"{storage_url}/namespaces/{namespace_id}/objects", timeout=10.0
+            f"{storage_url}/namespaces/{namespace_id}/objects",
+            headers={"X-Owner-Id": owner_id},
+            timeout=10.0,
         )
         resp.raise_for_status()
         found_ids = {o["id"] for o in resp.json()}
@@ -905,7 +929,9 @@ class TestConnectorDeleteCleansUpGroup:
         # delete_data_source soft-deletes the namespace when no siblings share it,
         # so a 404 is the expected outcome here and counts as a clean state.
         resp = httpx.get(
-            f"{storage_url}/namespaces/{namespace_id}/objects", timeout=10.0
+            f"{storage_url}/namespaces/{namespace_id}/objects",
+            headers={"X-Owner-Id": _TEST_CALLER_ID},
+            timeout=10.0,
         )
         if resp.status_code == status.HTTP_404_NOT_FOUND:
             return  # namespace itself was deleted — strongest possible confirmation
@@ -1185,7 +1211,9 @@ class TestSharedNamespaceTwoConnectors:
 
         # Namespace must still be accessible (connector B is still alive).
         resp = httpx.get(
-            f"{storage_url}/namespaces/{namespace_id}/objects", timeout=10.0
+            f"{storage_url}/namespaces/{namespace_id}/objects",
+            headers={"X-Owner-Id": _TEST_CALLER_ID},
+            timeout=10.0,
         )
         assert (
             resp.status_code == status.HTTP_200_OK
@@ -1260,7 +1288,9 @@ class TestSharedNamespaceTwoConnectors:
 
         # Namespace must be gone (no siblings left → soft-deleted).
         resp = httpx.get(
-            f"{storage_url}/namespaces/{namespace_id}/objects", timeout=10.0
+            f"{storage_url}/namespaces/{namespace_id}/objects",
+            headers={"X-Owner-Id": _TEST_CALLER_ID},
+            timeout=10.0,
         )
         assert (
             resp.status_code == status.HTTP_404_NOT_FOUND

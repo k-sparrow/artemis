@@ -85,12 +85,20 @@ class TestObjectUpload:
 
     def test_upload_returns_202(self, client: httpx.Client) -> None:
         ns_id = self._create_namespace(client)
-        resp = client.post(f"/namespaces/{ns_id}/objects", files=_pdf())
+        resp = client.post(
+            f"/namespaces/{ns_id}/objects",
+            files=_pdf(),
+            headers={"X-Owner-Id": _OWNER_ID},
+        )
         assert resp.status_code == status.HTTP_202_ACCEPTED
 
     def test_upload_response_has_task_id(self, client: httpx.Client) -> None:
         ns_id = self._create_namespace(client)
-        body = client.post(f"/namespaces/{ns_id}/objects", files=_pdf()).json()
+        body = client.post(
+            f"/namespaces/{ns_id}/objects",
+            files=_pdf(),
+            headers={"X-Owner-Id": _OWNER_ID},
+        ).json()
         assert "task_id" in body
         assert "s3_key" not in body
 
@@ -98,7 +106,11 @@ class TestObjectUpload:
         self, client: httpx.Client, test_minio_client: Minio
     ) -> None:
         ns_id = self._create_namespace(client)
-        client.post(f"/namespaces/{ns_id}/objects", files=_pdf())
+        client.post(
+            f"/namespaces/{ns_id}/objects",
+            files=_pdf(),
+            headers={"X-Owner-Id": _OWNER_ID},
+        )
         s3_key = f"{ns_id}/{uuid.uuid5(uuid.UUID(ns_id), 'report.pdf')}"
 
         obj = test_minio_client.stat_object("artemis", s3_key)
@@ -112,6 +124,7 @@ class TestObjectUpload:
         client.post(
             f"/namespaces/{ns_id}/objects",
             files={"file": ("doc.pdf", content, "application/pdf")},
+            headers={"X-Owner-Id": _OWNER_ID},
         )
         s3_key = f"{ns_id}/{uuid.uuid5(uuid.UUID(ns_id), 'doc.pdf')}"
 
@@ -120,7 +133,11 @@ class TestObjectUpload:
 
     def test_unknown_namespace_returns_404(self, client: httpx.Client) -> None:
         fake_ns = str(uuid.uuid4())
-        resp = client.post(f"/namespaces/{fake_ns}/objects", files=_pdf())
+        resp = client.post(
+            f"/namespaces/{fake_ns}/objects",
+            files=_pdf(),
+            headers={"X-Owner-Id": _OWNER_ID},
+        )
         assert resp.status_code == status.HTTP_404_NOT_FOUND
 
 
@@ -136,7 +153,9 @@ class TestObjectListing:
             json={"type": "shared", "name": "acme"},
             headers={"X-Owner-Id": _OWNER_ID},
         ).json()["id"]
-        resp = client.get(f"/namespaces/{ns_id}/objects")
+        resp = client.get(
+            f"/namespaces/{ns_id}/objects", headers={"X-Owner-Id": _OWNER_ID}
+        )
         assert resp.status_code == status.HTTP_200_OK
         assert resp.json() == []
 
@@ -156,8 +175,18 @@ class TestObjectListing:
             headers={"X-Owner-Id": _OWNER_ID},
         ).json()["id"]
 
-        assert client.get(f"/namespaces/{ns1}/objects").json() == []
-        assert client.get(f"/namespaces/{ns2}/objects").json() == []
+        assert (
+            client.get(
+                f"/namespaces/{ns1}/objects", headers={"X-Owner-Id": _OWNER_ID}
+            ).json()
+            == []
+        )
+        assert (
+            client.get(
+                f"/namespaces/{ns2}/objects", headers={"X-Owner-Id": _OWNER_ID}
+            ).json()
+            == []
+        )
         assert ns1 != ns2
 
 
@@ -221,7 +250,11 @@ class TestKafkaNotification:
         kafka_consumer: KafkaConsumer,
     ) -> None:
         ns_id = self._create_namespace(client)
-        client.post(f"/namespaces/{ns_id}/objects", files=_pdf())
+        client.post(
+            f"/namespaces/{ns_id}/objects",
+            files=_pdf(),
+            headers={"X-Owner-Id": _OWNER_ID},
+        )
         s3_key = f"{ns_id}/{uuid.uuid5(uuid.UUID(ns_id), 'report.pdf')}"
 
         messages = list(kafka_consumer)
@@ -238,7 +271,11 @@ class TestKafkaNotification:
         kafka_consumer: KafkaConsumer,
     ) -> None:
         ns_id = self._create_namespace(client)
-        client.post(f"/namespaces/{ns_id}/objects", files=_pdf()).json()
+        client.post(
+            f"/namespaces/{ns_id}/objects",
+            files=_pdf(),
+            headers={"X-Owner-Id": _OWNER_ID},
+        ).json()
 
         messages = list(kafka_consumer)
         assert len(messages) >= 1
