@@ -12,7 +12,6 @@ from httpx import Response
 from src.backend.enterprise.data_sources.api.sources.schemas import (
     DataSourceCreate,
     DataSourceResponse,
-    KafkaConnectStatus,
 )
 from src.cli.client import DataSourcesClient
 
@@ -54,7 +53,9 @@ def client():
 @pytest.mark.asyncio
 async def test_list_sources_returns_parsed_list(client):
     with respx.mock(base_url=_GATEWAY) as mock:
-        mock.get("/data-sources").mock(return_value=Response(200, json=[_SAMPLE_RESPONSE]))
+        mock.get("/data-sources").mock(
+            return_value=Response(200, json=[_SAMPLE_RESPONSE])
+        )
         result = await client.list_sources()
 
     assert len(result) == 1
@@ -119,6 +120,7 @@ async def test_create_source_posts_json_body(client):
     assert route.called
     sent = route.calls[0].request
     import json
+
     body = json.loads(sent.content)
     assert body["display_name"] == "docs-watcher"
     assert body["namespace"] == "docs-namespace"

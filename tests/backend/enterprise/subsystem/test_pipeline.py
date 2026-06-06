@@ -305,7 +305,7 @@ class TestConnectorLifecycle:
         finally:
             httpx.delete(f"{data_sources_base_url}/data-sources/{source_id}")
 
-    def test_delete_removes_connector_and_soft_deletes_namespace(
+    def test_delete_removes_connector_and_hard_deletes_namespace(
         self,
         session_watch_dir: Path,
         wiremock_host_url: str,
@@ -314,7 +314,7 @@ class TestConnectorLifecycle:
     ) -> None:
         """
         DELETE /data-sources/{id} removes the connector
-        and soft-deletes the namespace.
+        and hard-deletes the namespace when it is the last connector.
         """
         source, watch_dir = self._create_and_wait(
             data_sources_base_url, session_watch_dir
@@ -360,17 +360,13 @@ class TestConnectorLifecycle:
         data_sources_base_url: str,
         intake_container,  # noqa: ARG002
     ) -> None:
-        """Deleting one connector must not soft-delete a namespace still used by another.
+        """Deleting one connector must not hard-delete a namespace still used by another.
 
         WireMock returns the same namespace_id (cccccccc) for all lifecycle connectors,
         so both connectors created here share the same namespace_id in the DB — exactly
         the multi-connector shared-namespace scenario the sibling check protects.
-
-        NOTE: once ``group_id`` is introduced (see TODOs.md §1.1.2), per-connector object
-        ownership will be tracked at the object level rather than
-        through namespace scoping.
-        At that point the sibling check and this test should be revisited — namespace
-        deletion semantics may change depending on the final group_id design.
+        When siblings exist, only the departing connector's objects are tombstoned
+        (group-scoped delete); the namespace itself is left intact.
         """
         source_a, _ = self._create_and_wait(data_sources_base_url, session_watch_dir)
         source_b, _ = self._create_and_wait(data_sources_base_url, session_watch_dir)
@@ -397,13 +393,13 @@ class TestConnectorLifecycle:
                 and r["request"]["url"] == f"/namespaces/{namespace_id}"
             ]
             assert len(premature_deletes) == 0, (
-                f"Namespace was soft-deleted while sibling connector {source_b['id']} "
+                f"Namespace was hard-deleted while sibling connector {source_b['id']} "
                 f"was still active"
             )
 
             httpx.delete(f"{wiremock_host_url}/__admin/requests")
 
-            # Delete connector B — last sibling gone, namespace must now be soft-deleted.
+            # Delete connector B — last sibling gone, namespace must now be hard-deleted.
             resp = httpx.delete(
                 f"{data_sources_base_url}/data-sources/{source_b['id']}"
             )
@@ -417,7 +413,7 @@ class TestConnectorLifecycle:
                 and r["request"]["url"] == f"/namespaces/{namespace_id}"
             ]
             assert len(final_deletes) >= 1, (
-                f"Expected namespace soft-delete after last connector removed, "
+                f"Expected namespace hard-delete after last connector removed, "
                 f"but WireMock received: {wm_resp.json()}"
             )
         finally:

@@ -27,6 +27,7 @@ from src.backend.storage.api.exceptions import (
 )
 
 _SERVICE = "src.backend.storage.api.namespaces.service"
+_ROUTER = "src.backend.storage.api.namespaces.router"
 
 OWNER_ID = str(uuid.uuid4())
 
@@ -302,11 +303,11 @@ class TestRenameNamespace:
 # ---------------------------------------------------------------------------
 
 
-class TestSoftDeleteNamespace:
-    def test_soft_delete_returns_202(self, client: TestClient) -> None:
+class TestDeleteNamespace:
+    def test_delete_returns_202(self, client: TestClient) -> None:
         with patch(
-            f"{_SERVICE}.soft_delete_namespace", new=AsyncMock(return_value=None)
-        ):
+            f"{_ROUTER}.tombstone_objects", new=AsyncMock(return_value=[])
+        ), patch(f"{_SERVICE}.hard_delete_namespace", new=AsyncMock(return_value=None)):
             response = client.delete(
                 f"/namespaces/{uuid.uuid4()}", headers={"X-Owner-Id": OWNER_ID}
             )
@@ -314,7 +315,9 @@ class TestSoftDeleteNamespace:
 
     def test_not_found_returns_404(self, client: TestClient) -> None:
         with patch(
-            f"{_SERVICE}.soft_delete_namespace",
+            f"{_ROUTER}.tombstone_objects", new=AsyncMock(return_value=[])
+        ), patch(
+            f"{_SERVICE}.hard_delete_namespace",
             new=AsyncMock(side_effect=NamespaceNotFoundError()),
         ):
             response = client.delete(
@@ -324,7 +327,9 @@ class TestSoftDeleteNamespace:
 
     def test_access_denied_returns_403(self, client: TestClient) -> None:
         with patch(
-            f"{_SERVICE}.soft_delete_namespace",
+            f"{_ROUTER}.tombstone_objects", new=AsyncMock(return_value=[])
+        ), patch(
+            f"{_SERVICE}.hard_delete_namespace",
             new=AsyncMock(side_effect=NamespaceAccessDeniedError()),
         ):
             response = client.delete(

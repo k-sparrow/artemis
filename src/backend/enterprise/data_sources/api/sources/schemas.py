@@ -41,6 +41,7 @@ class DataSourceResponse(BaseModel):
     source_type: str
     connector_name: str
     namespace_id: uuid.UUID
+    namespace_name: str | None = None
     org_name: str
     config: dict[str, Any]
     created_at: datetime

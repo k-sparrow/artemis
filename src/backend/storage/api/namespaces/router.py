@@ -13,11 +13,14 @@ import uuid
 
 from fastapi import APIRouter, status
 
+from src.backend.storage.api.config import settings
 from src.backend.storage.api.dependencies import (
     caller_owner_id_dependency,
     db_session_dependency,
+    minio_client_dependency,
 )
 from src.backend.storage.api.namespaces import service
+from src.backend.storage.api.tombstone import tombstone_objects
 from src.backend.storage.api.namespaces.schemas import (
     NamespaceCreate,
     NamespaceRename,
@@ -101,15 +104,22 @@ async def rename_namespace_endpoint(
 
 
 @router.delete("/{namespace_id}", status_code=status.HTTP_202_ACCEPTED)
-async def soft_delete_namespace_endpoint(
+async def delete_namespace_endpoint(
     namespace_id: uuid.UUID,
     session: db_session_dependency,
+    minio: minio_client_dependency,
     caller_owner_id: caller_owner_id_dependency,
 ) -> None:
-    await service.soft_delete_namespace(
+    await tombstone_objects(
+        minio=minio,
+        session=session,
+        bucket=settings.S3_ARTEMIS_BUCKET,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+    )
+    await service.hard_delete_namespace(
         session=session,
         namespace_id=namespace_id,
         caller_owner_id=caller_owner_id,
     )
-    log.info("namespace_soft_deleted", id=namespace_id)
-    # TODO(epic-1.2): dispatch delete_namespace Celery task via apply_async()
+    log.info("namespace_hard_deleted", id=namespace_id)

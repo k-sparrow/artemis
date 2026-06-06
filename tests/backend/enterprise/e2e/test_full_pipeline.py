@@ -926,7 +926,7 @@ class TestConnectorDeleteCleansUpGroup:
             )
 
         # Storage API: namespace must be empty or gone.
-        # delete_data_source soft-deletes the namespace when no siblings share it,
+        # delete_data_source hard-deletes the namespace when no siblings share it,
         # so a 404 is the expected outcome here and counts as a clean state.
         resp = httpx.get(
             f"{storage_url}/namespaces/{namespace_id}/objects",
@@ -947,7 +947,7 @@ class TestSharedNamespaceTwoConnectors:
 
     Deleting connector A must remove only A's group; B's vectors and
     ingested_objects rows must survive and the namespace must stay alive.
-    Deleting connector B afterwards must finish the cleanup and soft-delete
+    Deleting connector B afterwards must finish the cleanup and hard-delete
     the namespace.
     """
 
@@ -1217,7 +1217,7 @@ class TestSharedNamespaceTwoConnectors:
         )
         assert (
             resp.status_code == status.HTTP_200_OK
-        ), f"Namespace was soft-deleted prematurely: {resp.status_code}"
+        ), f"Namespace was hard-deleted prematurely: {resp.status_code}"
 
     def test_delete_connector_b_cleans_up_namespace(
         self,
@@ -1228,7 +1228,7 @@ class TestSharedNamespaceTwoConnectors:
         qdrant_client: QdrantClient,
         postgres_engine: sa.Engine,
     ) -> None:
-        """DELETE connector B removes the last group and soft-deletes the namespace."""
+        """DELETE connector B removes the last group and hard-deletes the namespace."""
         group_b = connector_b["id"]
         namespace_id = connector_b["namespace_id"]
         obj_uuids_b = self._obj_uuids(indexed_documents_b)
@@ -1286,7 +1286,7 @@ class TestSharedNamespaceTwoConnectors:
                 f"after {_CDC_POLL_TIMEOUT_S}s"
             )
 
-        # Namespace must be gone (no siblings left → soft-deleted).
+        # Namespace must be gone (no siblings left → hard-deleted).
         resp = httpx.get(
             f"{storage_url}/namespaces/{namespace_id}/objects",
             headers={"X-Owner-Id": _TEST_CALLER_ID},
@@ -1294,7 +1294,7 @@ class TestSharedNamespaceTwoConnectors:
         )
         assert (
             resp.status_code == status.HTTP_404_NOT_FOUND
-        ), f"Expected namespace to be soft-deleted (404), got {resp.status_code}"
+        ), f"Expected namespace to be hard-deleted (404), got {resp.status_code}"
 
 
 class TestColBERTReranking:

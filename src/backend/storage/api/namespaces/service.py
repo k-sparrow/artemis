@@ -129,7 +129,7 @@ async def rename_namespace(
     return namespace
 
 
-async def soft_delete_namespace(
+async def hard_delete_namespace(
     session: AsyncSession,
     namespace_id: uuid.UUID,
     caller_owner_id: uuid.UUID,
@@ -140,5 +140,5 @@ async def soft_delete_namespace(
         caller_owner_id=caller_owner_id,
         require_write=True,
     )
-    namespace.deleted_at = datetime.now(timezone.utc)
+    await session.delete(namespace)
     await session.commit()

@@ -117,7 +117,7 @@ async def _upsert_namespace(
     raise StorageServiceError(resp.status_code, resp.text)
 
 
-async def _soft_delete_namespace(
+async def _hard_delete_namespace(
     http: httpx.AsyncClient,
     namespace_id: uuid.UUID,
     owner_id: uuid.UUID,
@@ -173,6 +173,7 @@ def _to_response(
         source_type=row.source_type,
         connector_name=row.connector_name,
         namespace_id=row.namespace_id,
+        namespace_name=row.namespace_name,
         org_name=row.org_name,
         config=row.config,
         created_at=row.created_at,
@@ -224,6 +225,7 @@ async def create_data_source(
         source_type=_SOURCE_TYPE_FILESYSTEM,
         connector_name=connector_name,
         namespace_id=namespace_id,
+        namespace_name=namespace,
         org_name=org_name,
         config={"path": path},
     )
@@ -269,7 +271,7 @@ async def delete_data_source(
     row = await _fetch_row(session, source_id)
     owner_id = uuid.uuid5(ARTEMIS_NS, row.org_name)
 
-    # Only soft-delete the namespace when no other active data source shares it.
+    # Hard-delete the namespace when no other active data source shares it.
     sibling_result = await session.execute(
         sa.select(sa.func.count()).where(
             DataSource.namespace_id == row.namespace_id,
@@ -286,12 +288,14 @@ async def delete_data_source(
         if "404" not in str(exc):
             raise KafkaConnectError(str(exc)) from exc
 
-    # Delete all objects that belong to this connector (group_id = source_id).
-    # This is unconditional: each connector owns its own group regardless of siblings.
-    await _delete_group(http, row.namespace_id, source_id, owner_id)
-
-    if not has_siblings:
-        await _soft_delete_namespace(http, row.namespace_id, owner_id)
+    if has_siblings:
+        # Other connectors still use this namespace: tombstone only this
+        # connector's objects (scoped by group_id), leave namespace intact.
+        await _delete_group(http, row.namespace_id, source_id, owner_id)
+    else:
+        # Last connector — namespace delete tombstones all remaining objects
+        # and hard-deletes the namespace row in one call.
+        await _hard_delete_namespace(http, row.namespace_id, owner_id)
 
     row.deleted_at = datetime.now(timezone.utc)
     await session.commit()

@@ -130,7 +130,13 @@ class Namespace(Base):
     )
 
     owner: Mapped[Owner] = relationship(back_populates="namespaces")
-    objects: Mapped[list["IngestedObject"]] = relationship(back_populates="namespace")
+    # passive_deletes=True: FK to namespace was dropped (0004 migration) so the DB
+    # won't cascade. Without this flag the ORM would issue UPDATE…SET namespace_id=NULL
+    # before the parent DELETE, which the NOT NULL constraint rejects. Orphaned rows
+    # are intentional — Celery cleans them up asynchronously via the tombstone pipeline.
+    objects: Mapped[list["IngestedObject"]] = relationship(
+        back_populates="namespace", passive_deletes=True
+    )
 
 
 class IngestedObject(Base):

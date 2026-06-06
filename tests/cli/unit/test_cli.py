@@ -32,7 +32,10 @@ _SAMPLE_DICT = {
 
 
 def _make_source():
-    from src.backend.enterprise.data_sources.api.sources.schemas import DataSourceResponse
+    from src.backend.enterprise.data_sources.api.sources.schemas import (
+        DataSourceResponse,
+    )
+
     return DataSourceResponse.model_validate(_SAMPLE_DICT)
 
 
@@ -96,11 +99,16 @@ def test_sources_create(runner):
         result = runner.invoke(
             cli,
             [
-                "sources", "create",
-                "--name", "docs-watcher",
-                "--namespace", "docs-namespace",
-                "--org", "acme",
-                "--path", "/data/docs",
+                "sources",
+                "create",
+                "--name",
+                "docs-watcher",
+                "--namespace",
+                "docs-namespace",
+                "--org",
+                "acme",
+                "--path",
+                "/data/docs",
             ],
         )
 
@@ -117,7 +125,9 @@ def test_sources_create(runner):
 def test_lifecycle_commands(runner, action):
     source = _make_source()
     with patch("src.cli.main.DataSourcesClient") as MockClient:
-        getattr(MockClient.return_value, f"{action}_source", AsyncMock(return_value=source))
+        getattr(
+            MockClient.return_value, f"{action}_source", AsyncMock(return_value=source)
+        )
         MockClient.return_value.pause_source = AsyncMock(return_value=source)
         MockClient.return_value.resume_source = AsyncMock(return_value=source)
         MockClient.return_value.restart_source = AsyncMock(return_value=source)
@@ -144,9 +154,7 @@ def test_sources_delete_prompts_without_yes(runner):
     with patch("src.cli.main.DataSourcesClient") as MockClient:
         MockClient.return_value.delete_source = AsyncMock(return_value=None)
         # Answer "n" to abort
-        result = runner.invoke(
-            cli, ["sources", "delete", str(_SOURCE_ID)], input="n\n"
-        )
+        result = runner.invoke(cli, ["sources", "delete", str(_SOURCE_ID)], input="n\n")
 
     assert result.exit_code != 0
     MockClient.return_value.delete_source.assert_not_called()

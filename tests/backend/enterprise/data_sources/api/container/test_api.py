@@ -164,7 +164,7 @@ class TestDataSourceContainer:
         kc_resp = httpx.get(f"{kafka_connect_url}/connectors/{connector_name}")
         assert kc_resp.status_code == status.HTTP_404_NOT_FOUND
 
-    def test_delete_soft_deletes_namespace_on_storage_service(
+    def test_delete_hard_deletes_namespace_on_storage_service(
         self,
         client: httpx.Client,
         kafka_connect_url: str,

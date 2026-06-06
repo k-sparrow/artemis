@@ -47,6 +47,7 @@ py_library(
         ":exceptions",
         "//src/backend/storage/api:models",
         "//src/backend/storage/api:service",
+        "//src/backend/storage/api:tombstone",
         "//src/lib/core/ingestion:contract",
         requirement("minio"),
         requirement("sqlalchemy"),

@@ -52,6 +52,11 @@ class DataSource(Base):
         nullable=False,
         comment="Logical ref to namespace on storage service — no hard FK",
     )
+    namespace_name: Mapped[str | None] = mapped_column(
+        sa.Text,
+        nullable=True,
+        comment="Human-readable namespace name (UUID5 seed); populated on create",
+    )
     org_name: Mapped[str] = mapped_column(
         sa.Text,
         nullable=False,

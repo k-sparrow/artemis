@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import uuid
 from collections import defaultdict
 
 from textual import on, work
 from textual.app import ComposeResult
-from textual.screen import Screen
-from textual.widgets import Footer, Header, Tree
+from textual.containers import Horizontal
+from textual.screen import ModalScreen, Screen
+from textual.widgets import Button, Footer, Header, Label, Tree
 from textual.widgets.tree import TreeNode
 
 from src.backend.enterprise.data_sources.api.sources.schemas import DataSourceResponse
@@ -91,16 +91,19 @@ class ListScreen(Screen):
         source = self._node_map.get(event.node.id)
         if source is not None:
             from src.cli.tui.screens.detail import DetailScreen
+
             self.app.push_screen(DetailScreen(source.id, gateway_url=self._gateway_url))
 
     def action_open_detail(self) -> None:
         source = self._selected_source()
         if source:
             from src.cli.tui.screens.detail import DetailScreen
+
             self.app.push_screen(DetailScreen(source.id, gateway_url=self._gateway_url))
 
     def action_new_source(self) -> None:
         from src.cli.tui.screens.create import CreateScreen
+
         self.app.push_screen(CreateScreen(gateway_url=self._gateway_url))
 
     def action_delete_source(self) -> None:
@@ -134,11 +137,6 @@ class ListScreen(Screen):
 # Inline confirmation modal
 # ---------------------------------------------------------------------------
 
-from textual.app import ComposeResult as _CR
-from textual.screen import ModalScreen
-from textual.widgets import Button, Label
-from textual.containers import Horizontal
-
 
 class _ConfirmScreen(ModalScreen[bool]):
     """Simple yes/no modal."""
@@ -149,7 +147,7 @@ class _ConfirmScreen(ModalScreen[bool]):
         super().__init__()
         self._message = message
 
-    def compose(self) -> _CR:
+    def compose(self) -> ComposeResult:
         yield Label(self._message)
         yield Horizontal(
             Button("Yes", id="yes", variant="error"),

@@ -241,15 +241,16 @@ class TestDeleteDataSource:
             created["connector_name"]
         )
 
-    def test_namespace_soft_deleted_on_storage_service(
+    def test_namespace_hard_deleted_on_last_connector_delete(
         self, client: TestClient, mock_storage_client: MagicMock
     ) -> None:
         created = client.post("/data-sources", json=_CREATE_PAYLOAD).json()
         client.delete(f"/data-sources/{created['id']}")
-        # Two DELETE calls: group delete (/objects?group_id=) then namespace soft-delete
-        assert mock_storage_client.delete.call_count == 2
-        urls = [call[0][0] for call in mock_storage_client.delete.call_args_list]
-        assert any(created["namespace_id"] in url for url in urls)
+        # No siblings: single DELETE to namespace (tombstones objects + hard-deletes row).
+        # Group-scoped delete is skipped when the connector is the last one.
+        assert mock_storage_client.delete.call_count == 1
+        call_url = mock_storage_client.delete.call_args[0][0]
+        assert call_url == f"/namespaces/{created['namespace_id']}"
 
     def test_unknown_id_returns_404(self, client: TestClient) -> None:
         resp = client.delete(f"/data-sources/{uuid.uuid4()}")

@@ -36,8 +36,8 @@ py_library(
     deps = [
         ":client",
         ":settings",
-        "//src/cli/tui:app",
         "//src/backend/enterprise/data_sources/api/sources:schemas",
+        "//src/cli/tui:app",
         requirement("click"),
     ],
 )

@@ -15,10 +15,10 @@ router = HealthcheckRouter(
         name="readiness",
         checks=[
             StorageServiceHealthcheck(
-                url=f"{settings.STORAGE_SERVICE_URL}/health/liveness"
+                url=f"{settings.STORAGE_SERVICE_URL}/health/readiness"
             ),
             IndexingServiceHealthcheck(
-                url=f"{settings.INDEXING_SERVICE_URL}/health/liveness"
+                url=f"{settings.INDEXING_SERVICE_URL}/health/readiness"
             ),
         ],
     ),

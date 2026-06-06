@@ -17,10 +17,9 @@ py_library(
     srcs = ["app.py"],
     data = ["artemis.tcss"],
     deps = [
-        "//src/cli/tui/screens:list",
-        "//src/cli/tui/screens:detail",
         "//src/cli/tui/screens:create",
+        "//src/cli/tui/screens:detail",
+        "//src/cli/tui/screens:list",
         requirement("textual"),
     ],
 )
-

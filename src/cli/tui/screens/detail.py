@@ -8,7 +8,7 @@ from textual import on, work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Button, Footer, Header, Label, Static
+from textual.widgets import Button, Footer, Header, Static
 
 from src.backend.enterprise.data_sources.api.sources.schemas import DataSourceResponse
 from src.cli.client import DataSourcesClient
@@ -95,7 +95,9 @@ class DetailScreen(Screen):
         if s.kafka_status and s.kafka_status.tasks:
             for t in s.kafka_status.tasks:
                 trace = f"  trace: {t.trace}" if t.trace else ""
-                tasks_text += f"  #{t.id}  {status_markup(t.state)}  {t.worker_id}{trace}\n"
+                tasks_text += (
+                    f"  #{t.id}  {status_markup(t.state)}  {t.worker_id}{trace}\n"
+                )
         else:
             tasks_text += "  (none)"
         self.query_one("#tasks", Static).update(tasks_text)
@@ -146,6 +148,7 @@ class DetailScreen(Screen):
     @work(thread=False)
     async def _confirm_delete(self) -> None:
         from src.cli.tui.screens.list import _ConfirmScreen
+
         name = self._source.display_name if self._source else str(self._source_id)
         confirmed = await self.app.push_screen_wait(_ConfirmScreen(f"Delete '{name}'?"))
         if confirmed:

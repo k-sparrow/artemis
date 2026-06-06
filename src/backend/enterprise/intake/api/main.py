@@ -1,11 +1,16 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from src.lib.backend.api.exceptions import register_custom_exception_handlers
+from src.lib.backend.logging import get_logger
 from src.backend.enterprise.intake.api.intake.exceptions import EXCEPTION_HANDLER_MAP
 from src.backend.enterprise.intake.api.utils import lifespan
 
 from src.backend.enterprise.intake.api.health import router as health_router
 from src.backend.enterprise.intake.api.intake.router import router as intake_router
+
+_log = get_logger(__name__)
 
 app = FastAPI(
     title="Artemis Enterprise Ingest Service",
@@ -17,6 +22,27 @@ app = FastAPI(
 )
 
 register_custom_exception_handlers(app, EXCEPTION_HANDLER_MAP)
+
+
+@app.exception_handler(RequestValidationError)
+async def _log_validation_error(
+    req: Request, exc: RequestValidationError
+) -> JSONResponse:
+    try:
+        body = await req.body()
+        body_text = body.decode("utf-8", errors="replace")
+    except Exception:
+        body_text = "<unreadable>"
+    _log.warning(
+        "intake_validation_error",
+        errors=exc.errors(),
+        raw_body=body_text,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": exc.errors()},
+    )
+
 
 app.include_router(health_router, prefix="/health", tags=["Health"])
 app.include_router(intake_router)

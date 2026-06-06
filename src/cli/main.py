@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 import uuid
 
 import click
@@ -32,7 +31,7 @@ def _print_source(source, as_json: bool) -> None:
     if as_json:
         click.echo(source.model_dump_json(indent=2))
     else:
-        state = (source.kafka_status.state if source.kafka_status else "UNKNOWN")
+        state = source.kafka_status.state if source.kafka_status else "UNKNOWN"
         ns = source.namespace_name or str(source.namespace_id)[:8]
         click.echo(
             f"{str(source.id)[:8]}  {source.display_name:<20}  {source.source_type:<12}"
@@ -60,6 +59,7 @@ def cli(ctx: click.Context, gateway: str | None) -> None:
 def tui(ctx: click.Context) -> None:
     """Launch the interactive TUI."""
     from src.cli.tui.app import DataSourcesApp
+
     gateway = ctx.obj.get("gateway")
     DataSourcesApp(gateway_url=gateway).run()
 
@@ -80,7 +80,11 @@ def sources_list(ctx: click.Context, as_json: bool):
     """List all data sources."""
     items = _run(_client(ctx).list_sources())
     if as_json:
-        click.echo(json.dumps([s.model_dump(mode="json") for s in items], indent=2, default=str))
+        click.echo(
+            json.dumps(
+                [s.model_dump(mode="json") for s in items], indent=2, default=str
+            )
+        )
     else:
         for s in items:
             _print_source(s, as_json=False)
@@ -103,7 +107,9 @@ def sources_get(ctx: click.Context, source_id: str, as_json: bool):
 @click.option("--path", required=True)
 @click.option("--recursive/--no-recursive", default=True)
 @click.pass_context
-def sources_create(ctx: click.Context, name: str, namespace: str, org: str, path: str, recursive: bool):
+def sources_create(
+    ctx: click.Context, name: str, namespace: str, org: str, path: str, recursive: bool
+):
     """Create a filesystem data source."""
     payload = DataSourceCreate(
         display_name=name,

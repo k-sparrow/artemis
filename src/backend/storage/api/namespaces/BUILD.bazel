@@ -30,7 +30,9 @@ py_library(
     deps = [
         ":schemas",
         ":service",
+        "//src/backend/storage/api:config",
         "//src/backend/storage/api:dependencies",
+        "//src/backend/storage/api:tombstone",
         "//src/lib/backend/logging:pkg",
         requirement("fastapi"),
     ],

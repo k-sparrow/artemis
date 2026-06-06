@@ -248,7 +248,7 @@ class TestRenameNamespaceIntegration:
 
 
 class TestDeleteNamespaceIntegration:
-    def test_soft_delete_makes_namespace_unreachable(
+    def test_delete_makes_namespace_unreachable(
         self, client: TestClient, owner_id: str
     ) -> None:
         ns_id = client.post(

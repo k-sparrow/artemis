@@ -7,7 +7,10 @@ from contextlib import asynccontextmanager
 
 import httpx
 
-from src.backend.enterprise.data_sources.api.sources.schemas import DataSourceCreate, DataSourceResponse
+from src.backend.enterprise.data_sources.api.sources.schemas import (
+    DataSourceCreate,
+    DataSourceResponse,
+)
 from src.cli.settings import settings
 
 

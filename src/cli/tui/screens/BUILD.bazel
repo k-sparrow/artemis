@@ -16,9 +16,9 @@ py_library(
     name = "list",
     srcs = ["list.py"],
     deps = [
+        "//src/backend/enterprise/data_sources/api/sources:schemas",
         "//src/cli:client",
         "//src/cli/tui/widgets:status_badge",
-        "//src/backend/enterprise/data_sources/api/sources:schemas",
         requirement("textual"),
     ],
 )
@@ -27,10 +27,10 @@ py_library(
     name = "detail",
     srcs = ["detail.py"],
     deps = [
-        "//src/cli:client",
         ":list",
-        "//src/cli/tui/widgets:status_badge",
         "//src/backend/enterprise/data_sources/api/sources:schemas",
+        "//src/cli:client",
+        "//src/cli/tui/widgets:status_badge",
         requirement("textual"),
     ],
 )
@@ -39,8 +39,8 @@ py_library(
     name = "create",
     srcs = ["create.py"],
     deps = [
-        "//src/cli:client",
         "//src/backend/enterprise/data_sources/api/sources:schemas",
+        "//src/cli:client",
         requirement("textual"),
     ],
 )
