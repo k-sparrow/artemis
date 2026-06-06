@@ -1,0 +1,46 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+package(
+    default_visibility = [
+        "//src/cli/tui:__pkg__",
+        "//tests/cli:__subpackages__",
+    ],
+)
+
+py_library(
+    name = "list",
+    srcs = ["list.py"],
+    deps = [
+        "//src/cli:client",
+        "//src/cli/tui/widgets:status_badge",
+        "//src/backend/enterprise/data_sources/api/sources:schemas",
+        requirement("textual"),
+    ],
+)
+
+py_library(
+    name = "detail",
+    srcs = ["detail.py"],
+    deps = [
+        "//src/cli:client",
+        ":list",
+        "//src/cli/tui/widgets:status_badge",
+        "//src/backend/enterprise/data_sources/api/sources:schemas",
+        requirement("textual"),
+    ],
+)
+
+py_library(
+    name = "create",
+    srcs = ["create.py"],
+    deps = [
+        "//src/cli:client",
+        "//src/backend/enterprise/data_sources/api/sources:schemas",
+        requirement("textual"),
+    ],
+)

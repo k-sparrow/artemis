@@ -1,0 +1,42 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@pip//:requirements.bzl", "requirement")
+
+py_test(
+    name = "test_client",
+    srcs = ["test_client.py"],
+    env = {
+        "GATEWAY_URL": "http://gateway-test:9080",
+    },
+    tags = ["unit"],
+    deps = [
+        "//src/cli:client",
+        "//src/cli:settings",
+        "//src/backend/enterprise/data_sources/api/sources:schemas",
+        requirement("httpx"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+        requirement("respx"),
+    ],
+)
+
+py_test(
+    name = "test_cli",
+    srcs = ["test_cli.py"],
+    env = {
+        "GATEWAY_URL": "http://gateway-test:9080",
+    },
+    tags = ["unit"],
+    deps = [
+        "//src/cli:client",
+        "//src/cli:settings",
+        "//src/cli:main",
+        "//src/backend/enterprise/data_sources/api/sources:schemas",
+        requirement("click"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+    ],
+)

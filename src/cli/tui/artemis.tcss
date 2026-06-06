@@ -1,0 +1,164 @@
+/* Artemis TUI — dark theme */
+
+$artemis-accent: #7c6af7;
+$artemis-accent-dark: #5a4fcf;
+$artemis-bg: #0d0d14;
+$artemis-surface: #13131f;
+$artemis-panel: #1a1a2e;
+$artemis-border: #2a2a4a;
+$artemis-text: #c8c8e8;
+$artemis-text-dim: #6a6a9a;
+
+Screen {
+    background: $artemis-bg;
+    color: $artemis-text;
+}
+
+Header {
+    background: $artemis-panel;
+    color: $artemis-accent;
+    text-style: bold;
+}
+
+Footer {
+    background: $artemis-panel;
+    color: $artemis-text-dim;
+}
+
+#source-tree {
+    height: 1fr;
+    background: $artemis-surface;
+    border: solid $artemis-border;
+    padding: 0 1;
+    scrollbar-color: $artemis-accent;
+}
+
+Tree > .tree--cursor {
+    background: $artemis-accent-dark;
+    color: $artemis-text;
+}
+
+Tree > .tree--highlight {
+    background: $artemis-panel;
+}
+
+/* Detail screen */
+#info, #tasks {
+    padding: 1 2;
+    height: auto;
+    background: $artemis-surface;
+    border: solid $artemis-border;
+    margin-bottom: 1;
+}
+
+#actions {
+    height: auto;
+    padding: 0 2;
+}
+
+#actions Button {
+    margin-right: 1;
+    min-width: 14;
+}
+
+/* Create form */
+#form {
+    padding: 1 2;
+    width: 64;
+    height: auto;
+    background: $artemis-surface;
+    border: solid $artemis-border;
+    align: center middle;
+}
+
+#form-title {
+    color: $artemis-accent;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#form Label {
+    color: $artemis-text-dim;
+    margin-top: 1;
+}
+
+Input {
+    background: $artemis-panel;
+    border: solid $artemis-border;
+    color: $artemis-text;
+}
+
+Input:focus {
+    border: solid $artemis-accent;
+}
+
+/* Confirm modal */
+_ConfirmScreen {
+    align: center middle;
+    background: $artemis-bg 70%;
+}
+
+_ConfirmScreen > * {
+    background: $artemis-panel;
+    border: solid $artemis-border;
+    padding: 2 4;
+    width: auto;
+    height: auto;
+}
+
+_ConfirmScreen Label {
+    color: $artemis-text;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+_ConfirmScreen Horizontal {
+    height: auto;
+    align: center middle;
+}
+
+_ConfirmScreen Button {
+    margin: 0 1;
+}
+
+/* Button variants */
+Button.-success {
+    background: #1a3a2a;
+    color: #4ade80;
+    border: solid #2a5a3a;
+}
+
+Button.-success:hover {
+    background: #2a5a3a;
+}
+
+Button.-error {
+    background: #3a1a1a;
+    color: #f87171;
+    border: solid #5a2a2a;
+}
+
+Button.-error:hover {
+    background: #5a2a2a;
+}
+
+Button.-warning {
+    background: #3a2e00;
+    color: #fbbf24;
+    border: solid #5a4a00;
+}
+
+Button.-warning:hover {
+    background: #5a4a00;
+}
+
+Button {
+    background: $artemis-panel;
+    color: $artemis-text;
+    border: solid $artemis-border;
+}
+
+Button:hover {
+    background: $artemis-accent-dark;
+    color: $artemis-text;
+}

@@ -84,3 +84,7 @@ minio==7.2.15  # S3 compatible
 
 # interactive development
 jupyter
+
+# cli / tui
+click==8.3.3
+textual==8.2.7

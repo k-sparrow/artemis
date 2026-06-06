@@ -1,0 +1,60 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+
+load("@aspect_rules_py//py:defs.bzl", "py_binary", "py_library", "py_pex_binary")
+load("@pip//:requirements.bzl", "requirement")
+
+package(
+    default_visibility = [
+        "//src/cli:__subpackages__",
+        "//tests/cli:__subpackages__",
+    ],
+)
+
+py_library(
+    name = "settings",
+    srcs = ["settings.py"],
+    deps = [
+        requirement("pydantic-settings"),
+    ],
+)
+
+py_library(
+    name = "client",
+    srcs = ["client.py"],
+    deps = [
+        ":settings",
+        "//src/backend/enterprise/data_sources/api/sources:schemas",
+        requirement("httpx"),
+    ],
+)
+
+py_library(
+    name = "main",
+    srcs = ["main.py"],
+    deps = [
+        ":client",
+        ":settings",
+        "//src/cli/tui:app",
+        "//src/backend/enterprise/data_sources/api/sources:schemas",
+        requirement("click"),
+    ],
+)
+
+py_binary(
+    name = "artemis",
+    srcs = ["main.py"],
+    main = "main.py",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":main",
+    ],
+)
+
+py_pex_binary(
+    name = "artemis.pex",
+    binary = ":artemis",
+    python_shebang = "#!/usr/bin/env python3",
+    visibility = ["//visibility:public"],
+)

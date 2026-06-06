@@ -144,6 +144,7 @@ manifest:
     lark: lark
     latex2mathml: latex2mathml
     lazy_loader: lazy_loader
+    linkify_it: linkify_it_py
     loguru: loguru
     lorem: lorem
     lxml: lxml
@@ -156,6 +157,7 @@ manifest:
     matplotlib_inline: matplotlib_inline
     mccabe: mccabe
     mcp: mcp
+    mdit_py_plugins: mdit_py_plugins
     mdurl: mdurl
     minio: minio
     mistune: mistune
@@ -325,6 +327,7 @@ manifest:
     testcontainers.trino: testcontainers
     testcontainers.vault: testcontainers
     testcontainers.weaviate: testcontainers
+    textual: textual
     tifffile: tifffile
     tinycss2: tinycss2
     tokenizers: tokenizers
@@ -347,6 +350,7 @@ manifest:
     typing_inspection: typing_inspection
     tzdata: tzdata
     tzlocal: tzlocal
+    uc_micro: uc_micro_py
     uri_template: uri_template
     urllib3: urllib3
     uvicorn: uvicorn
@@ -367,4 +371,4 @@ manifest:
     zstandard: zstandard
   pip_repository:
     name: pip
-integrity: e4f3b8aa28b2e05960f9abe6ef625282f40b89963a29b002f1b131a26163fef2
+integrity: b13bb4c0e55f0339f5169f9e67a864eb506a841bb023ceedc6614c07e55f32c9
