@@ -1,0 +1,30 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@pip//:requirements.bzl", "requirement")
+
+py_test(
+    name = "test_tui",
+    srcs = glob(["*.py"]),
+    env = {
+        "GATEWAY_URL": "http://test:9080",
+    },
+    tags = ["unit"],
+    deps = [
+        "//src/backend/enterprise/data_sources/api/sources:schemas",
+        "//src/backend/storage/api/files:schemas",
+        "//src/cli:client",
+        "//src/cli:settings",
+        "//src/cli/tui:app",
+        "//src/cli/tui/screens:connectors",
+        "//src/cli/tui/screens:create",
+        "//src/cli/tui/screens:home",
+        "//src/cli/tui/screens:objects",
+        "//src/cli/tui/widgets:confirm",
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+        requirement("textual"),
+    ],
+)

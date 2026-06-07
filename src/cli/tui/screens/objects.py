@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from collections import defaultdict
 from pathlib import PurePosixPath
@@ -23,7 +22,10 @@ from src.cli.client import DataSourcesClient, StorageClient
 
 
 class ObjectsScreen(Screen):
-    """Three-panel screen: namespace/group tree (left) + objects list / file tree / tasks (right)."""
+    """
+    Three-panel screen:
+        namespace/group tree (left) + objects list / file tree / tasks (right).
+    """
 
     BINDINGS = [
         ("d", "delete_object", "Delete Object"),
@@ -52,7 +54,8 @@ class ObjectsScreen(Screen):
         self._groups: list[ObjectsScreen._GroupRow] = []
         self._objects: list[IngestedObjectResponse] = []
         self._tasks: list[IngestionTaskResponse] = []
-        # Maps tree node id → group row (connector leaf) or list of group rows (namespace node).
+        # Maps tree node id → group row (connector leaf) or list of group rows
+        # (namespace node).
         self._leaf_map: dict[int, ObjectsScreen._GroupRow] = {}
         self._ns_map: dict[int, list[ObjectsScreen._GroupRow]] = {}
         # Tracks the namespace context active in the right panel (for namespace delete).
@@ -132,7 +135,10 @@ class ObjectsScreen(Screen):
             await self._load_group(row)
 
     def _rebuild_groups_tree(self) -> TreeNode | None:
-        """Rebuild the namespace/connector tree. Returns the first connector leaf (if any)."""
+        """
+        Rebuild the namespace/connector tree.
+        Returns the first connector leaf (if any).
+        """
         tree = self.query_one("#groups-tree", Tree)
         tree.clear()
         self._leaf_map.clear()
