@@ -59,6 +59,13 @@ def wiremock(
             "response": {"status": 201, "jsonBody": {}},
         },
     )
+    wm.with_mapping(
+        "put-storage-route.json",
+        {
+            "request": {"method": "PUT", "url": "/apisix/admin/routes/storage"},
+            "response": {"status": 201, "jsonBody": {}},
+        },
+    )
     wm.start()
     request.addfinalizer(wm.stop)
     return wm

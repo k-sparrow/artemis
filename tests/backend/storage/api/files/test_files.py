@@ -50,6 +50,7 @@ def _ingested_file_row(group_id: uuid.UUID | None = None) -> dict:
         "content_type": "application/pdf",
         "size_bytes": 11,
         "group_id": group_id,
+        "ingested_at": datetime(2026, 6, 8, 12, 0, 0, tzinfo=timezone.utc),
     }
 
 

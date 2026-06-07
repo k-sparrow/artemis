@@ -25,6 +25,8 @@ _SOURCE_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 _NS_ID = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 _NOW = datetime(2026, 6, 5, 12, 0, 0, tzinfo=timezone.utc)
 
+_OWNER_ID = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+
 _SAMPLE_RESPONSE = {
     "id": str(_SOURCE_ID),
     "display_name": "docs-watcher",
@@ -33,6 +35,7 @@ _SAMPLE_RESPONSE = {
     "namespace_id": str(_NS_ID),
     "namespace_name": "docs-namespace",
     "org_name": "acme",
+    "owner_id": str(_OWNER_ID),
     "config": {"path": "/data/docs"},
     "created_at": _NOW.isoformat(),
     "updated_at": _NOW.isoformat(),
