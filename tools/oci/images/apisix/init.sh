@@ -32,7 +32,7 @@ curl -sf -X PUT "${ADMIN_URL}/apisix/admin/routes/data-sources" \
   -H "X-API-KEY: ${ADMIN_KEY}" \
   -H "Content-Type: application/json" \
   -d '{
-    "uri": "/data-sources*",
+    "uris": ["/data-sources", "/data-sources/*"],
     "upstream": {
       "type": "roundrobin",
       "nodes": {"backend-enterprise-data-sources:9500": 1}

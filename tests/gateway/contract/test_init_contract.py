@@ -73,9 +73,9 @@ class TestDataSourcesRouteRegistration:
         _find_put(received_requests, "/apisix/admin/routes/data-sources")
 
     @pytest.mark.integration
-    def test_uri(self, received_requests: list[dict]) -> None:
+    def test_uris(self, received_requests: list[dict]) -> None:
         req = _find_put(received_requests, "/apisix/admin/routes/data-sources")
-        assert json.loads(req["body"])["uri"] == "/data-sources/*"
+        assert json.loads(req["body"])["uris"] == ["/data-sources", "/data-sources/*"]
 
     @pytest.mark.integration
     def test_upstream_type(self, received_requests: list[dict]) -> None:

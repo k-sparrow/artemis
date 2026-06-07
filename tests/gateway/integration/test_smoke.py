@@ -36,7 +36,7 @@ class TestRouteRegistration:
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["value"]["uri"] == "/data-sources/*"
+        assert body["value"]["uris"] == ["/data-sources", "/data-sources/*"]
 
 
 # ---------------------------------------------------------------------------
