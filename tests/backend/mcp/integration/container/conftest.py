@@ -72,6 +72,13 @@ def wiremock(
         },
     )
     wm.with_mapping(
+        "health-readiness.json",
+        {
+            "request": {"method": "GET", "url": "/health/readiness"},
+            "response": {"status": 200},
+        },
+    )
+    wm.with_mapping(
         "get-namespaces.json",
         {
             "request": {"method": "GET", "url": "/namespaces"},
