@@ -22,6 +22,7 @@ class IngestedObjectResponse(BaseModel):
     content_type: str
     size_bytes: int | None
     group_id: uuid.UUID | None
+    ingested_at: datetime
 
     model_config = {"from_attributes": True}
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from textual import on, work
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Button, Checkbox, Footer, Header, Input, Label
 
@@ -19,9 +19,10 @@ class CreateScreen(Screen):
         ("escape", "cancel", "Cancel"),
     ]
 
-    def __init__(self, gateway_url: str | None = None) -> None:
+    def __init__(self, gateway_url: str | None = None, org_name: str = "") -> None:
         super().__init__()
         self._client = DataSourcesClient(base_url=gateway_url)
+        self._org_name = org_name
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -32,12 +33,15 @@ class CreateScreen(Screen):
             Label("Namespace"),
             Input(placeholder="e.g. docs-namespace", id="inp-namespace"),
             Label("Org Name"),
-            Input(placeholder="e.g. acme-corp", id="inp-org"),
+            Input(value=self._org_name, id="inp-org", disabled=True),
             Label("Path"),
             Input(placeholder="/data/documents", id="inp-path"),
             Checkbox("Recursive", value=True, id="inp-recursive"),
-            Button("Create", id="btn-submit", variant="success"),
-            Button("Cancel", id="btn-cancel"),
+            Horizontal(
+                Button("Create", id="btn-submit", variant="success"),
+                Button("Cancel", id="btn-cancel"),
+                id="form-buttons",
+            ),
             id="form",
         )
         yield Footer()
@@ -61,7 +65,7 @@ class CreateScreen(Screen):
     async def _submit(self) -> None:
         name = self.query_one("#inp-name", Input).value.strip()
         namespace = self.query_one("#inp-namespace", Input).value.strip()
-        org = self.query_one("#inp-org", Input).value.strip()
+        org = self._org_name
         path = self.query_one("#inp-path", Input).value.strip()
         recursive = self.query_one("#inp-recursive", Checkbox).value
 

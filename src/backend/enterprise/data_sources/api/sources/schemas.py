@@ -43,6 +43,7 @@ class DataSourceResponse(BaseModel):
     namespace_id: uuid.UUID
     namespace_name: str | None = None
     org_name: str
+    owner_id: uuid.UUID
     config: dict[str, Any]
     created_at: datetime
     updated_at: datetime

@@ -175,6 +175,7 @@ def _to_response(
         namespace_id=row.namespace_id,
         namespace_name=row.namespace_name,
         org_name=row.org_name,
+        owner_id=uuid.uuid5(ARTEMIS_NS, row.org_name),
         config=row.config,
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -299,6 +300,31 @@ async def delete_data_source(
 
     row.deleted_at = datetime.now(timezone.utc)
     await session.commit()
+
+
+async def delete_namespace_sources(
+    session: AsyncSession,
+    http: httpx.AsyncClient,
+    namespace_id: uuid.UUID,
+) -> int:
+    """Delete every active data source for a namespace and cascade storage cleanup.
+
+    Calls delete_data_source for each connector in order. The sibling-count logic
+    inside delete_data_source ensures group-scoped tombstoning for all but the last
+    connector, which triggers the full namespace hard-delete on storage.
+
+    Returns the number of connectors deleted.
+    """
+    result = await session.execute(
+        sa.select(DataSource).where(
+            DataSource.namespace_id == namespace_id,
+            DataSource.deleted_at.is_(None),
+        )
+    )
+    rows = result.scalars().all()
+    for row in rows:
+        await delete_data_source(session=session, http=http, source_id=row.id)
+    return len(rows)
 
 
 async def pause_data_source(

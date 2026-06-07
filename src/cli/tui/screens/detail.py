@@ -23,6 +23,7 @@ class DetailScreen(Screen):
         ("u", "resume", "Resume"),
         ("r", "restart", "Restart"),
         ("d", "delete", "Delete"),
+        ("o", "objects", "Objects"),
         ("b", "back", "Back"),
         ("escape", "back", "Back"),
     ]
@@ -30,6 +31,7 @@ class DetailScreen(Screen):
     def __init__(self, source_id: uuid.UUID, gateway_url: str | None = None) -> None:
         super().__init__()
         self._source_id = source_id
+        self._gateway_url = gateway_url
         self._client = DataSourcesClient(base_url=gateway_url)
         self._source: DataSourceResponse | None = None
 
@@ -145,12 +147,25 @@ class DetailScreen(Screen):
     def action_delete(self) -> None:
         self._confirm_delete()
 
+    def action_objects(self) -> None:
+        from src.cli.tui.screens.objects import ObjectsScreen
+
+        ns_id = self._source.namespace_id if self._source else None
+        group_id = self._source.id if self._source else None
+        self.app.push_screen(
+            ObjectsScreen(
+                gateway_url=self._gateway_url,
+                namespace_id=ns_id,
+                group_id=group_id,
+            )
+        )
+
     @work(thread=False)
     async def _confirm_delete(self) -> None:
-        from src.cli.tui.screens.list import _ConfirmScreen
+        from src.cli.tui.widgets.confirm import ConfirmScreen
 
         name = self._source.display_name if self._source else str(self._source_id)
-        confirmed = await self.app.push_screen_wait(_ConfirmScreen(f"Delete '{name}'?"))
+        confirmed = await self.app.push_screen_wait(ConfirmScreen(f"Delete '{name}'?"))
         if confirmed:
             try:
                 await self._client.delete_source(self._source_id)

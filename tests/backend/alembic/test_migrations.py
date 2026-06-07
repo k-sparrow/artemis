@@ -21,7 +21,7 @@ def test_all_tables_exist(conn):
 
 def test_alembic_version(conn):
     row = conn.execute("SELECT version_num FROM alembic_version").fetchone()
-    assert row[0] == "0004"
+    assert row[0] == "0005"
 
 
 def test_debezium_and_celery_users_exist_with_replication(conn):

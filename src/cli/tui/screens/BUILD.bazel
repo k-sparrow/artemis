@@ -18,7 +18,51 @@ py_library(
     deps = [
         "//src/backend/enterprise/data_sources/api/sources:schemas",
         "//src/cli:client",
+        "//src/cli/tui/widgets:confirm",
         "//src/cli/tui/widgets:status_badge",
+        requirement("textual"),
+    ],
+)
+
+py_library(
+    name = "connectors",
+    srcs = ["connectors.py"],
+    deps = [
+        "//src/backend/enterprise/data_sources/api/sources:schemas",
+        "//src/cli:client",
+        "//src/cli/tui/widgets:status_badge",
+        requirement("textual"),
+    ],
+)
+
+py_library(
+    name = "home",
+    srcs = ["home.py"],
+    deps = [
+        "//src/backend/enterprise/data_sources/api/sources:schemas",
+        "//src/cli:client",
+        "//src/cli:settings",
+        requirement("textual"),
+    ],
+)
+
+py_library(
+    name = "objects",
+    srcs = ["objects.py"],
+    deps = [
+        "//src/backend/enterprise/data_sources/api/sources:schemas",
+        "//src/backend/storage/api/files:schemas",
+        "//src/cli:client",
+        requirement("textual"),
+    ],
+)
+
+py_library(
+    name = "health",
+    srcs = ["health.py"],
+    deps = [
+        "//src/cli:settings",
+        requirement("httpx"),
         requirement("textual"),
     ],
 )
@@ -27,9 +71,9 @@ py_library(
     name = "detail",
     srcs = ["detail.py"],
     deps = [
-        ":list",
         "//src/backend/enterprise/data_sources/api/sources:schemas",
         "//src/cli:client",
+        "//src/cli/tui/widgets:confirm",
         "//src/cli/tui/widgets:status_badge",
         requirement("textual"),
     ],

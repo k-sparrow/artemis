@@ -7,7 +7,7 @@ load("@pip//:requirements.bzl", "requirement")
 
 package(
     default_visibility = [
-        "//src/backend/storage/api:__pkg__",
+        "//src:__subpackages__",
         "//tests/backend/storage/api:__subpackages__",
     ],
 )

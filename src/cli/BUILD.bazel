@@ -26,6 +26,7 @@ py_library(
     deps = [
         ":settings",
         "//src/backend/enterprise/data_sources/api/sources:schemas",
+        "//src/backend/storage/api/files:schemas",
         requirement("httpx"),
     ],
 )

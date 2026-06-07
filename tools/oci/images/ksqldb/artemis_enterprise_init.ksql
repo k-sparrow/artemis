@@ -12,7 +12,7 @@
 -- Kafka headers injected by the FileSource connector + artemis SMT
 -- ----------------------------------------------------------------
 --   CamelHeader.CamelFileAbsolutePath  : absolute path on the watched filesystem
---   CamelHeader.CamelFileName          : filename (display name)
+--   CamelHeader.CamelFileName          : filename only (not used directly; path is used as display_name)
 --   artemis.namespace                  : namespace name
 --   artemis.namespace_id               : namespace UUID
 --   artemis.org_name                   : organisation name
@@ -64,7 +64,7 @@ AS SELECT
         `type` := 'filesystem',
         `path` := FROM_BYTES(`path`, 'utf8')
     ) AS `source`,
-    FROM_BYTES(`display_name`, 'utf8') AS `display_name`,
+    FROM_BYTES(`path`, 'utf8') AS `display_name`,
     FROM_BYTES(`namespace_id`, 'utf8') AS `namespace_id`,
     FROM_BYTES(`group_id`, 'utf8') AS `group_id`,
     FROM_BYTES(`owner_id`, 'utf8') AS `owner_id`

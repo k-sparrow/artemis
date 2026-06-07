@@ -180,6 +180,12 @@ class IngestedObject(Base):
             "Logical group owner: connector_id (enterprise) or namespace_id (private)"
         ),
     )
+    ingested_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=sa.text("now()"),
+    )
 
     namespace: Mapped[Namespace] = relationship(back_populates="objects")
 

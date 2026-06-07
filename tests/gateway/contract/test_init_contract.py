@@ -92,3 +92,35 @@ class TestDataSourcesRouteRegistration:
     def test_admin_key_header(self, received_requests: list[dict]) -> None:
         req = _find_put(received_requests, "/apisix/admin/routes/data-sources")
         assert _api_key(req) == _ADMIN_KEY
+
+
+# ---------------------------------------------------------------------------
+# /storage route registration
+# ---------------------------------------------------------------------------
+
+
+class TestStorageRouteRegistration:
+    @pytest.mark.integration
+    def test_put_called(self, received_requests: list[dict]) -> None:
+        _find_put(received_requests, "/apisix/admin/routes/storage")
+
+    @pytest.mark.integration
+    def test_uris(self, received_requests: list[dict]) -> None:
+        req = _find_put(received_requests, "/apisix/admin/routes/storage")
+        assert json.loads(req["body"])["uris"] == ["/namespaces", "/namespaces/*"]
+
+    @pytest.mark.integration
+    def test_upstream_type(self, received_requests: list[dict]) -> None:
+        req = _find_put(received_requests, "/apisix/admin/routes/storage")
+        assert json.loads(req["body"])["upstream"]["type"] == "roundrobin"
+
+    @pytest.mark.integration
+    def test_upstream_node(self, received_requests: list[dict]) -> None:
+        req = _find_put(received_requests, "/apisix/admin/routes/storage")
+        nodes = json.loads(req["body"])["upstream"]["nodes"]
+        assert "backend-storage:7000" in nodes
+
+    @pytest.mark.integration
+    def test_admin_key_header(self, received_requests: list[dict]) -> None:
+        req = _find_put(received_requests, "/apisix/admin/routes/storage")
+        assert _api_key(req) == _ADMIN_KEY

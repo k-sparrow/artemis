@@ -17,9 +17,13 @@ py_library(
     srcs = ["app.py"],
     data = ["artemis.tcss"],
     deps = [
+        "//src/cli/tui/screens:connectors",
         "//src/cli/tui/screens:create",
         "//src/cli/tui/screens:detail",
+        "//src/cli/tui/screens:health",
+        "//src/cli/tui/screens:home",
         "//src/cli/tui/screens:list",
+        "//src/cli/tui/screens:objects",
         requirement("textual"),
     ],
 )

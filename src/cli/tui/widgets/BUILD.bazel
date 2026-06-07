@@ -3,6 +3,7 @@
 # -------------------------------------
 
 load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
 
 package(
     default_visibility = [
@@ -14,4 +15,12 @@ package(
 py_library(
     name = "status_badge",
     srcs = ["status_badge.py"],
+)
+
+py_library(
+    name = "confirm",
+    srcs = ["confirm.py"],
+    deps = [
+        requirement("textual"),
+    ],
 )

@@ -58,6 +58,24 @@ async def get_data_source(
 
 
 @router.delete(
+    "/namespace/{namespace_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
+async def delete_namespace_sources(
+    namespace_id: uuid.UUID,
+    session: db_session_dependency,
+    http: storage_client_dependency,
+) -> None:
+    count = await service.delete_namespace_sources(
+        session=session,
+        http=http,
+        namespace_id=namespace_id,
+    )
+    log.info("namespace_sources_deleted", namespace_id=str(namespace_id), count=count)
+
+
+@router.delete(
     "/{source_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None
 )
 async def delete_data_source(

@@ -38,6 +38,16 @@ class TestRouteRegistration:
         body = resp.json()
         assert body["value"]["uris"] == ["/data-sources", "/data-sources/*"]
 
+    @pytest.mark.integration
+    def test_storage_route_registered(self, admin_url: str) -> None:
+        resp = httpx.get(
+            f"{admin_url}/apisix/admin/routes/storage",
+            headers={"X-API-KEY": _ADMIN_KEY},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["value"]["uris"] == ["/namespaces", "/namespaces/*"]
+
 
 # ---------------------------------------------------------------------------
 # Proxy behaviour — registered paths are forwarded (not blocked)
@@ -49,6 +59,7 @@ class TestRouteRegistration:
 _REGISTERED_PATHS = [
     pytest.param("/mcp/anything", id="mcp"),
     pytest.param("/data-sources/anything", id="data-sources"),
+    pytest.param("/namespaces/some-id", id="storage"),
 ]
 
 
@@ -70,7 +81,6 @@ class TestRegisteredPathsAreRouted:
 
 _BLOCKED_PATHS = [
     pytest.param("/", id="root"),
-    pytest.param("/namespaces/some-id", id="namespaces"),
     pytest.param("/retrieve/invoke", id="retrieve"),
     pytest.param("/intake", id="intake"),
     pytest.param("/does/not/exist", id="arbitrary"),

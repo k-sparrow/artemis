@@ -224,6 +224,8 @@ async def list_files(
     namespace_id: uuid.UUID,
     caller_owner_id: uuid.UUID,
     group_id: uuid.UUID | None = None,
+    limit: int | None = None,
+    order: str = "asc",
 ) -> list[IngestedObject]:
     await _fetch_namespace(
         session=session,
@@ -233,7 +235,15 @@ async def list_files(
     filters = [IngestedObject.namespace_id == namespace_id]
     if group_id is not None:
         filters.append(IngestedObject.group_id == group_id)
-    result = await session.execute(sa.select(IngestedObject).where(*filters))
+    order_col = (
+        IngestedObject.ingested_at.desc()
+        if order == "desc"
+        else IngestedObject.ingested_at.asc()
+    )
+    q = sa.select(IngestedObject).where(*filters).order_by(order_col)
+    if limit is not None:
+        q = q.limit(limit)
+    result = await session.execute(q)
     return list(result.scalars().all())
 
 

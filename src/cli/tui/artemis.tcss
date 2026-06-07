@@ -62,13 +62,21 @@ Tree > .tree--highlight {
 }
 
 /* Create form */
+CreateScreen {
+    align: center middle;
+}
+
 #form {
     padding: 1 2;
     width: 64;
     height: auto;
     background: $artemis-surface;
     border: solid $artemis-border;
-    align: center middle;
+}
+
+#form-buttons {
+    height: auto;
+    margin-top: 1;
 }
 
 #form-title {
@@ -82,6 +90,17 @@ Tree > .tree--highlight {
     margin-top: 1;
 }
 
+#inp-org {
+    opacity: 0.6;
+}
+
+#form Checkbox {
+    margin-top: 1;
+    background: transparent;
+    border: none;
+    color: $artemis-text;
+}
+
 Input {
     background: $artemis-panel;
     border: solid $artemis-border;
@@ -92,13 +111,115 @@ Input:focus {
     border: solid $artemis-accent;
 }
 
+/* Home screen */
+#home-content {
+    align: center middle;
+    height: 1fr;
+}
+
+#home-title {
+    color: $artemis-accent;
+    text-style: bold;
+    text-align: center;
+    margin-bottom: 0;
+}
+
+#home-gateway {
+    color: $artemis-text-dim;
+    text-align: center;
+    margin-bottom: 1;
+}
+
+#home-tables {
+    height: auto;
+    width: auto;
+}
+
+#home-metrics {
+    width: 40;
+    height: auto;
+    background: $artemis-surface;
+    border: solid $artemis-border;
+    margin-right: 2;
+}
+
+#home-sidebar {
+    width: 60;
+    height: auto;
+    background: $artemis-surface;
+    border: solid $artemis-border;
+}
+
+/* Connectors screen */
+#connectors-body {
+    height: 1fr;
+}
+
+#filter-input {
+    height: 3;
+    background: $artemis-panel;
+    border: solid $artemis-accent;
+}
+
+/* Objects screen */
+#objects-body {
+    height: 1fr;
+}
+
+#objects-left {
+    width: 1fr;
+    border-right: solid $artemis-border;
+}
+
+#objects-right {
+    width: 2fr;
+}
+
+#groups-tree {
+    height: 1fr;
+    background: $artemis-surface;
+}
+
+#groups-label, #objects-label, #tree-label, #tasks-label, #objects-hint {
+    color: $artemis-accent;
+    text-style: bold;
+    padding: 0 1;
+    height: 1;
+}
+
+#objects-list {
+    height: 1fr;
+    background: $artemis-surface;
+    border-bottom: solid $artemis-border;
+}
+
+#objects-filetree {
+    height: 1fr;
+    background: $artemis-surface;
+    border-bottom: solid $artemis-border;
+    padding: 0 1;
+}
+
+#objects-tasks {
+    height: 1fr;
+    background: $artemis-surface;
+}
+
+/* Health screen */
+#health-table {
+    height: 1fr;
+    background: $artemis-surface;
+    border: solid $artemis-border;
+    margin: 1 2;
+}
+
 /* Confirm modal */
-_ConfirmScreen {
+ConfirmScreen {
     align: center middle;
     background: $artemis-bg 70%;
 }
 
-_ConfirmScreen > * {
+ConfirmScreen > * {
     background: $artemis-panel;
     border: solid $artemis-border;
     padding: 2 4;
@@ -106,18 +227,18 @@ _ConfirmScreen > * {
     height: auto;
 }
 
-_ConfirmScreen Label {
+ConfirmScreen Label {
     color: $artemis-text;
     text-style: bold;
     margin-bottom: 1;
 }
 
-_ConfirmScreen Horizontal {
+ConfirmScreen Horizontal {
     height: auto;
     align: center middle;
 }
 
-_ConfirmScreen Button {
+ConfirmScreen Button {
     margin: 0 1;
 }
 

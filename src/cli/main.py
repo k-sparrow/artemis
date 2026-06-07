@@ -55,13 +55,20 @@ def cli(ctx: click.Context, gateway: str | None) -> None:
 
 
 @cli.command()
+@click.option(
+    "--org",
+    envvar="ARTEMIS_ORG",
+    required=True,
+    metavar="NAME",
+    help="Organisation name used as owner for new connectors (also ARTEMIS_ORG env var).",
+)
 @click.pass_context
-def tui(ctx: click.Context) -> None:
+def tui(ctx: click.Context, org: str) -> None:
     """Launch the interactive TUI."""
     from src.cli.tui.app import DataSourcesApp
 
     gateway = ctx.obj.get("gateway")
-    DataSourcesApp(gateway_url=gateway).run()
+    DataSourcesApp(gateway_url=gateway, org_name=org).run()
 
 
 @cli.group()

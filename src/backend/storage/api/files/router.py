@@ -7,6 +7,7 @@ relative to that prefix: /{namespace_id}/objects, /{namespace_id}/tasks, etc.
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Query, UploadFile, status
 
@@ -164,12 +165,16 @@ async def list_objects_endpoint(
     session: db_session_dependency,
     caller_owner_id: caller_owner_id_dependency,
     group_id: uuid.UUID | None = Query(default=None),
+    limit: int | None = Query(default=None, ge=1),
+    order: Literal["asc", "desc"] = Query(default="asc"),
 ) -> list[IngestedObjectResponse]:
     objects = await service.list_files(
         session=session,
         namespace_id=namespace_id,
         caller_owner_id=caller_owner_id,
         group_id=group_id,
+        limit=limit,
+        order=order,
     )
     return [IngestedObjectResponse.model_validate(o) for o in objects]
 

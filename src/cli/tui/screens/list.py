@@ -115,8 +115,10 @@ class ListScreen(Screen):
 
     @work(thread=False)
     async def _confirm_delete(self, source: DataSourceResponse) -> None:
+        from src.cli.tui.widgets.confirm import ConfirmScreen
+
         confirmed = await self.app.push_screen_wait(
-            _ConfirmScreen(f"Delete '{source.display_name}'?")
+            ConfirmScreen(f"Delete '{source.display_name}'?")
         )
         if confirmed:
             try:

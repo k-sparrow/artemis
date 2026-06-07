@@ -39,4 +39,15 @@ curl -sf -X PUT "${ADMIN_URL}/apisix/admin/routes/data-sources" \
     }
   }'
 
+curl -sf -X PUT "${ADMIN_URL}/apisix/admin/routes/storage" \
+  -H "X-API-KEY: ${ADMIN_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "uris": ["/namespaces", "/namespaces/*"],
+    "upstream": {
+      "type": "roundrobin",
+      "nodes": {"backend-storage:7000": 1}
+    }
+  }'
+
 echo "✓ APISIX routes registered."
