@@ -20,6 +20,7 @@ class IndexingSettings(BaseSettings):
     """
 
     DEBUG: bool = False
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = ""
     RETRIEVAL_MODE: RetrievalMode = RetrievalMode.DENSE
     # ColBERT late-interaction — required when RETRIEVAL_MODE=multi_stage
     COLBERT_HOST_URL: str | None = None

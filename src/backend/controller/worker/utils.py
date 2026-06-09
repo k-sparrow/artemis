@@ -28,6 +28,7 @@ from typing import List, Optional
 
 import httpx
 import pybreaker
+from opentelemetry import trace as otel_trace
 from minio import Minio
 from pydantic import TypeAdapter
 
@@ -45,6 +46,7 @@ __all__ = [
 
 _chunks_adapter: TypeAdapter[List[ParsedChunk]] = TypeAdapter(List[ParsedChunk])
 _log = logging.getLogger(__name__)
+_tracer = otel_trace.get_tracer("controller.worker.utils")
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +129,8 @@ def call_parsing_service(
             response.raise_for_status()
             return response.json()
 
-    raw = parsing_breaker.call(_request)
+    with _tracer.start_as_current_span("http.parsing_service"):
+        raw = parsing_breaker.call(_request)
     chunks = _chunks_adapter.validate_python(raw)
     logger.info("parsing=done chunks=%d", len(chunks))
     return chunks
@@ -163,7 +166,8 @@ def call_indexing_service(
             response.raise_for_status()
             return response.json()
 
-    result = indexing_breaker.call(_request)
+    with _tracer.start_as_current_span("http.indexing_service"):
+        result = indexing_breaker.call(_request)
     logger.info("indexing=done result=%s", result)
     return result
 

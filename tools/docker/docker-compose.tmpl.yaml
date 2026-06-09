@@ -203,6 +203,7 @@ services:
       S3_SECRET_KEY: minioadmin
       S3_ARTEMIS_BUCKET: artemis
       S3_ARTEMIS_BUCKET_KAFKA_EVENT: ARTEMIS
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
     expose:
       - "7000"
     ports:
@@ -241,6 +242,7 @@ services:
       EXCHANGE_NAME: ingestion_test0
       INGESTION_SERVICE_URL: http://backend-indexing-ingestion:10000
       PARSING_SERVICE_URL: http://backend-parsing:10001
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
     networks:
       - default
   backend-parsing:
@@ -258,6 +260,7 @@ services:
     environment:
       DOCLING_SERVE_URI: "http://docling-serve:5001"
       LOADER_TYPE: "docling"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
     expose:
       - "10001"
     ports:
@@ -275,6 +278,8 @@ services:
         condition: service_healthy
       artemis-db-migrations:
         condition: service_completed_successfully
+      tei:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/10000 && printf 'GET /health/readiness HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q 'HTTP/1.1 200' <&3"]
       interval: 20s
@@ -297,6 +302,7 @@ services:
       SQL_DB_DATABASE: "documents"
       SQL_DRIVER: "postgresql+asyncpg"
       DEBUG: true
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     expose:
@@ -330,6 +336,7 @@ services:
       SQL_DB_URL: "postgresql+asyncpg://postgres:testpass@postgres:5432/documents"
       KAFKA_CONNECT_URL: "http://kafka-connect:8083"
       STORAGE_SERVICE_URL: "http://backend-storage:7000"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
     expose:
       - "9500"
     ports:
@@ -394,6 +401,7 @@ services:
       KAFKA_CONNECT_URL: "http://kafka-connect:8083"
       STORAGE_SERVICE_URL: "http://backend-storage:7000"
       INTAKE_URL: "http://backend-enterprise-intake:9000/intake"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
     expose:
       - "9000"
     ports:
@@ -493,14 +501,14 @@ services:
     container_name: tei
     ports:
       - "11435:80"
-    volumes:
-      - ${HOME}/.cache/huggingface:/data:ro
+    environment:
+      HF_ENDPOINT: "https://huggingface.co"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost/health || exit 1"]
       interval: 30s
       timeout: 30s
       retries: 5
-      start_period: 90s
+      start_period: 90s{TEI_GPU_BLOCK}
     networks:
       - default
   colbert:
@@ -516,9 +524,7 @@ services:
       interval: 30s
       timeout: 30s
       retries: 5
-      start_period: 300s
-    volumes:
-      - ${HOME}/.cache/huggingface:/root/.cache/huggingface:ro{COLBERT_GPU_BLOCK}
+      start_period: 300s{COLBERT_GPU_BLOCK}
     networks:
       - default
   backend-mcp:
@@ -538,6 +544,7 @@ services:
       STORAGE_SERVICE_URL: "http://backend-storage:7000"
       INDEXING_SERVICE_URL: "http://backend-indexing-ingestion:10000"
       ENABLE_UPLOAD: "${MCP_ENABLE_UPLOAD:-false}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
     expose:
       - "11000"
     ports:
@@ -602,6 +609,42 @@ services:
     networks:
       - default
   # ---------------------------------------------------------------------------
+  # Observability
+  # ---------------------------------------------------------------------------
+  otel-collector:
+    profiles: [observability]
+    image: otel/opentelemetry-collector-contrib:0.115.0
+    configs:
+      - source: otel-collector-config
+        target: /etc/otelcol-contrib/config.yaml
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8889:8889"
+    depends_on:
+      - jaeger
+    networks:
+      - default
+  jaeger:
+    profiles: [observability]
+    image: jaegertracing/all-in-one:1.62
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+    networks:
+      - default
+  prometheus:
+    profiles: [observability]
+    image: prom/prometheus:v3.0.0
+    configs:
+      - source: prometheus-config
+        target: /etc/prometheus/prometheus.yml
+    ports:
+      - "9091:9090"
+    networks:
+      - default
+  # ---------------------------------------------------------------------------
   # API Gateway
   # ---------------------------------------------------------------------------
   apisix-etcd:
@@ -660,6 +703,37 @@ volumes:
   db-storage:
   s3-storage:
 configs:
+  otel-collector-config:
+    content: |
+      receivers:
+        otlp:
+          protocols:
+            grpc:
+              endpoint: 0.0.0.0:4317
+            http:
+              endpoint: 0.0.0.0:4318
+      exporters:
+        otlp/jaeger:
+          endpoint: jaeger:4317
+          tls:
+            insecure: true
+        prometheus:
+          endpoint: 0.0.0.0:8889
+          namespace: artemis
+      service:
+        pipelines:
+          traces:
+            receivers: [otlp]
+            exporters: [otlp/jaeger]
+          metrics:
+            receivers: [otlp]
+            exporters: [prometheus]
+  prometheus-config:
+    content: |
+      scrape_configs:
+        - job_name: artemis
+          static_configs:
+            - targets: ['otel-collector:8889']
   apisix-config:
     content: |
       deployment:

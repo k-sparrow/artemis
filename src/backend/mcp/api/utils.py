@@ -7,12 +7,14 @@ from fastapi import FastAPI
 from src.backend.mcp.api import client
 from src.backend.mcp.api.settings import settings
 from src.lib.backend.logging import configure_logging, get_logger
+from src.lib.backend.otel import with_telemetry
 
 __all__ = [
     "lifespan",
 ]
 
 
+@with_telemetry("backend-mcp")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging(

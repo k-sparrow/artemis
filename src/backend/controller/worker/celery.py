@@ -1,7 +1,15 @@
 from celery import Celery
+from celery.signals import worker_ready
 from kombu import Exchange, Queue
 
 from src.backend.controller.worker.config import settings
+from src.lib.backend.otel import setup_telemetry
+
+
+@worker_ready.connect
+def _setup_otel(**kwargs) -> None:
+    setup_telemetry("controller-worker")
+
 
 __all__ = ["app"]
 

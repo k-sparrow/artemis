@@ -32,6 +32,7 @@ import uuid
 from celery import chain
 from celery.signals import worker_ready
 from celery.utils.log import get_task_logger
+from opentelemetry import trace
 
 import pybreaker
 
@@ -65,6 +66,8 @@ from src.lib.core.adapters.stores.minio.parsed_chunks import ParsedChunkStore
 
 logger = get_task_logger(__name__)
 logger.setLevel(logging.DEBUG)
+
+_tracer = trace.get_tracer("controller.worker")
 
 # Single shared result-backend instance — avoids recreating the SQLAlchemy
 # engine for every task invocation.
@@ -181,39 +184,46 @@ def fetch_and_parse(
     Failure modes (retryable, max 3):
         S3IntegrityError   — contract reports size>0 but MinIO returned 0 bytes.
     """
-    # Guard 1: empty file — permanent, do not retry.
-    if s3.size == 0:
-        raise EmptyObjectError(str(source.obj_id))
+    with _tracer.start_as_current_span("tasks.fetch_and_parse") as span:
+        task_id = self.request.id or str(uuid.uuid4())
+        span.set_attribute("artemis.task_id", task_id)
+        span.set_attribute("artemis.namespace_id", str(namespace_id))
+        span.set_attribute("artemis.obj_id", str(source.obj_id))
 
-    task_id = self.request.id or str(uuid.uuid4())
-    minio_client = get_s3_client()
-    file_bytes = fetch_from_s3(minio_client, s3, logger)
+        # Guard 1: empty file — permanent, do not retry.
+        if s3.size == 0:
+            raise EmptyObjectError(str(source.obj_id))
 
-    # Guard 2: MinIO integrity — potentially transient, retry up to 3 times.
-    if len(file_bytes) == 0:
-        raise self.retry(
-            exc=S3IntegrityError(s3.object, s3.size),
-            max_retries=3,
-            countdown=10,
+        minio_client = get_s3_client()
+        file_bytes = fetch_from_s3(minio_client, s3, logger)
+
+        # Guard 2: MinIO integrity — potentially transient, retry up to 3 times.
+        if len(file_bytes) == 0:
+            raise self.retry(
+                exc=S3IntegrityError(s3.object, s3.size),
+                max_retries=3,
+                countdown=10,
+            )
+
+        chunks = call_parsing_service(
+            file_bytes=file_bytes,
+            source=source,
+            parsing_url=settings.PARSING_SERVICE_URL,
+            timeout=settings.HTTPX_TIMEOUT,
+            logger=logger,
         )
 
-    chunks = call_parsing_service(
-        file_bytes=file_bytes,
-        source=source,
-        parsing_url=settings.PARSING_SERVICE_URL,
-        timeout=settings.HTTPX_TIMEOUT,
-        logger=logger,
-    )
+        # Guard 3: chunk integrity — parsing service contract violation, do not retry.
+        obj_ids = {c.obj_id for c in chunks}
+        if len(obj_ids) != 1:
+            raise ChunkIntegrityError(obj_ids)
 
-    # Guard 3: chunk integrity — parsing service contract violation, do not retry.
-    obj_ids = {c.obj_id for c in chunks}
-    if len(obj_ids) != 1:
-        raise ChunkIntegrityError(obj_ids)
-
-    store = ParsedChunkStore(client=minio_client, bucket=settings.PARSED_CHUNKS_BUCKET)
-    key = store.save(chunks, task_id)
-    logger.info("fetch_and_parse=saved key=%s chunks=%d", key, len(chunks))
-    return key
+        store = ParsedChunkStore(
+            client=minio_client, bucket=settings.PARSED_CHUNKS_BUCKET
+        )
+        key = store.save(chunks, task_id)
+        logger.info("fetch_and_parse=saved key=%s chunks=%d", key, len(chunks))
+        return key
 
 
 # ---------------------------------------------------------------------------
@@ -245,48 +255,55 @@ def index(
     On success the object is removed; on failure it is left for manual
     inspection or dead-letter replay.
     """
-    minio_client = get_s3_client()
-    store = ParsedChunkStore(client=minio_client, bucket=settings.PARSED_CHUNKS_BUCKET)
+    with _tracer.start_as_current_span("tasks.index") as span:
+        span.set_attribute("artemis.namespace_id", str(namespace_id))
 
-    chunks = store.load(chunks_key)
-    logger.info("index=loaded key=%s chunks=%d", chunks_key, len(chunks))
+        minio_client = get_s3_client()
+        store = ParsedChunkStore(
+            client=minio_client, bucket=settings.PARSED_CHUNKS_BUCKET
+        )
 
-    # obj_id uniqueness was validated in fetch_and_parse; extract it here for the result.
-    obj_id = str(next(iter({c.obj_id for c in chunks})))
+        chunks = store.load(chunks_key)
+        logger.info("index=loaded key=%s chunks=%d", chunks_key, len(chunks))
 
-    result = call_indexing_service(
-        chunks=chunks,
-        namespace_id=namespace_id,
-        ingestion_url=settings.INGESTION_SERVICE_URL,
-        timeout=settings.HTTPX_TIMEOUT,
-        logger=logger,
-        group_id=group_id,
-    )
+        # obj_id uniqueness was validated in fetch_and_parse;
+        # extract it here for the result.
+        obj_id = str(next(iter({c.obj_id for c in chunks})))
+        span.set_attribute("artemis.obj_id", obj_id)
 
-    store.delete(chunks_key)
-    logger.info("index=cleanup key=%s obj_id=%s", chunks_key, obj_id)
+        result = call_indexing_service(
+            chunks=chunks,
+            namespace_id=namespace_id,
+            ingestion_url=settings.INGESTION_SERVICE_URL,
+            timeout=settings.HTTPX_TIMEOUT,
+            logger=logger,
+            group_id=group_id,
+        )
 
-    return IngestionResult(
-        object=ObjectMetadata(
-            id=uuid.UUID(obj_id),
-            source=source.source if source is not None else "",
-            scope=ObjectScope(
-                namespace_id=namespace_id,
-                group_id=uuid.UUID(group_id) if group_id is not None else None,
+        store.delete(chunks_key)
+        logger.info("index=cleanup key=%s obj_id=%s", chunks_key, obj_id)
+
+        return IngestionResult(
+            object=ObjectMetadata(
+                id=uuid.UUID(obj_id),
+                source=source.source if source is not None else "",
+                scope=ObjectScope(
+                    namespace_id=namespace_id,
+                    group_id=uuid.UUID(group_id) if group_id is not None else None,
+                ),
+                properties=ObjectProperties(
+                    object_type=source.object_type if source is not None else "",
+                    content_type=source.content_type if source is not None else "",
+                    size_bytes=s3.size if s3 is not None else None,
+                ),
             ),
-            properties=ObjectProperties(
-                object_type=source.object_type if source is not None else "",
-                content_type=source.content_type if source is not None else "",
-                size_bytes=s3.size if s3 is not None else None,
+            indexing=IndexingOutcome(
+                num_added=result["num_added"],
+                num_skipped=result["num_skipped"],
+                ids=result["ids"],
             ),
-        ),
-        indexing=IndexingOutcome(
-            num_added=result["num_added"],
-            num_skipped=result["num_skipped"],
-            ids=result["ids"],
-        ),
-        operation=upload_action,
-    ).model_dump(mode="json")
+            operation=upload_action,
+        ).model_dump(mode="json")
 
 
 # ---------------------------------------------------------------------------

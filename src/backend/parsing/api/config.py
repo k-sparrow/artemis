@@ -11,6 +11,7 @@ __all__ = [
 
 class ParsingSettings(BaseSettings):
     DEBUG: bool = False
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = ""
     DOCLING_SERVE_URI: str
     LOADER_TYPE: LoaderType = LoaderType.DOCLING
 

@@ -8,8 +8,10 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from src.backend.enterprise.data_sources.api.config import settings
 from src.backend.enterprise.data_sources.api.models import Base
 from src.lib.backend.logging import configure_logging, get_logger
+from src.lib.backend.otel import with_telemetry
 
 
+@with_telemetry("backend-enterprise-data-sources")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging(

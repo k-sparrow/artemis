@@ -6,8 +6,10 @@ from fastapi import FastAPI
 
 from src.backend.enterprise.intake.api.config import settings
 from src.lib.backend.logging import configure_logging, get_logger
+from src.lib.backend.otel import with_telemetry
 
 
+@with_telemetry("backend-enterprise-intake")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging(

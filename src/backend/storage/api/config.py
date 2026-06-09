@@ -8,6 +8,7 @@ __all__ = [
 
 class StorageSettings(BaseSettings):
     DEBUG: bool = False
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = ""
 
     # S3 configuration
     S3_ENDPOINT_URL: str

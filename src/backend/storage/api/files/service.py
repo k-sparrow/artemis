@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import uuid
 import sqlalchemy as sa
+from opentelemetry import trace as otel_trace
 from minio import Minio
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +30,18 @@ from src.lib.core.ingestion.contract import (
 
 def _s3_key(namespace_id: uuid.UUID, obj_id: uuid.UUID) -> str:
     return f"{namespace_id}/{obj_id}"
+
+
+def _stamp_task_span(
+    task_id: uuid.UUID,
+    namespace_id: uuid.UUID,
+    obj_id: uuid.UUID,
+) -> None:
+    span = otel_trace.get_current_span()
+    if span.is_recording():
+        span.set_attribute("artemis.task_id", str(task_id))
+        span.set_attribute("artemis.namespace_id", str(namespace_id))
+        span.set_attribute("artemis.obj_id", str(obj_id))
 
 
 async def _fetch_ingested_object(
@@ -68,6 +81,7 @@ async def upload_file(
     task_id = uuid.uuid4()
     source_label = filename or str(uuid.uuid4())
     obj_id = uuid.uuid5(namespace_id, source_label)
+    _stamp_task_span(task_id=task_id, namespace_id=namespace_id, obj_id=obj_id)
     s3_key = _s3_key(namespace_id, obj_id)
     resolved_content_type = content_type or "application/octet-stream"
 
@@ -119,6 +133,7 @@ async def reingest_file(
         session=session, namespace_id=namespace_id, obj_id=obj_id
     )
     task_id = uuid.uuid4()
+    _stamp_task_span(task_id=task_id, namespace_id=namespace_id, obj_id=obj_id)
     # Use the provided filename as the source label; fall back to str(obj_id)
     # if not supplied so source.source is always non-null.
     source_label = filename or str(obj_id)
@@ -174,6 +189,7 @@ async def delete_file(
     ingested = await _fetch_ingested_object(
         session=session, namespace_id=namespace_id, obj_id=obj_id
     )
+    _stamp_task_span(task_id=task_id, namespace_id=namespace_id, obj_id=obj_id)
     s3_key = _s3_key(namespace_id, obj_id)
 
     details = IngestionTaskDetails(

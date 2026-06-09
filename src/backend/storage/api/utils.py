@@ -10,6 +10,7 @@ from minio.notificationconfig import NotificationConfig, QueueConfig
 from src.backend.storage.api.config import settings
 from src.backend.storage.api.dependencies import get_minio_client
 from src.lib.backend.logging import configure_logging, get_logger
+from src.lib.backend.otel import with_telemetry
 
 __all__ = [
     "create_bucket",
@@ -68,6 +69,7 @@ def s3_dump_object(
     )
 
 
+@with_telemetry("backend-storage")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging(

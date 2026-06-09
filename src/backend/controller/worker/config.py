@@ -54,5 +54,7 @@ class WorkerSettings(BaseSettings):
     # Celery exchange name
     EXCHANGE_NAME: str
 
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = ""
+
 
 settings = WorkerSettings()  # type: ignore
