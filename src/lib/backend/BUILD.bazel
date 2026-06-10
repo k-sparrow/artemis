@@ -20,5 +20,7 @@ py_library(
         requirement("opentelemetry-instrumentation-fastapi"),
         requirement("opentelemetry-instrumentation-httpx"),
         requirement("opentelemetry-instrumentation-sqlalchemy"),
+        requirement("httpx"),
+        requirement("sqlalchemy"),
     ],
 )

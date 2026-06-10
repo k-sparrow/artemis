@@ -505,7 +505,7 @@ services:
   tei:
     profiles: [ai-tei]
     image: "ghcr.io/huggingface/text-embeddings-inference:1.6"
-    command: --model-id sentence-transformers/all-MiniLM-L12-v2
+    command: --model-id Alibaba-NLP/gte-large-en-v1.5 --pooling mean --auto-truncate
     container_name: tei
     ports:
       - "11435:80"
@@ -516,7 +516,7 @@ services:
       interval: 30s
       timeout: 30s
       retries: 5
-      start_period: 90s
+      start_period: 300s
     deploy: # This section is for compatibility with Swarm
       resources:
         reservations:
@@ -646,7 +646,7 @@ services:
   # ---------------------------------------------------------------------------
   otel-collector:
     profiles: [observability]
-    image: otel/opentelemetry-collector-contrib:0.115.0
+    image: otel/opentelemetry-collector-contrib:0.154.0
     configs:
       - source: otel-collector-config
         target: /etc/otelcol-contrib/config.yaml
@@ -660,9 +660,11 @@ services:
       - default
   jaeger:
     profiles: [observability]
-    image: jaegertracing/all-in-one:1.62
-    environment:
-      COLLECTOR_OTLP_ENABLED: "true"
+    image: jaegertracing/jaeger:2.19.0
+    configs:
+      - source: jaeger-config
+        target: /etc/jaeger/config.yaml
+    command: ["--config", "/etc/jaeger/config.yaml"]
     ports:
       - "16686:16686"
     networks:
@@ -736,6 +738,36 @@ volumes:
   db-storage:
   s3-storage:
 configs:
+  jaeger-config:
+    content: |
+      service:
+        extensions: [jaeger_storage, jaeger_query]
+        pipelines:
+          traces:
+            receivers: [otlp]
+            processors: [batch]
+            exporters: [jaeger_storage_exporter]
+      extensions:
+        jaeger_storage:
+          backends:
+            memstore:
+              memory:
+                max_traces: 100000
+        jaeger_query:
+          storage:
+            traces: memstore
+      receivers:
+        otlp:
+          protocols:
+            grpc:
+              endpoint: 0.0.0.0:4317
+            http:
+              endpoint: 0.0.0.0:4318
+      processors:
+        batch:
+      exporters:
+        jaeger_storage_exporter:
+          trace_storage: memstore
   otel-collector-config:
     content: |
       receivers:
@@ -746,7 +778,7 @@ configs:
             http:
               endpoint: 0.0.0.0:4318
       exporters:
-        otlp/jaeger:
+        otlp_grpc/jaeger:
           endpoint: jaeger:4317
           tls:
             insecure: true
@@ -757,7 +789,7 @@ configs:
         pipelines:
           traces:
             receivers: [otlp]
-            exporters: [otlp/jaeger]
+            exporters: [otlp_grpc/jaeger]
           metrics:
             receivers: [otlp]
             exporters: [prometheus]

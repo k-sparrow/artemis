@@ -44,7 +44,8 @@ _DEV_SUBS: dict[str, str] = {
     "DOCLING_IMAGE": "ghcr.io/docling-project/docling-serve-cu126:main",
     "DOCLING_GPU_BLOCK": _GPU_DEPLOY_BLOCK,
     "TEI_IMAGE": "ghcr.io/huggingface/text-embeddings-inference:1.6",
-    "TEI_MODEL": "sentence-transformers/all-MiniLM-L12-v2",
+    "TEI_MODEL": "Alibaba-NLP/gte-large-en-v1.5",
+    "TEI_POOLING": "mean",
     "TEI_GPU_BLOCK": _GPU_DEPLOY_BLOCK,
     "COLBERT_COMMAND_BLOCK": (
         "\n"
@@ -66,6 +67,7 @@ _TEST_SUBS: dict[str, str] = {
     "DOCLING_GPU_BLOCK": "",
     "TEI_IMAGE": "ghcr.io/huggingface/text-embeddings-inference:cpu-1.5",
     "TEI_MODEL": "BAAI/bge-small-en-v1.5",
+    "TEI_POOLING": "cls",
     "TEI_GPU_BLOCK": "",
     "COLBERT_COMMAND_BLOCK": (
         "\n"
