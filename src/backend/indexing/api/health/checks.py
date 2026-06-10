@@ -1,15 +1,15 @@
+import httpx
 from fastapi_healthchecks.checks import Check, CheckResult
-from langchain_core.embeddings import Embeddings
-from qdrant_client import AsyncQdrantClient
-
 from fastapi_healthchecks.checks.http import HttpCheck
+from qdrant_client import AsyncQdrantClient
 
 
 __all__ = [
     "DoclingServeHealthcheck",
-    "EmbeddingsHealthcheck",
     "LivenessCheck",
+    "OpenAICompatibleHealthcheck",
     "QdrantHealthcheck",
+    "TeiHealthcheck",
 ]
 
 
@@ -95,40 +95,75 @@ class QdrantHealthcheck(Check):
             )
 
 
-class EmbeddingsHealthcheck(Check):
-    """
-    Health check for embeddings.
+class TeiHealthcheck(Check):
+    """Verifies TEI is up and serving an embedding model via GET /info."""
 
-    Verifies:
-    1. Embeddings are alive
-    2. Embedding dims are greater than 0
-    """
-
-    def __init__(self, embeddings: Embeddings):
+    def __init__(self, tei_url: str):
         super().__init__()
-        self._embeddings = embeddings
-        self._name = "Readiness/Embeddings"
+        self._info_url = tei_url.rstrip("/") + "/info"
+        self._client = httpx.AsyncClient(timeout=5.0)
+        self._name = "Readiness/TEI"
 
     async def __call__(self) -> CheckResult:
         try:
-            result = await self._embeddings.aembed_query("dummy")
-            dim = len(result)
-            if dim <= 0:
+            resp = await self._client.get(self._info_url)
+            resp.raise_for_status()
+            info = resp.json()
+
+            model_type = info.get("model_type", {})
+            if "embedding" not in model_type:
                 return CheckResult(
                     name=self._name,
                     passed=False,
-                    details="Received empty embeddings vector",
+                    details=f"TEI is not serving an embedding model (model_type={model_type})",
                 )
+
             return CheckResult(
                 name=self._name,
                 passed=True,
-                details="Embeddings ready",
+                details=f"TEI ready: model_id={info.get('model_id')}",
             )
         except Exception as e:
             return CheckResult(
                 name=self._name,
                 passed=False,
-                details=f"Embeddings connection error: {str(e)}",
+                details=f"TEI connection error: {e}",
+            )
+
+
+class OpenAICompatibleHealthcheck(Check):
+    """Verifies an OpenAI-compatible server is up and serving the expected model via GET /v1/models."""
+
+    def __init__(self, url: str, model_name: str, name: str):
+        super().__init__()
+        self._models_url = url.rstrip("/") + "/v1/models"
+        self._model_name = model_name
+        self._client = httpx.AsyncClient(timeout=5.0)
+        self._name = name
+
+    async def __call__(self) -> CheckResult:
+        try:
+            resp = await self._client.get(self._models_url)
+            resp.raise_for_status()
+            models = [m["id"] for m in resp.json().get("data", [])]
+
+            if self._model_name not in models:
+                return CheckResult(
+                    name=self._name,
+                    passed=False,
+                    details=f"Model '{self._model_name}' not found (served: {models})",
+                )
+
+            return CheckResult(
+                name=self._name,
+                passed=True,
+                details=f"Ready: model_id={self._model_name}",
+            )
+        except Exception as e:
+            return CheckResult(
+                name=self._name,
+                passed=False,
+                details=f"Connection error: {e}",
             )
 
 

@@ -1,7 +1,14 @@
+import httpx
 import pytest
+import respx
 from qdrant_client import QdrantClient
 
-from src.backend.indexing.api.health.checks import LivenessCheck, QdrantHealthcheck
+from src.backend.indexing.api.health.checks import (
+    LivenessCheck,
+    OpenAICompatibleHealthcheck,
+    QdrantHealthcheck,
+    TeiHealthcheck,
+)
 from tests.backend.indexing.api.health.conftest import COLLECTION_NAME
 
 
@@ -90,4 +97,141 @@ class TestQdrantHealthcheck:
 
         assert result.passed is False
         assert result.name == "Readiness/Qdrant"
+        assert "connection error" in result.details.lower()
+
+
+@pytest.mark.unit
+class TestTeiHealthcheck:
+    _TEI_URL = "http://tei-host:8080"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_embedding_model_ready(self):
+        respx.get(f"{self._TEI_URL}/info").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "model_id": "Alibaba-NLP/gte-large-en-v1.5",
+                    "model_type": {"embedding": {"pooling": "mean"}},
+                },
+            )
+        )
+        check = TeiHealthcheck(tei_url=self._TEI_URL)
+        result = await check()
+
+        assert result.passed is True
+        assert result.name == "Readiness/TEI"
+        assert "gte-large-en-v1.5" in result.details
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_non_embedding_model_fails(self):
+        respx.get(f"{self._TEI_URL}/info").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "model_id": "some-reranker",
+                    "model_type": {"reranker": {}},
+                },
+            )
+        )
+        check = TeiHealthcheck(tei_url=self._TEI_URL)
+        result = await check()
+
+        assert result.passed is False
+        assert "not serving an embedding model" in result.details
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_http_error_fails_gracefully(self):
+        respx.get(f"{self._TEI_URL}/info").mock(
+            return_value=httpx.Response(503)
+        )
+        check = TeiHealthcheck(tei_url=self._TEI_URL)
+        result = await check()
+
+        assert result.passed is False
+        assert result.name == "Readiness/TEI"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_connection_error_fails_gracefully(self):
+        respx.get(f"{self._TEI_URL}/info").mock(
+            side_effect=httpx.ConnectError("refused")
+        )
+        check = TeiHealthcheck(tei_url=self._TEI_URL)
+        result = await check()
+
+        assert result.passed is False
+        assert "connection error" in result.details.lower()
+
+
+@pytest.mark.unit
+class TestOpenAICompatibleHealthcheck:
+    _URL = "http://colbert-host:8080"
+    _MODEL = "jinaai/jina-colbert-v2"
+    _NAME = "Readiness/ColBERT"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_model_present_passes(self):
+        respx.get(f"{self._URL}/v1/models").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": [{"id": self._MODEL}, {"id": "other-model"}]},
+            )
+        )
+        check = OpenAICompatibleHealthcheck(
+            url=self._URL, model_name=self._MODEL, name=self._NAME
+        )
+        result = await check()
+
+        assert result.passed is True
+        assert result.name == self._NAME
+        assert self._MODEL in result.details
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_model_not_in_list_fails(self):
+        respx.get(f"{self._URL}/v1/models").mock(
+            return_value=httpx.Response(
+                200,
+                json={"data": [{"id": "some-other-model"}]},
+            )
+        )
+        check = OpenAICompatibleHealthcheck(
+            url=self._URL, model_name=self._MODEL, name=self._NAME
+        )
+        result = await check()
+
+        assert result.passed is False
+        assert self._MODEL in result.details
+        assert "not found" in result.details
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_http_error_fails_gracefully(self):
+        respx.get(f"{self._URL}/v1/models").mock(
+            return_value=httpx.Response(503)
+        )
+        check = OpenAICompatibleHealthcheck(
+            url=self._URL, model_name=self._MODEL, name=self._NAME
+        )
+        result = await check()
+
+        assert result.passed is False
+        assert result.name == self._NAME
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_connection_error_fails_gracefully(self):
+        respx.get(f"{self._URL}/v1/models").mock(
+            side_effect=httpx.ConnectError("refused")
+        )
+        check = OpenAICompatibleHealthcheck(
+            url=self._URL, model_name=self._MODEL, name=self._NAME
+        )
+        result = await check()
+
+        assert result.passed is False
         assert "connection error" in result.details.lower()

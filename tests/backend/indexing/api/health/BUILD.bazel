@@ -20,8 +20,10 @@ py_test(
         ":conftest",
         "//src/backend/indexing/api/health:checks",
         requirement("aiohttp"),
+        requirement("httpx"),
         requirement("pytest"),
         requirement("pytest-asyncio"),
         requirement("qdrant-client"),
+        requirement("respx"),
     ],
 )
