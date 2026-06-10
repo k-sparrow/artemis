@@ -7,8 +7,6 @@ from __future__ import annotations
 import logging
 import os
 
-_log = logging.getLogger(__name__)
-
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
@@ -19,6 +17,8 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 __all__ = ["setup_telemetry"]
+
+_log = logging.getLogger(__name__)
 
 
 def setup_telemetry(service_name: str) -> None:
@@ -42,4 +42,6 @@ def setup_telemetry(service_name: str) -> None:
     HTTPXClientInstrumentor().instrument()
     SQLAlchemyInstrumentor().instrument()
 
-    _log.info("OTel tracing configured", extra={"service": service_name, "endpoint": endpoint})
+    _log.info(
+        "OTel tracing configured", extra={"service": service_name, "endpoint": endpoint}
+    )

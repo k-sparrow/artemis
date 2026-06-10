@@ -57,7 +57,7 @@ py_library(
         ":config",
         ":models",
         "//src/lib/backend/logging:pkg",
-        "//src/lib/backend:otel",
+        "//src/lib/backend/telemetry:pkg",
         requirement("fastapi"),
         requirement("sqlalchemy"),
     ],

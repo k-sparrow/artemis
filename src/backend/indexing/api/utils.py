@@ -12,7 +12,7 @@ from src.backend.indexing.api.dependencies import (
 )
 from src.backend.indexing.api.retrieve import service as retrieve_service
 from src.lib.backend.logging import configure_logging, get_logger
-from src.lib.backend.otel import setup_telemetry
+from src.lib.backend.telemetry import setup_telemetry
 from src.lib.core.adapters.document_compressors.cohere import CohereRerank
 from src.lib.core.retrieval.adapters.simple import SimpleVectorStoreRetrieverAdapter
 

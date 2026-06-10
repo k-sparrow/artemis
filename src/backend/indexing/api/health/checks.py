@@ -115,7 +115,10 @@ class TeiHealthcheck(Check):
                 return CheckResult(
                     name=self._name,
                     passed=False,
-                    details=f"TEI is not serving an embedding model (model_type={model_type})",
+                    details=(
+                        f"TEI is not serving an embedding model"
+                        f" (model_type={model_type})"
+                    ),
                 )
 
             return CheckResult(
@@ -132,7 +135,10 @@ class TeiHealthcheck(Check):
 
 
 class OpenAICompatibleHealthcheck(Check):
-    """Verifies an OpenAI-compatible server is up and serving the expected model via GET /v1/models."""
+    """
+    Verifies an OpenAI-compatible server is up and serving the
+    expected model via GET /v1/models.
+    """
 
     def __init__(self, url: str, model_name: str, name: str):
         super().__init__()

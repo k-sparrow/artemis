@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from src.backend.mcp.api import client
 from src.backend.mcp.api.settings import settings
 from src.lib.backend.logging import configure_logging, get_logger
-from src.lib.backend.otel import setup_telemetry
+from src.lib.backend.telemetry import setup_telemetry
 
 __all__ = [
     "lifespan",

@@ -144,9 +144,7 @@ class TestTeiHealthcheck:
     @respx.mock
     @pytest.mark.asyncio
     async def test_http_error_fails_gracefully(self):
-        respx.get(f"{self._TEI_URL}/info").mock(
-            return_value=httpx.Response(503)
-        )
+        respx.get(f"{self._TEI_URL}/info").mock(return_value=httpx.Response(503))
         check = TeiHealthcheck(tei_url=self._TEI_URL)
         result = await check()
 
@@ -211,9 +209,7 @@ class TestOpenAICompatibleHealthcheck:
     @respx.mock
     @pytest.mark.asyncio
     async def test_http_error_fails_gracefully(self):
-        respx.get(f"{self._URL}/v1/models").mock(
-            return_value=httpx.Response(503)
-        )
+        respx.get(f"{self._URL}/v1/models").mock(return_value=httpx.Response(503))
         check = OpenAICompatibleHealthcheck(
             url=self._URL, model_name=self._MODEL, name=self._NAME
         )

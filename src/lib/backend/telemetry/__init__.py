@@ -3,7 +3,6 @@
 # -------------------------------------
 #
 
-package(default_visibility = [
-    "//src:__subpackages__",
-    "//tests:__subpackages__",
-])
+from src.lib.backend.telemetry.otel import setup_telemetry
+
+__all__ = ["setup_telemetry"]

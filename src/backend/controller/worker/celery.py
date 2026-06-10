@@ -3,7 +3,7 @@ from celery.signals import worker_ready
 from kombu import Exchange, Queue
 
 from src.backend.controller.worker.config import settings
-from src.lib.backend.otel import setup_telemetry
+from src.lib.backend.telemetry import setup_telemetry
 
 
 @worker_ready.connect
