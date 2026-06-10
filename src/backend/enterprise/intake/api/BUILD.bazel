@@ -67,6 +67,9 @@ py_library(
         ":config",
         "//src/lib/backend/logging:pkg",
         "//src/lib/backend/telemetry:pkg",
+        requirement("opentelemetry-instrumentation-fastapi"),
+        requirement("opentelemetry-instrumentation-httpx"),
+        requirement("opentelemetry-instrumentation-sqlalchemy"),
         requirement("fastapi"),
     ],
 )

@@ -2397,6 +2397,7 @@ opentelemetry-api==1.39.1 \
     #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-instrumentation
     #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-celery
     #   opentelemetry-instrumentation-fastapi
     #   opentelemetry-instrumentation-httpx
     #   opentelemetry-instrumentation-sqlalchemy
@@ -2415,6 +2416,7 @@ opentelemetry-instrumentation==0.60b1 \
     --hash=sha256:57ddc7974c6eb35865af0426d1a17132b88b2ed8586897fee187fd5b8944bd6a
     # via
     #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-celery
     #   opentelemetry-instrumentation-fastapi
     #   opentelemetry-instrumentation-httpx
     #   opentelemetry-instrumentation-sqlalchemy
@@ -2422,6 +2424,10 @@ opentelemetry-instrumentation-asgi==0.60b1 \
     --hash=sha256:16bfbe595cd24cda309a957456d0fc2523f41bc7b076d1f2d7e98a1ad9876d6f \
     --hash=sha256:d48def2dbed10294c99cfcf41ebbd0c414d390a11773a41f472d20000fcddc25
     # via opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-celery==0.60b1 \
+    --hash=sha256:896bb9eda2d7c4a39bbc5bee2caae9c06a3a41ba283bafc414b224bc8a0f04c8 \
+    --hash=sha256:ee946f85a3e6893d8edf09402c2c773cacc09854dcea35ae2a694320f85403cf
+    # via -r requirements.in
 opentelemetry-instrumentation-fastapi==0.60b1 \
     --hash=sha256:af94b7a239ad1085fc3a820ecf069f67f579d7faf4c085aaa7bd9b64eafc8eaf \
     --hash=sha256:de608955f7ff8eecf35d056578346a5365015fd7d8623df9b1f08d1c74769c01
@@ -2452,6 +2458,7 @@ opentelemetry-semantic-conventions==0.60b1 \
     # via
     #   opentelemetry-instrumentation
     #   opentelemetry-instrumentation-asgi
+    #   opentelemetry-instrumentation-celery
     #   opentelemetry-instrumentation-fastapi
     #   opentelemetry-instrumentation-httpx
     #   opentelemetry-instrumentation-sqlalchemy

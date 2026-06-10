@@ -1,14 +1,23 @@
 from celery import Celery
-from celery.signals import worker_ready
+from celery.signals import worker_process_init
 from kombu import Exchange, Queue
+from opentelemetry.instrumentation.celery import CeleryInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 
 from src.backend.controller.worker.config import settings
-from src.lib.backend.telemetry import setup_telemetry
+from src.lib.backend.telemetry import is_telemetry_enabled, setup_telemetry
 
 
-@worker_ready.connect
+@worker_process_init.connect(weak=False)
 def _setup_otel(**kwargs) -> None:
-    setup_telemetry("controller-worker")
+    if is_telemetry_enabled():
+        setup_telemetry(
+            "controller-worker",
+            HTTPXClientInstrumentor(),
+            SQLAlchemyInstrumentor(),
+            CeleryInstrumentor(),
+        )
 
 
 __all__ = ["app"]

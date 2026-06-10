@@ -7,22 +7,27 @@ from __future__ import annotations
 import logging
 import os
 
+import httpx  # noqa: F401 — ensures httpx is available as a transitive dep for instrumentation packages
+import sqlalchemy  # noqa: F401 — same reason
+
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-__all__ = ["setup_telemetry"]
+__all__ = ["is_telemetry_enabled", "setup_telemetry"]
 
 _log = logging.getLogger(__name__)
 
 
-def setup_telemetry(service_name: str) -> None:
-    """Configure TracerProvider + OTLP exporter.
+def is_telemetry_enabled() -> bool:
+    return bool(os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+
+
+def setup_telemetry(service_name: str, *instrumentors: BaseInstrumentor) -> None:
+    """Configure TracerProvider + OTLP exporter, then run the given instrumentors.
 
     No-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset or empty, so existing
     tests and local dev runs without the observability profile are unaffected.
@@ -38,9 +43,8 @@ def setup_telemetry(service_name: str) -> None:
     )
     trace.set_tracer_provider(provider)
 
-    FastAPIInstrumentor().instrument()
-    HTTPXClientInstrumentor().instrument()
-    SQLAlchemyInstrumentor().instrument()
+    for instrumentor in instrumentors:
+        instrumentor.instrument()
 
     _log.info(
         "OTel tracing configured", extra={"service": service_name, "endpoint": endpoint}

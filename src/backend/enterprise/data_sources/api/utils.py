@@ -8,12 +8,21 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from src.backend.enterprise.data_sources.api.config import settings
 from src.backend.enterprise.data_sources.api.models import Base
 from src.lib.backend.logging import configure_logging, get_logger
-from src.lib.backend.telemetry import setup_telemetry
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+from src.lib.backend.telemetry import is_telemetry_enabled, setup_telemetry
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    setup_telemetry("backend-enterprise-data-sources")
+    if is_telemetry_enabled():
+        setup_telemetry(
+            "backend-enterprise-data-sources",
+            FastAPIInstrumentor(),
+            HTTPXClientInstrumentor(),
+            SQLAlchemyInstrumentor(),
+        )
     configure_logging(
         level=logging.DEBUG if settings.DEBUG else logging.INFO,
         json_output=not settings.DEBUG,

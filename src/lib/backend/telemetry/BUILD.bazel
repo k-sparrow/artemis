@@ -21,12 +21,10 @@ py_library(
     name = "otel",
     srcs = ["otel.py"],
     deps = [
+        requirement("httpx"),
         requirement("opentelemetry-sdk"),
         requirement("opentelemetry-exporter-otlp-proto-grpc"),
-        requirement("opentelemetry-instrumentation-fastapi"),
-        requirement("opentelemetry-instrumentation-httpx"),
-        requirement("opentelemetry-instrumentation-sqlalchemy"),
-        requirement("httpx"),
+        requirement("opentelemetry-instrumentation"),
         requirement("sqlalchemy"),
     ],
 )
