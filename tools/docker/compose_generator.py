@@ -65,7 +65,7 @@ _DEV_SUBS: dict[str, str] = {
 _TEST_SUBS: dict[str, str] = {
     "DOCLING_IMAGE": "ghcr.io/docling-project/docling-serve:main",
     "DOCLING_GPU_BLOCK": "",
-    "TEI_IMAGE": "ghcr.io/huggingface/text-embeddings-inference:cpu-1.5",
+    "TEI_IMAGE": "ghcr.io/huggingface/text-embeddings-inference:cpu-1.6",
     "TEI_MODEL": "BAAI/bge-small-en-v1.5",
     "TEI_POOLING": "cls",
     "TEI_GPU_BLOCK": "",
