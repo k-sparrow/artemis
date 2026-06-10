@@ -15,7 +15,6 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//tests/lib:polling",
-        "//tests/lib/testcontainers/tei:pkg",
         "//tests/lib/testcontainers/vllm:pkg",
         requirement("httpx"),
         requirement("psycopg"),

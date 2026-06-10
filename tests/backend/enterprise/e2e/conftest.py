@@ -20,9 +20,7 @@ The docker-compose.test.yaml artefact is produced by:
 and passed to this conftest via the --compose-file pytest argument, set in
 BUILD.bazel using $(location //tools/docker:docker_compose_test).
 
-Profiles started: infra, enterprise, ai
-(ai profile covers docling-serve; TEI is managed as a testcontainer fixture
- so the model cache is mounted from the host with no download required)
+Profiles started: infra, enterprise, ai, ai-tei, mcp
 """
 
 from __future__ import annotations
@@ -37,7 +35,6 @@ import sqlalchemy as sa
 from qdrant_client import QdrantClient
 from testcontainers.compose import DockerCompose
 from tests.lib.polling import poll_until, wait_for_http, wait_for_kc_connector
-from tests.lib.testcontainers.tei import TEIContainer
 from tests.lib.testcontainers.vllm import VLLMContainer
 
 
@@ -155,27 +152,6 @@ def reranker_mode(request: pytest.FixtureRequest) -> str:
 
 
 @pytest.fixture(scope="session")
-def tei(request: pytest.FixtureRequest) -> str:
-    """Starts a TEI container and returns its base URL (http://localhost:{port}).
-
-    Mounts the local HuggingFace cache so no model download is required.
-    Sets TEI_HOST_URL in the process environment before the compose stack
-    starts, so docker-compose substitutes it into service env vars at startup.
-    Must be requested before the ``compose`` fixture.
-    """
-    hf_cache = Path.home() / ".cache/huggingface"
-    container = TEIContainer("sentence-transformers/all-MiniLM-L6-v2")
-    container.with_hf_cache(str(hf_cache))
-    container.start()
-    request.addfinalizer(container.stop)
-
-    port = container.get_exposed_port(TEIContainer.HTTP_PORT)
-    # Compose services reach TEI via the host network bridge.
-    os.environ["TEI_HOST_URL"] = f"http://host.docker.internal:{port}"
-    return container.get_url()
-
-
-@pytest.fixture(scope="session")
 def watch_dir(request: pytest.FixtureRequest) -> Path:
     """Host directory mounted into kafka-connect and intake as /watch.
 
@@ -227,7 +203,6 @@ def mcp_enable_upload() -> None:
 def compose(
     compose_file: Path,
     watch_dir: Path,
-    tei: str,
     retrieval_mode: str,  # sets RETRIEVAL_MODE env var before compose starts
     reranker_mode: str,  # sets COLBERT_RERANKER_URL (or nothing) before compose starts
     mcp_enable_upload: None,  # sets MCP_ENABLE_UPLOAD before compose starts
@@ -236,7 +211,7 @@ def compose(
     dc = DockerCompose(
         context=str(compose_file.parent),
         compose_file_name=[compose_file.name],
-        profiles=["infra", "enterprise", "ai", "mcp"],
+        profiles=["infra", "enterprise", "ai", "ai-tei", "mcp"],
         pull=False,
         build=False,
     )
@@ -265,7 +240,11 @@ def compose(
     host_kc, port_kc = dc.get_service_host_and_port("kafka-connect", 8083)
     kc_url = f"http://{host_kc}:{port_kc}"
 
+    host_tei, port_tei = dc.get_service_host_and_port("tei", 80)
+
     try:
+        # TEI downloads the model on first start and can take several minutes.
+        wait_for_http(f"http://{host_tei}:{port_tei}/info", timeout=360)
         wait_for_http(f"http://{host_storage}:{port_storage}/health/readiness")
         wait_for_http(f"http://{host_ds}:{port_ds}/health/liveness")
         wait_for_http(f"http://{host_intake}:{port_intake}/health/liveness")
