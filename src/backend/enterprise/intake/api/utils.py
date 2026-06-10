@@ -6,12 +6,12 @@ from fastapi import FastAPI
 
 from src.backend.enterprise.intake.api.config import settings
 from src.lib.backend.logging import configure_logging, get_logger
-from src.lib.backend.otel import with_telemetry
+from src.lib.backend.otel import setup_telemetry
 
 
-@with_telemetry("backend-enterprise-intake")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    setup_telemetry("backend-enterprise-intake")
     configure_logging(
         level=logging.DEBUG if settings.DEBUG else logging.INFO,
         json_output=not settings.DEBUG,

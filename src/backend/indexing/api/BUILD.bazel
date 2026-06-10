@@ -83,6 +83,7 @@ py_library(
         ":dependencies",
         "//src/backend/indexing/api/retrieve:service",
         "//src/lib/backend/logging:pkg",
+        "//src/lib/backend:otel",
         "//src/lib/core/adapters/document_compressors/cohere:pkg",
         "//src/lib/core/retrieval/adapters:simple",
         requirement("cohere"),

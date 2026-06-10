@@ -116,6 +116,7 @@ py_library(
         ":models",
         "//src/lib/backend/db:session",
         "//src/lib/backend/logging:pkg",
+        "//src/lib/backend:otel",
         requirement("fastapi"),
         requirement("minio"),
         requirement("sqlalchemy"),

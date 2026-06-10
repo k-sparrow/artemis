@@ -47,6 +47,7 @@ py_library(
         ":client",
         ":settings",
         "//src/lib/backend/logging:pkg",
+        "//src/lib/backend:otel",
         requirement("fastapi"),
     ],
 )

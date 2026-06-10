@@ -48,6 +48,7 @@ py_library(
         "//src/lib/core/ingestion:types",
         requirement("httpx"),
         requirement("minio"),
+        requirement("opentelemetry-api"),
         requirement("pydantic"),
         requirement("pybreaker"),
     ],
@@ -64,6 +65,7 @@ py_library(
         ":utils",
         "//src/backend/controller/lib:schemas",
         "//src/backend/controller/worker/backend:pkg",
+        "//src/lib/backend:otel",
         "//src/lib/core/adapters/stores/minio:parsed_chunks",
         requirement("psycopg"),
         requirement("psycopg-binary"),
@@ -77,6 +79,7 @@ py_library(
     srcs = ["celery.py"],
     deps = [
         ":config",
+        "//src/lib/backend:otel",
         requirement("celery"),
         requirement("psycopg-binary"),
         requirement("sqlalchemy"),
