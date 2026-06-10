@@ -4,9 +4,10 @@
 #
 from __future__ import annotations
 
-import functools
+import logging
 import os
-from typing import Callable
+
+_log = logging.getLogger(__name__)
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -17,7 +18,7 @@ from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-__all__ = ["setup_telemetry", "with_telemetry"]
+__all__ = ["setup_telemetry"]
 
 
 def setup_telemetry(service_name: str) -> None:
@@ -41,27 +42,4 @@ def setup_telemetry(service_name: str) -> None:
     HTTPXClientInstrumentor().instrument()
     SQLAlchemyInstrumentor().instrument()
 
-
-def with_telemetry(service_name: str) -> Callable:
-    """Decorator for FastAPI lifespan functions.
-
-    Calls setup_telemetry(service_name) before entering the lifespan context so
-    the TracerProvider and instrumentors are active for the entire app lifetime.
-
-    Usage::
-
-        @with_telemetry("backend-storage")
-        @asynccontextmanager
-        async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-            ...
-    """
-
-    def decorator(fn: Callable) -> Callable:
-        @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
-            setup_telemetry(service_name)
-            return fn(*args, **kwargs)
-
-        return wrapper
-
-    return decorator
+    _log.info("OTel tracing configured", extra={"service": service_name, "endpoint": endpoint})
