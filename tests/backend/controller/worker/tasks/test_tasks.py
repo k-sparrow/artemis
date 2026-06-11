@@ -107,16 +107,19 @@ class TestIngest:
 
         assert "chain_id" in result
         mock_chain.assert_called_once()
-        # First task: fetch_and_parse must receive serialisable args
+        # First task: fetch_and_parse must receive serialisable args, with the
+        # contract task_id propagated as the trailing arg.
         first_sig = mock_chain.call_args[0][0]
-        assert first_sig.args == (
+        assert first_sig.args[:4] == (
             _S3.model_dump(),
             _SOURCE.model_dump(),
             str(_NAMESPACE_ID),
             None,  # group_id — None when not set on IngestionInfo
         )
+        propagated_task_id = first_sig.args[4]
+        assert isinstance(propagated_task_id, str) and propagated_task_id
         # Second task: index must receive upload_action + source + s3 dicts for the
-        # JDBC sink result
+        # JDBC sink result, plus the SAME contract task_id propagated to fetch_and_parse.
         second_sig = mock_chain.call_args[0][1]
         assert second_sig.args == (
             str(_NAMESPACE_ID),
@@ -124,6 +127,7 @@ class TestIngest:
             None,  # group_id
             _SOURCE.model_dump(mode="json"),
             _S3.model_dump(mode="json"),
+            propagated_task_id,  # contract id is the same across both subtasks
         )
 
     def test_update_dispatches_chain(self) -> None:

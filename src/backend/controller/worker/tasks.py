@@ -103,11 +103,13 @@ def _ensure_parsed_chunks_bucket(**kwargs) -> None:
 
 @app.task(
     name="tasks.ingest",
+    bind=True,
     pydantic=True,
     backend=_db_backend,
     result_serializer="json",
 )
 def ingest(
+    self,
     s3: S3Details,
     source: SourceDetails,
     upload_action: UploadAction,
@@ -115,6 +117,16 @@ def ingest(
 ) -> dict:
     """Dispatch the fetch_and_parse → index chain for a single document."""
     namespace_id = info.namespace_id
+
+    # This entry task's Celery id is the contract task_id: the AMQP message id
+    # the RabbitMQ sink connector injected, which equals the artemis.task_id the
+    # storage service stamped on its upload span. Stamp it here and propagate it
+    # down the chain so the whole worker pipeline is searchable by that one key.
+    # (Each subtask still has its own distinct self.request.id / result-backend
+    # PK — we only carry this value as the artemis.task_id span tag.)
+    task_id = self.request.id or str(uuid.uuid4())
+    trace.get_current_span().set_attribute("artemis.task_id", task_id)
+
     logger.info(
         "ingest=dispatch action=%s namespace=%s object=%s",
         upload_action,
@@ -128,7 +140,11 @@ def ingest(
         case UploadAction.CREATE | UploadAction.UPDATE:
             result = chain(
                 fetch_and_parse.s(
-                    s3.model_dump(), source.model_dump(), str(namespace_id), group_id
+                    s3.model_dump(),
+                    source.model_dump(),
+                    str(namespace_id),
+                    group_id,
+                    task_id,
                 ),
                 index.s(
                     str(namespace_id),
@@ -136,6 +152,7 @@ def ingest(
                     group_id,
                     source.model_dump(mode="json"),
                     s3.model_dump(mode="json"),
+                    task_id,
                 ),
             ).apply_async()
             return {"chain_id": str(result.id)}
@@ -172,6 +189,7 @@ def fetch_and_parse(
     source: SourceDetails,
     namespace_id: uuid.UUID,
     group_id: str | None = None,
+    task_id: str | None = None,
 ) -> str:
     """Download the document from S3, parse it, persist chunks to MinIO.
 
@@ -185,7 +203,9 @@ def fetch_and_parse(
         S3IntegrityError   — contract reports size>0 but MinIO returned 0 bytes.
     """
     with _tracer.start_as_current_span("tasks.fetch_and_parse") as span:
-        task_id = self.request.id or str(uuid.uuid4())
+        # The contract task_id propagated from `ingest`; fall back to this
+        # subtask's own id when invoked directly (e.g. in tests).
+        task_id = task_id or self.request.id or str(uuid.uuid4())
         span.set_attribute("artemis.task_id", task_id)
         span.set_attribute("artemis.namespace_id", str(namespace_id))
         span.set_attribute("artemis.obj_id", str(source.obj_id))
@@ -248,6 +268,7 @@ def index(
     group_id: str | None = None,
     source: SourceDetails | None = None,
     s3: S3Details | None = None,
+    task_id: str | None = None,
 ) -> dict:
     """Load parsed chunks from MinIO, index them, delete the MinIO object.
 
@@ -256,6 +277,9 @@ def index(
     inspection or dead-letter replay.
     """
     with _tracer.start_as_current_span("tasks.index") as span:
+        # Contract task_id propagated from `ingest` via the chain.
+        if task_id:
+            span.set_attribute("artemis.task_id", task_id)
         span.set_attribute("artemis.namespace_id", str(namespace_id))
 
         minio_client = get_s3_client()
