@@ -12,10 +12,6 @@ from src.backend.indexing.api.dependencies import (
 )
 from src.backend.indexing.api.retrieve import service as retrieve_service
 from src.lib.backend.logging import configure_logging, get_logger
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
-from src.lib.backend.telemetry import is_telemetry_enabled, setup_telemetry
 from src.lib.core.adapters.document_compressors.cohere import CohereRerank
 from src.lib.core.retrieval.adapters.simple import SimpleVectorStoreRetrieverAdapter
 
@@ -27,13 +23,6 @@ __all__ = [
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    if is_telemetry_enabled():
-        setup_telemetry(
-            "backend-indexing",
-            FastAPIInstrumentor(),
-            HTTPXClientInstrumentor(),
-            SQLAlchemyInstrumentor(),
-        )
     configure_logging(
         level=logging.DEBUG if settings.DEBUG else logging.INFO,
         json_output=not settings.DEBUG,

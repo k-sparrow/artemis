@@ -7,8 +7,8 @@ from __future__ import annotations
 import logging
 import os
 
-import httpx  # noqa: F401 — ensures httpx is available as a transitive dep for instrumentation packages
-import sqlalchemy  # noqa: F401 — same reason
+import httpx  # noqa: F401
+import sqlalchemy  # noqa: F401
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter

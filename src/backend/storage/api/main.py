@@ -1,6 +1,10 @@
 from fastapi import FastAPI
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 
 from src.lib.backend.api.exceptions import register_custom_exception_handlers
+from src.lib.backend.telemetry import is_telemetry_enabled, setup_telemetry
 from src.backend.storage.api import exceptions as shared_exc
 from src.backend.storage.api.namespaces import exceptions as ns_exc
 from src.backend.storage.api.files import exceptions as files_exc
@@ -16,6 +20,17 @@ app = FastAPI(
     description="S3 object storage for Artemis project",
     lifespan=lifespan,
 )
+
+# Instrument at construction time — FastAPIInstrumentor must wrap the app before
+# Starlette builds its middleware stack (which happens on the first request /
+# lifespan event), otherwise no HTTP request spans are emitted.
+if is_telemetry_enabled():
+    setup_telemetry(
+        "backend-storage",
+        HTTPXClientInstrumentor(),
+        SQLAlchemyInstrumentor(),
+    )
+    FastAPIInstrumentor.instrument_app(app)
 
 register_custom_exception_handlers(
     app,

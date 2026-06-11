@@ -7,10 +7,6 @@ from fastapi import FastAPI
 from src.backend.mcp.api import client
 from src.backend.mcp.api.settings import settings
 from src.lib.backend.logging import configure_logging, get_logger
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
-from src.lib.backend.telemetry import is_telemetry_enabled, setup_telemetry
 
 __all__ = [
     "lifespan",
@@ -19,13 +15,6 @@ __all__ = [
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    if is_telemetry_enabled():
-        setup_telemetry(
-            "backend-mcp",
-            FastAPIInstrumentor(),
-            HTTPXClientInstrumentor(),
-            SQLAlchemyInstrumentor(),
-        )
     configure_logging(
         level=logging.DEBUG if settings.DEBUG else logging.INFO,
         json_output=not settings.DEBUG,

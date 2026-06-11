@@ -59,10 +59,6 @@ py_library(
     deps = [
         ":config",
         "//src/lib/backend/logging:pkg",
-        "//src/lib/backend/telemetry:pkg",
-        requirement("opentelemetry-instrumentation-fastapi"),
-        requirement("opentelemetry-instrumentation-httpx"),
-        requirement("opentelemetry-instrumentation-sqlalchemy"),
         requirement("fastapi"),
     ],
 )
@@ -78,6 +74,10 @@ py_library(
         ":exceptions",
         ":utils",
         "//src/lib/backend/api:pkg",
+        "//src/lib/backend/telemetry:pkg",
+        requirement("opentelemetry-instrumentation-fastapi"),
+        requirement("opentelemetry-instrumentation-httpx"),
+        requirement("opentelemetry-instrumentation-sqlalchemy"),
         requirement("fastapi"),
         requirement("python-multipart"),
     ] + API_ROUTERS,
