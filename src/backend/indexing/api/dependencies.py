@@ -6,10 +6,13 @@ from fastapi import Depends
 from langchain.indexes import SQLRecordManager
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
+from minio import Minio
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from qdrant_client import AsyncQdrantClient
 
+from src.lib.core.adapters.stores.base.blob import BlobStoreFactory
+from src.lib.core.adapters.stores.minio.blob import MinioBlobStore
 from src.backend.indexing.api.config import settings
 from src.lib.core.adapters.embedding.huggingface import HuggingFaceEndpointEmbeddings
 from src.lib.core.adapters.embedding.late_interaction import (
@@ -42,6 +45,32 @@ __all__ = [
     "pipeline_dependency",
     "vectorstore_dependency",
     "get_vectorstore_handler_solved",
+    "get_s3_client",
+    "get_blob_store_factory",
+    "blob_store_factory_dependency",
+]
+
+
+def get_s3_client() -> Minio:
+    return Minio(
+        endpoint=settings.S3_ENDPOINT,
+        access_key=settings.S3_ACCESS_KEY,
+        secret_key=settings.S3_SECRET_KEY,
+        secure=settings.S3_SECURE,
+    )
+
+
+def get_blob_store_factory(
+    client: Annotated[Minio, Depends(get_s3_client)],
+) -> BlobStoreFactory:
+    """Yield a ``(bucket) -> BlobStore`` factory. The artifact's bucket travels in
+    the BlobRef, so the reader is built per-request from ``ref.bucket``. One
+    overridable seam — a unit test swaps in a fake."""
+    return lambda bucket: MinioBlobStore(client, bucket)
+
+
+blob_store_factory_dependency = Annotated[
+    BlobStoreFactory, Depends(get_blob_store_factory)
 ]
 
 # FastEmbedSparseEmbeddings loads the Qdrant/bm25 model on instantiation.

@@ -85,11 +85,12 @@ class TestWorkerStartup:
         minio_client: Minio,
         worker_container: DockerContainer,
     ) -> None:
-        """The worker must create the 'parsed-chunks' MinIO bucket via the
-        ``worker_ready`` signal handler before accepting any tasks.
+        """The worker creates the 'parsed-chunks' MinIO bucket via the
+        ``worker_ready`` signal handler on startup.
 
-        This guards against the latent bug where ``ParsedChunkStore.save()``
-        would fail silently if the bucket did not exist.
+        The parsing service owns and writes this bucket; the worker only deletes
+        the artifact from it after a successful index. The startup hook ensures
+        the bucket exists so the cleanup-delete never targets a missing bucket.
         """
         assert minio_client.bucket_exists("parsed-chunks")
 
@@ -124,7 +125,7 @@ class TestFetchAndParseIndexChain:
         namespace_id: uuid.UUID,
         worker_container: DockerContainer,
     ) -> None:
-        """The filename must be forwarded in the multipart body to the parsing service."""
+        """The filename must be forwarded as a form field to the parsing service."""
         upload_file(minio_client, s3_source_bucket, "test.md")
         _dispatch_ingest(dispatch_app, s3_source_bucket, namespace_id)
         wait_until_stub_called(indexing_stub, timeout=60)
@@ -151,7 +152,7 @@ class TestFetchAndParseIndexChain:
 
         assert str(namespace_id) in indexing_stub.requests[0]["path"]
 
-    def test_indexing_stub_receives_parsed_chunks(
+    def test_indexing_stub_receives_artifact_ref(
         self,
         dispatch_app,
         parsing_stub: StubServer,
@@ -161,16 +162,15 @@ class TestFetchAndParseIndexChain:
         namespace_id: uuid.UUID,
         worker_container: DockerContainer,
     ) -> None:
-        """The indexing service must receive the chunks returned by the parsing stub."""
+        """Claim-check: the indexing service receives the artifact BlobRef the
+        parsing stub returned — not the chunk payload."""
         upload_file(minio_client, s3_source_bucket, "test.md")
         _dispatch_ingest(dispatch_app, s3_source_bucket, namespace_id)
         wait_until_stub_called(indexing_stub, timeout=60)
 
         body = json.loads(indexing_stub.requests[0]["body"])
-        assert len(body) == 2
-        assert body[0]["page_content"] == "hello world"
-        assert body[0]["type"] == "text"
-        assert body[1]["type"] == "table"
+        assert body["artifact_ref"]["bucket"] == "parsed-chunks"
+        assert body["artifact_ref"]["key"].startswith("parse/")
 
     def test_intermediate_minio_object_cleaned_up_after_success(
         self,

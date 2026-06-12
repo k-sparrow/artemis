@@ -16,9 +16,9 @@ py_library(
         "//src/lib/core/ingestion:exceptions",
         "//src/lib/core/ingestion:types",
         "//src/lib/core/ingestion/normalizer:pkg",
-        requirement("fastapi"),
         requirement("httpx"),
         requirement("langchain-core"),
+        requirement("pydantic"),
     ],
 )
 
@@ -29,7 +29,7 @@ py_library(
         ":service",
         "//src/backend/parsing/api:dependencies",
         "//src/lib/backend/logging:pkg",
-        "//src/lib/core/ingestion:types",
+        "//src/lib/core/ingestion:contract",
         requirement("fastapi"),
         requirement("python-multipart"),
     ],

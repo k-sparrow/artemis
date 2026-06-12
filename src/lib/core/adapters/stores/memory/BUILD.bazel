@@ -1,0 +1,18 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+package(default_visibility = [
+    "//src:__subpackages__",
+    "//tests:__subpackages__",
+])
+
+# In-memory BlobStore — used as a dict-backed fake in unit tests and for local runs.
+py_library(
+    name = "blob",
+    srcs = [
+        "__init__.py",
+        "blob.py",
+    ],
+    deps = [
+        "//src/lib/core/adapters/stores/base:blob",
+    ],
+)

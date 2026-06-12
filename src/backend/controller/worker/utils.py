@@ -24,16 +24,14 @@ import json
 import logging
 import uuid
 from logging import Logger
-from typing import List, Optional
+from typing import Optional
 
 import httpx
 import pybreaker
 from opentelemetry import trace as otel_trace
 from minio import Minio
-from pydantic import TypeAdapter
 
-from src.backend.controller.lib.schemas import S3Details, SourceDetails
-from src.lib.core.ingestion.types import ParsedChunk
+from src.backend.controller.lib.schemas import BlobRef, S3Details, SourceDetails
 
 __all__ = [
     "fetch_from_s3",
@@ -44,7 +42,6 @@ __all__ = [
     "indexing_breaker",
 ]
 
-_chunks_adapter: TypeAdapter[List[ParsedChunk]] = TypeAdapter(List[ParsedChunk])
 _log = logging.getLogger(__name__)
 _tracer = otel_trace.get_tracer("controller.worker.utils")
 
@@ -105,52 +102,64 @@ def fetch_from_s3(
 
 
 def call_parsing_service(
-    file_bytes: bytes,
+    source_ref: BlobRef,
     source: SourceDetails,
     parsing_url: str,
     timeout: float,
     logger: Logger,
-) -> List[ParsedChunk]:
-    """POST *file_bytes* to the parsing service and return the parsed chunks.
+) -> BlobRef:
+    """Ask the parsing service to parse the input at *source_ref* (claim-check).
+
+    The input bytes are read by parsing directly from object storage; only the
+    artifact's :class:`BlobRef` comes back — no payload crosses the wire.
 
     Raises ``pybreaker.CircuitBreakerError`` when the parsing circuit is OPEN.
     """
     url = f"{parsing_url.rstrip('/')}/v1/parse"
-    object_source = source.source
-    logger.info("parsing=request url=%s source=%s", url, object_source)
+    logger.info("parsing=request url=%s key=%s", url, source_ref.key)
 
-    def _request() -> list:
+    def _request() -> dict:
         with httpx.Client(timeout=timeout) as http:
             response = http.post(
                 url,
-                files={"file": (object_source, file_bytes, source.content_type)},
-                data={"metadata": json.dumps({"obj_id": str(source.obj_id)})},
+                data={
+                    "source_ref": source_ref.model_dump_json(),
+                    "filename": source.source,
+                    "content_type": source.content_type,
+                    "metadata": json.dumps({"obj_id": str(source.obj_id)}),
+                },
             )
             response.raise_for_status()
             return response.json()
 
     with _tracer.start_as_current_span("http.parsing_service"):
         raw = parsing_breaker.call(_request)
-    chunks = _chunks_adapter.validate_python(raw)
-    logger.info("parsing=done chunks=%d", len(chunks))
-    return chunks
+    artifact = BlobRef.model_validate(raw)
+    logger.info("parsing=done artifact=%s", artifact.key)
+    return artifact
 
 
 def call_indexing_service(
-    chunks: List[ParsedChunk],
+    artifact_ref: BlobRef,
     namespace_id: uuid.UUID,
     ingestion_url: str,
     timeout: float,
     logger: Logger,
     group_id: str | None = None,
 ) -> dict:
-    """POST *chunks* to the indexing service and return the UpsertResult dict.
+    """Ask the indexing service to index the artifact at *artifact_ref*.
+
+    Indexing reads the artifact directly from object storage; only the
+    :class:`BlobRef` is sent. Returns the UpsertResult dict.
 
     Raises ``pybreaker.CircuitBreakerError`` when the indexing circuit is OPEN.
     """
     url = f"{ingestion_url.rstrip('/')}/ingest"
     logger.info(
-        "indexing=request url=%s namespace=%s chunks=%d", url, namespace_id, len(chunks)
+        "indexing=request url=%s namespace=%s key=%s",
+        url,
+        namespace_id,
+        artifact_ref.key,
     )
     params: dict = {"namespace": str(namespace_id)}
     if group_id is not None:
@@ -161,7 +170,7 @@ def call_indexing_service(
             response = http.post(
                 url,
                 params=params,
-                json=[c.model_dump(mode="json") for c in chunks],
+                json={"artifact_ref": artifact_ref.model_dump(mode="json")},
             )
             response.raise_for_status()
             return response.json()

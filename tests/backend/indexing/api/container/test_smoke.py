@@ -14,10 +14,13 @@ dedicated ``test_hybrid_sparse_vectors_stored`` test verifies the
 BM25-specific behaviour that is only exercised in hybrid mode.
 """
 
+import io
+import json
 import uuid
 
 import httpx
 import pytest
+from minio import Minio
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
@@ -60,12 +63,43 @@ async def test_ingest_indexes_chunks(client: httpx.AsyncClient):
     response = await client.post(
         "/ingest",
         params={"namespace": str(namespace)},
-        json=_TEST_CHUNKS,
+        json={"chunks": _TEST_CHUNKS},
     )
     assert response.status_code == 200, response.json()
     body = response.json()
     assert body["num_added"] >= 1
     assert body["num_skipped"] == 0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ingest_via_artifact_ref(client: httpx.AsyncClient, minio_client: Minio):
+    """Claim-check: indexing reads chunks from a parse artifact in MinIO by reference."""
+    namespace = uuid.uuid4()
+    obj_id = uuid.uuid4()
+    bucket, key = "parsed-chunks", f"parse/{obj_id}.json"
+    chunks = [
+        {
+            "page_content": "chunk read from the parse artifact",
+            "source": "a.md",
+            "type": "text",
+            "obj_id": str(obj_id),
+        }
+    ]
+    if not minio_client.bucket_exists(bucket):
+        minio_client.make_bucket(bucket)
+    data = json.dumps(chunks).encode()
+    minio_client.put_object(
+        bucket, key, io.BytesIO(data), length=len(data), content_type="application/json"
+    )
+
+    response = await client.post(
+        "/ingest",
+        params={"namespace": str(namespace)},
+        json={"artifact_ref": {"bucket": bucket, "key": key}},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["num_added"] >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -123,11 +157,11 @@ async def test_delete_single_object_removes_only_target(
     ]
 
     r = await client.post(
-        "/ingest", json=chunks_a, params={"namespace": str(namespace)}
+        "/ingest", json={"chunks": chunks_a}, params={"namespace": str(namespace)}
     )
     assert r.status_code == 200
     r = await client.post(
-        "/ingest", json=chunks_b, params={"namespace": str(namespace)}
+        "/ingest", json={"chunks": chunks_b}, params={"namespace": str(namespace)}
     )
     assert r.status_code == 200
 
@@ -183,7 +217,7 @@ async def test_delete_namespace_removes_all_chunks(
     r = await client.post(
         "/ingest",
         params={"namespace": str(namespace)},
-        json=_TEST_CHUNKS,
+        json={"chunks": _TEST_CHUNKS},
     )
     assert r.status_code == 200
     assert r.json()["num_added"] >= 1
@@ -208,7 +242,7 @@ async def test_delete_namespace_removes_all_chunks(
     r2 = await client.post(
         "/ingest",
         params={"namespace": str(namespace)},
-        json=_TEST_CHUNKS,
+        json={"chunks": _TEST_CHUNKS},
     )
     assert r2.status_code == 200
     assert r2.json()["num_added"] >= 1
@@ -240,7 +274,7 @@ async def test_hybrid_sparse_vectors_stored(
     r = await client.post(
         "/ingest",
         params={"namespace": str(namespace)},
-        json=_TEST_CHUNKS,
+        json={"chunks": _TEST_CHUNKS},
     )
     assert r.status_code == 200
 
@@ -293,7 +327,7 @@ async def test_colbert_vectors_stored(
     r = await client.post(
         "/ingest",
         params={"namespace": str(namespace)},
-        json=_TEST_CHUNKS,
+        json={"chunks": _TEST_CHUNKS},
     )
     assert r.status_code == 200
 

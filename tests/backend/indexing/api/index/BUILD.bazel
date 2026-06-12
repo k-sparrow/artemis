@@ -19,6 +19,7 @@ py_test(
         ":conftest",
         "//src/backend/indexing/api:dependencies",
         "//src/backend/indexing/api:main",
+        "//src/lib/core/adapters/stores/memory:blob",
         "//src/lib/core/ingestion:exceptions",
         "//src/lib/core/ingestion:types",
         requirement("pytest"),

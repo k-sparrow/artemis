@@ -26,7 +26,10 @@ API_ROUTERS = [
 py_library(
     name = "config",
     srcs = ["config.py"],
-    visibility = ["//src/backend/parsing/api:__subpackages__"],
+    visibility = [
+        "//src/backend/parsing/api:__subpackages__",
+        "//tests/backend/parsing/api:__subpackages__",
+    ],
     deps = [
         "//src/lib/core/adapters/loaders:config",
         requirement("pydantic"),
@@ -49,7 +52,10 @@ py_library(
     deps = [
         ":config",
         "//src/lib/core/adapters/loaders:pkg",
+        "//src/lib/core/adapters/stores/base:blob",
+        "//src/lib/core/adapters/stores/minio:blob",
         requirement("fastapi"),
+        requirement("minio"),
     ],
 )
 
@@ -58,7 +64,9 @@ py_library(
     srcs = ["utils.py"],
     deps = [
         ":config",
+        ":dependencies",
         "//src/lib/backend/logging:pkg",
+        "//src/lib/core/adapters/stores/minio:blob",
         requirement("fastapi"),
     ],
 )

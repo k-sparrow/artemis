@@ -8,20 +8,20 @@ UUID and dispatches the two-task chain:
     fetch_and_parse  →  index
 
 ``fetch_and_parse`` (gpu_bound queue)
-    1. Downloads file bytes from MinIO (in-memory — never touches result backend)
-    2. POSTs bytes to the parsing service → receives List[ParsedChunk]
-    3. Saves chunks to MinIO via ParsedChunkStore → returns the object key
+    1. Hands the parsing service a ``BlobRef`` to the input (claim-check — the
+       controller never downloads the file or moves bytes)
+    2. Parsing reads the input from object storage, writes the artifact, and
+       returns the artifact's ``BlobRef``, which this task returns to the chain
 
 ``index`` (io_bound queue)
-    1. Receives the MinIO object key from the previous task
-    2. Loads List[ParsedChunk] from MinIO
-    3. POSTs to the indexing service
-    4. Deletes the MinIO object on success (leaves it on failure for replay)
-    5. Returns the UpsertResult dict
+    1. Receives the artifact ``BlobRef`` from the previous task
+    2. POSTs it to the indexing service, which reads the artifact from storage
+    3. Deletes the artifact on success (leaves it on failure for replay)
+    4. Returns the UpsertResult dict
 
-The raw file bytes and chunk lists never cross a task boundary — only the
-short MinIO object key is passed between tasks, keeping the Postgres result
-backend lean.
+Raw bytes, chunk lists, and parse artifacts never cross a task boundary or an
+inter-service HTTP body — only the small ``BlobRef`` is passed, keeping both the
+wire and the Postgres result backend lean.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ from opentelemetry import trace
 import pybreaker
 
 from src.backend.controller.lib.schemas import (
+    BlobRef,
     IngestionInfo,
     IngestionResult,
     IndexingOutcome,
@@ -51,18 +52,13 @@ from src.backend.controller.worker.backend.database import DatabaseBackend
 from src.backend.controller.worker.celery import app
 from src.backend.controller.worker.config import settings
 from src.backend.controller.worker.dependencies import get_s3_client
-from src.backend.controller.worker.exceptions import (
-    ChunkIntegrityError,
-    EmptyObjectError,
-    S3IntegrityError,
-)
+from src.backend.controller.worker.exceptions import EmptyObjectError
 from src.backend.controller.worker.utils import (
     call_delete_service,
     call_indexing_service,
     call_parsing_service,
-    fetch_from_s3,
 )
-from src.lib.core.adapters.stores.minio.parsed_chunks import ParsedChunkStore
+from src.lib.core.adapters.stores.minio.blob import MinioBlobStore
 
 logger = get_task_logger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -190,17 +186,16 @@ def fetch_and_parse(
     namespace_id: uuid.UUID,
     group_id: str | None = None,
     task_id: str | None = None,
-) -> str:
-    """Download the document from S3, parse it, persist chunks to MinIO.
+) -> dict:
+    """Ask the parsing service to parse the input and return the artifact ref.
 
-    Returns the MinIO object key to be consumed by :func:`index`.
+    Claim-check: the controller no longer downloads the file or moves bytes — it
+    hands parsing a :class:`BlobRef` to the input, and parsing reads the bytes,
+    writes the artifact to object storage, and returns the artifact's BlobRef
+    (serialised here for the chain → :func:`index`).
 
     Failure modes (non-retryable):
-        EmptyObjectError   — contract reports size=0; empty file, nothing to index.
-        ChunkIntegrityError — parsing service returned chunks with multiple obj_ids.
-
-    Failure modes (retryable, max 3):
-        S3IntegrityError   — contract reports size>0 but MinIO returned 0 bytes.
+        EmptyObjectError — contract reports size=0; empty file, nothing to index.
     """
     with _tracer.start_as_current_span("tasks.fetch_and_parse") as span:
         # The contract task_id propagated from `ingest`; fall back to this
@@ -210,40 +205,21 @@ def fetch_and_parse(
         span.set_attribute("artemis.namespace_id", str(namespace_id))
         span.set_attribute("artemis.obj_id", str(source.obj_id))
 
-        # Guard 1: empty file — permanent, do not retry.
+        # Empty file — permanent, do not retry. (size comes from the contract;
+        # missing/zero-byte inputs surface as a parsing failure → breaker retry.)
         if s3.size == 0:
             raise EmptyObjectError(str(source.obj_id))
 
-        minio_client = get_s3_client()
-        file_bytes = fetch_from_s3(minio_client, s3, logger)
-
-        # Guard 2: MinIO integrity — potentially transient, retry up to 3 times.
-        if len(file_bytes) == 0:
-            raise self.retry(
-                exc=S3IntegrityError(s3.object, s3.size),
-                max_retries=3,
-                countdown=10,
-            )
-
-        chunks = call_parsing_service(
-            file_bytes=file_bytes,
+        source_ref = BlobRef(bucket=s3.bucket, key=s3.object)
+        artifact = call_parsing_service(
+            source_ref=source_ref,
             source=source,
             parsing_url=settings.PARSING_SERVICE_URL,
             timeout=settings.HTTPX_TIMEOUT,
             logger=logger,
         )
-
-        # Guard 3: chunk integrity — parsing service contract violation, do not retry.
-        obj_ids = {c.obj_id for c in chunks}
-        if len(obj_ids) != 1:
-            raise ChunkIntegrityError(obj_ids)
-
-        store = ParsedChunkStore(
-            client=minio_client, bucket=settings.PARSED_CHUNKS_BUCKET
-        )
-        key = store.save(chunks, task_id)
-        logger.info("fetch_and_parse=saved key=%s chunks=%d", key, len(chunks))
-        return key
+        logger.info("fetch_and_parse=artifact key=%s", artifact.key)
+        return artifact.model_dump(mode="json")
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +238,7 @@ def fetch_and_parse(
     retry_backoff_max=120,
 )
 def index(
-    chunks_key: str,
+    artifact_ref: BlobRef,
     namespace_id: uuid.UUID,
     upload_action: str,
     group_id: str | None = None,
@@ -270,33 +246,23 @@ def index(
     s3: S3Details | None = None,
     task_id: str | None = None,
 ) -> dict:
-    """Load parsed chunks from MinIO, index them, delete the MinIO object.
+    """Index the parse artifact at *artifact_ref*, then delete it on success.
 
-    *chunks_key* is the MinIO object key returned by :func:`fetch_and_parse`.
-    On success the object is removed; on failure it is left for manual
-    inspection or dead-letter replay.
+    Indexing reads the artifact directly from object storage (claim-check); the
+    controller only threads the :class:`BlobRef`. On success the artifact is
+    removed; on failure the task raises before cleanup, leaving it for
+    dead-letter inspection / replay.
     """
     with _tracer.start_as_current_span("tasks.index") as span:
         # Contract task_id propagated from `ingest` via the chain.
         if task_id:
             span.set_attribute("artemis.task_id", task_id)
         span.set_attribute("artemis.namespace_id", str(namespace_id))
-
-        minio_client = get_s3_client()
-        store = ParsedChunkStore(
-            client=minio_client, bucket=settings.PARSED_CHUNKS_BUCKET
-        )
-
-        chunks = store.load(chunks_key)
-        logger.info("index=loaded key=%s chunks=%d", chunks_key, len(chunks))
-
-        # obj_id uniqueness was validated in fetch_and_parse;
-        # extract it here for the result.
-        obj_id = str(next(iter({c.obj_id for c in chunks})))
+        obj_id = str(source.obj_id) if source is not None else ""
         span.set_attribute("artemis.obj_id", obj_id)
 
         result = call_indexing_service(
-            chunks=chunks,
+            artifact_ref=artifact_ref,
             namespace_id=namespace_id,
             ingestion_url=settings.INGESTION_SERVICE_URL,
             timeout=settings.HTTPX_TIMEOUT,
@@ -304,8 +270,10 @@ def index(
             group_id=group_id,
         )
 
-        store.delete(chunks_key)
-        logger.info("index=cleanup key=%s obj_id=%s", chunks_key, obj_id)
+        # Cleanup: delete the artifact after a successful index (orchestrator owns
+        # the artifact lifecycle). Left in place on failure for replay.
+        MinioBlobStore(get_s3_client(), artifact_ref.bucket).delete(artifact_ref.key)
+        logger.info("index=cleanup key=%s obj_id=%s", artifact_ref.key, obj_id)
 
         return IngestionResult(
             object=ObjectMetadata(

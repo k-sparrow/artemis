@@ -260,6 +260,11 @@ services:
     environment:
       DOCLING_SERVE_URI: "http://docling-serve:5001"
       LOADER_TYPE: "docling"
+      # Claim-check: reads input by reference and writes the parse artifact.
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_SECURE: false
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
     expose:
       - "10001"
@@ -302,6 +307,11 @@ services:
       SQL_DB_PORT: "5432"
       SQL_DB_DATABASE: "documents"
       SQL_DRIVER: "postgresql+asyncpg"
+      # Claim-check: reads the parse artifact by reference (BlobRef).
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_SECURE: false
       DEBUG: true
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
     extra_hosts:

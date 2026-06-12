@@ -12,6 +12,7 @@ py_library(
         "//tests/lib/testcontainers/vllm:pkg",
         requirement("asyncpg"),
         requirement("httpx"),
+        requirement("minio"),
         requirement("pytest"),
         requirement("qdrant-client"),
         requirement("testcontainers"),
@@ -27,6 +28,7 @@ py_test(
     deps = [
         ":conftest",
         requirement("httpx"),
+        requirement("minio"),
         requirement("pytest"),
         requirement("pytest-asyncio"),
         requirement("qdrant-client"),

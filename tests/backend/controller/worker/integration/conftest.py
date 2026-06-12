@@ -6,7 +6,8 @@ Infrastructure (session-scoped):
   - MinIO testcontainer      — S3 source + ParsedChunkStore intermediate
 
 Stub HTTP servers (session-scoped, in-process threads):
-  - parsing_stub   — minimal server that returns List[ParsedChunk] on POST /v1/parse
+  - parsing_stub   — returns a BlobRef on POST /v1/parse (claim-check; the
+                     artifact itself is pre-seeded into MinIO by seed_artifact)
   - indexing_stub  — minimal server that returns UpsertResult on POST /ingest
 
 Worker container (session-scoped):
@@ -65,6 +66,14 @@ _SAMPLE_CHUNKS = [
         "obj_id": _STUB_OBJ_ID,
     },
 ]
+
+# Claim-check: the parsing stub returns a BlobRef pointing at an artifact the
+# seed_artifact fixture pre-writes to MinIO (mirrors the real parsing service
+# writing the artifact). The index task reads/cleans it up by this key.
+_ARTIFACT_BUCKET = "parsed-chunks"
+_ARTIFACT_KEY = f"parse/{_STUB_OBJ_ID}.json"
+_PARSE_RESPONSE = {"bucket": _ARTIFACT_BUCKET, "key": _ARTIFACT_KEY}
+
 _UPSERT_RESULT = {
     "num_added": 2,
     "num_updated": 0,
@@ -213,7 +222,7 @@ def minio_container(request: pytest.FixtureRequest) -> MinioContainer:
 
 @pytest.fixture(scope="session")
 def parsing_stub(request: pytest.FixtureRequest) -> StubServer:
-    stub = StubServer(default_status=200, default_body=_SAMPLE_CHUNKS)
+    stub = StubServer(default_status=200, default_body=_PARSE_RESPONSE)
     stub.start()
     request.addfinalizer(stub.stop)
     return stub
@@ -410,6 +419,26 @@ def s3_source_bucket(minio_client: Minio):
     yield bucket
     for obj in minio_client.list_objects(bucket, recursive=True):
         minio_client.remove_object(bucket, obj.object_name)
+
+
+@pytest.fixture(autouse=True)
+def seed_artifact(minio_client: Minio):
+    """Pre-write the parse artifact the parsing stub points at, so the chain's
+    artifact read (indexing) and cleanup (index task delete) operate on a real
+    object — mirroring the parsing service writing the artifact."""
+    if not minio_client.bucket_exists(_ARTIFACT_BUCKET):
+        minio_client.make_bucket(_ARTIFACT_BUCKET)
+    data = json.dumps(_SAMPLE_CHUNKS).encode()
+    minio_client.put_object(
+        _ARTIFACT_BUCKET,
+        _ARTIFACT_KEY,
+        io.BytesIO(data),
+        length=len(data),
+        content_type="application/json",
+    )
+    yield
+    for obj in minio_client.list_objects(_ARTIFACT_BUCKET, recursive=True):
+        minio_client.remove_object(_ARTIFACT_BUCKET, obj.object_name)
 
 
 @pytest.fixture

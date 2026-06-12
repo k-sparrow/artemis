@@ -66,7 +66,7 @@ py_library(
         "//src/backend/controller/lib:schemas",
         "//src/backend/controller/worker/backend:pkg",
         "//src/lib/backend/telemetry:pkg",
-        "//src/lib/core/adapters/stores/minio:parsed_chunks",
+        "//src/lib/core/adapters/stores/minio:blob",
         requirement("psycopg"),
         requirement("psycopg-binary"),
         requirement("celery"),

@@ -24,3 +24,18 @@ py_library(
         requirement("pydantic"),
     ],
 )
+
+# MinIO-backed BlobStore — broadly visible so parsing + indexing can read/write
+# artifacts directly (claim-check data plane).
+py_library(
+    name = "blob",
+    srcs = ["blob.py"],
+    visibility = [
+        "//src:__subpackages__",
+        "//tests:__subpackages__",
+    ],
+    deps = [
+        "//src/lib/core/adapters/stores/base:blob",
+        requirement("minio"),
+    ],
+)

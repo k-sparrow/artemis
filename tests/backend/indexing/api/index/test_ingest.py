@@ -4,26 +4,42 @@
 #
 """Unit tests for the POST /ingest and DELETE /ingest endpoints.
 
-The indexing service accepts pre-parsed List[ParsedChunk] JSON — it no longer
-handles file uploads or calls any document loader.  All infrastructure
-dependencies (pipeline) are replaced with mocks via FastAPI's
-dependency_overrides — no Qdrant, TEI, or Postgres containers are required.
+POST /ingest is inline-or-reference: the body is an ``IngestRequest`` carrying
+either inline ``chunks`` or an ``artifact_ref`` BlobRef (read from object
+storage). The pipeline and the blob-store factory are replaced via
+dependency_overrides — an in-memory store backs the artifact-read path, so no
+Qdrant/TEI/Postgres/MinIO is required.
 """
 
 from __future__ import annotations
 
+import json
 import uuid
+from contextlib import contextmanager
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
 
-from src.backend.indexing.api.dependencies import get_pipeline
+from src.backend.indexing.api.dependencies import (
+    get_blob_store_factory,
+    get_pipeline,
+)
 from src.backend.indexing.api.main import app
+from src.lib.core.adapters.stores.memory.blob import InMemoryBlobStore
 from src.lib.core.ingestion.exceptions import DocumentProcessingException
 from src.lib.core.ingestion.types import UpsertResult
 
 OBJ_ID = uuid.UUID("12345678-1234-5678-1234-567812345678")
+
+
+def _chunk(content: str = "hello world", obj_id: uuid.UUID = OBJ_ID) -> dict:
+    return {
+        "page_content": content,
+        "source": "test.md",
+        "type": "text",
+        "obj_id": str(obj_id),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -47,19 +63,34 @@ def mock_pipeline() -> AsyncMock:
 
 
 @pytest.fixture
-def client(mock_pipeline: AsyncMock):
-    """TestClient with the pipeline replaced by a mock."""
-    app.dependency_overrides[get_pipeline] = lambda: mock_pipeline
-    with TestClient(app) as c:
+def store() -> InMemoryBlobStore:
+    return InMemoryBlobStore()
+
+
+@pytest.fixture
+def make_client(store: InMemoryBlobStore):
+    @contextmanager
+    def _make(pipeline, *, raise_server_exceptions: bool = True):
+        app.dependency_overrides[get_pipeline] = lambda: pipeline
+        app.dependency_overrides[get_blob_store_factory] = lambda: (lambda _b: store)
+        try:
+            with TestClient(
+                app, raise_server_exceptions=raise_server_exceptions
+            ) as client:
+                yield client
+        finally:
+            app.dependency_overrides.clear()
+
+    return _make
+
+
+@pytest.fixture
+def client(make_client, mock_pipeline: AsyncMock):
+    with make_client(mock_pipeline) as c:
         yield c
-    app.dependency_overrides.clear()
 
 
-def _delete(
-    client: TestClient,
-    namespace: uuid.UUID,
-    obj_id: str | None = None,
-):
+def _delete(client: TestClient, namespace: uuid.UUID, obj_id: str | None = None):
     params: dict = {"namespace": str(namespace)}
     if obj_id is not None:
         params["obj_id"] = obj_id
@@ -70,21 +101,21 @@ def _post_chunks(
     client: TestClient,
     namespace: uuid.UUID,
     chunks: list | None = None,
-    obj_id: uuid.UUID = OBJ_ID,
+    group_id: str | None = None,
 ):
     if chunks is None:
-        chunks = [
-            {
-                "page_content": "hello world",
-                "source": "test.md",
-                "type": "text",
-                "obj_id": str(obj_id),
-            }
-        ]
+        chunks = [_chunk()]
+    params: dict = {"namespace": str(namespace)}
+    if group_id is not None:
+        params["group_id"] = group_id
+    return client.post("/ingest", params=params, json={"chunks": chunks})
+
+
+def _post_artifact_ref(client: TestClient, namespace: uuid.UUID, bucket: str, key: str):
     return client.post(
         "/ingest",
         params={"namespace": str(namespace)},
-        json=chunks,
+        json={"artifact_ref": {"bucket": bucket, "key": key}},
     )
 
 
@@ -94,10 +125,9 @@ def _post_chunks(
 
 
 class TestIngestEndpoint:
-    def test_happy_path_returns_upsert_result(
+    def test_inline_chunks_returns_upsert_result(
         self, client: TestClient, namespace: uuid.UUID
     ) -> None:
-        """Successful ingestion returns UpsertResult with correct counts and IDs."""
         response = _post_chunks(client, namespace)
 
         assert response.status_code == 200
@@ -106,35 +136,52 @@ class TestIngestEndpoint:
         assert body["num_skipped"] == 0
         assert body["ids"] == ["id-1", "id-2"]
 
+    def test_artifact_ref_reads_store_then_indexes(
+        self,
+        client: TestClient,
+        namespace: uuid.UUID,
+        store: InMemoryBlobStore,
+        mock_pipeline: AsyncMock,
+    ) -> None:
+        """artifact_ref path: chunks are read from the store by key, then indexed."""
+        store.put(
+            "parsed-chunks/x.json", json.dumps([_chunk("from artifact")]).encode()
+        )
+        response = _post_artifact_ref(
+            client, namespace, bucket="parsed-chunks", key="parsed-chunks/x.json"
+        )
+
+        assert response.status_code == 200
+        docs_arg = mock_pipeline.aprocess.call_args[0][0]
+        assert len(docs_arg) == 1
+        assert docs_arg[0].page_content == "from artifact"
+
+    def test_requires_exactly_one_input(
+        self, client: TestClient, namespace: uuid.UUID
+    ) -> None:
+        """Neither chunks nor artifact_ref → 422."""
+        response = client.post("/ingest", params={"namespace": str(namespace)}, json={})
+        assert response.status_code == 422
+
     def test_missing_required_chunk_field_returns_422(
         self, client: TestClient, namespace: uuid.UUID
     ) -> None:
-        """Chunks missing required fields are rejected by Pydantic validation → 422."""
         response = _post_chunks(
             client,
             namespace,
-            chunks=[
-                {"source": "test.md", "type": "text", "obj_id": str(OBJ_ID)}
-            ],  # page_content missing
+            chunks=[{"source": "test.md", "type": "text", "obj_id": str(OBJ_ID)}],
         )
         assert response.status_code == 422
 
     def test_document_processing_exception_returns_422(
-        self,
-        namespace: uuid.UUID,
+        self, make_client, namespace: uuid.UUID
     ) -> None:
-        """DocumentProcessingException raised by the pipeline → 422."""
-        failing_pipeline = AsyncMock()
-        failing_pipeline.aprocess = AsyncMock(
+        failing = AsyncMock()
+        failing.aprocess = AsyncMock(
             side_effect=DocumentProcessingException("invalid chunk structure")
         )
-
-        app.dependency_overrides[get_pipeline] = lambda: failing_pipeline
-        try:
-            with TestClient(app) as c:
-                response = _post_chunks(c, namespace)
-        finally:
-            app.dependency_overrides.clear()
+        with make_client(failing) as c:
+            response = _post_chunks(c, namespace)
 
         assert response.status_code == 422
         body = response.json()
@@ -142,159 +189,89 @@ class TestIngestEndpoint:
         assert "invalid chunk structure" in body["detail"]
 
     def test_unexpected_pipeline_error_returns_500(
-        self,
-        namespace: uuid.UUID,
+        self, make_client, namespace: uuid.UUID
     ) -> None:
-        """Unhandled exceptions from the pipeline bubble up as 500."""
-        crashing_pipeline = AsyncMock()
-        crashing_pipeline.aprocess = AsyncMock(
+        crashing = AsyncMock()
+        crashing.aprocess = AsyncMock(
             side_effect=RuntimeError("qdrant connection lost")
         )
-
-        app.dependency_overrides[get_pipeline] = lambda: crashing_pipeline
-        try:
-            with TestClient(app, raise_server_exceptions=False) as c:
-                response = _post_chunks(c, namespace)
-        finally:
-            app.dependency_overrides.clear()
+        with make_client(crashing, raise_server_exceptions=False) as c:
+            response = _post_chunks(c, namespace)
 
         assert response.status_code == 500
 
-    def test_pipeline_called_with_namespace_and_obj_id_in_metadata(
-        self,
-        client: TestClient,
-        namespace: uuid.UUID,
-        mock_pipeline: AsyncMock,
+    def test_namespace_and_obj_id_stamped_on_docs(
+        self, client: TestClient, namespace: uuid.UUID, mock_pipeline: AsyncMock
     ) -> None:
-        """
-        Both namespace and obj_id must be stamped on
-        every document before pipeline.aprocess().
-        """
         _post_chunks(client, namespace)
 
         mock_pipeline.aprocess.assert_called_once()
         docs_arg = mock_pipeline.aprocess.call_args[0][0]
         assert all(
             doc.metadata.get("namespace_id") == str(namespace) for doc in docs_arg
-        ), "All documents must carry the namespace_id in their metadata"
-        assert all(
-            doc.metadata.get("obj_id") == str(OBJ_ID) for doc in docs_arg
-        ), "All documents must carry obj_id in their metadata"
+        )
+        assert all(doc.metadata.get("obj_id") == str(OBJ_ID) for doc in docs_arg)
 
     def test_group_id_stamped_when_provided(
-        self,
-        client: TestClient,
-        namespace: uuid.UUID,
-        mock_pipeline: AsyncMock,
+        self, client: TestClient, namespace: uuid.UUID, mock_pipeline: AsyncMock
     ) -> None:
-        """group_id must be stamped on every document when passed as a query param."""
         group_id = str(uuid.uuid4())
-        client.post(
-            "/ingest",
-            params={"namespace": str(namespace), "group_id": group_id},
-            json=[
-                {
-                    "page_content": "hello",
-                    "source": "test.md",
-                    "type": "text",
-                    "obj_id": str(OBJ_ID),
-                }
-            ],
-        )
+        _post_chunks(client, namespace, group_id=group_id)
 
         docs_arg = mock_pipeline.aprocess.call_args[0][0]
-        assert all(
-            doc.metadata.get("group_id") == group_id for doc in docs_arg
-        ), "All documents must carry group_id in their metadata when provided"
+        assert all(doc.metadata.get("group_id") == group_id for doc in docs_arg)
 
     def test_group_id_absent_when_not_provided(
-        self,
-        client: TestClient,
-        namespace: uuid.UUID,
-        mock_pipeline: AsyncMock,
+        self, client: TestClient, namespace: uuid.UUID, mock_pipeline: AsyncMock
     ) -> None:
-        """group_id must not appear in metadata when not passed."""
         _post_chunks(client, namespace)
 
         docs_arg = mock_pipeline.aprocess.call_args[0][0]
-        assert all(
-            "group_id" not in doc.metadata for doc in docs_arg
-        ), "group_id must be absent from metadata when not provided"
+        assert all("group_id" not in doc.metadata for doc in docs_arg)
 
     def test_multiple_chunks_all_passed_to_pipeline(
-        self,
-        client: TestClient,
-        namespace: uuid.UUID,
-        mock_pipeline: AsyncMock,
+        self, client: TestClient, namespace: uuid.UUID, mock_pipeline: AsyncMock
     ) -> None:
-        """All chunks in the request body are forwarded to the pipeline."""
-        chunks = [
-            {
-                "page_content": f"chunk {i}",
-                "source": "test.md",
-                "type": "text",
-                "obj_id": str(OBJ_ID),
-            }
-            for i in range(5)
-        ]
+        chunks = [_chunk(f"chunk {i}") for i in range(5)]
         _post_chunks(client, namespace, chunks=chunks)
 
-        docs_arg = mock_pipeline.aprocess.call_args[0][0]
-        assert len(docs_arg) == 5
+        assert len(mock_pipeline.aprocess.call_args[0][0]) == 5
 
 
 class TestDeleteEndpoint:
     def test_single_object_deletion_returns_204(
         self, client: TestClient, namespace: uuid.UUID
     ) -> None:
-        """DELETE /ingest?namespace=<uuid>&obj_id=<uuid> → 204 No Content."""
-        response = _delete(client, namespace, obj_id=str(OBJ_ID))
-        assert response.status_code == 204
+        assert _delete(client, namespace, obj_id=str(OBJ_ID)).status_code == 204
 
     def test_single_object_deletion_calls_adelete_source(
-        self,
-        client: TestClient,
-        namespace: uuid.UUID,
-        mock_pipeline: AsyncMock,
+        self, client: TestClient, namespace: uuid.UUID, mock_pipeline: AsyncMock
     ) -> None:
-        """pipeline.adelete_source must be called with the exact obj_id string."""
         _delete(client, namespace, obj_id=str(OBJ_ID))
         mock_pipeline.adelete_source.assert_called_once_with(str(OBJ_ID))
 
     def test_namespace_deletion_returns_204(
         self, client: TestClient, namespace: uuid.UUID
     ) -> None:
-        """DELETE /ingest?namespace=<uuid> (no obj_id) → 204 No Content."""
-        response = _delete(client, namespace)
-        assert response.status_code == 204
+        assert _delete(client, namespace).status_code == 204
 
     def test_namespace_deletion_calls_aprocess_with_empty_list(
-        self,
-        client: TestClient,
-        namespace: uuid.UUID,
-        mock_pipeline: AsyncMock,
+        self, client: TestClient, namespace: uuid.UUID, mock_pipeline: AsyncMock
     ) -> None:
-        """Namespace deletion must delegate to pipeline.aprocess([])."""
         _delete(client, namespace)
         mock_pipeline.aprocess.assert_called_once_with([])
 
     def test_missing_namespace_returns_422(self, client: TestClient) -> None:
-        """DELETE /ingest without namespace query param → 422."""
-        response = client.delete("/ingest")
-        assert response.status_code == 422
+        assert client.delete("/ingest").status_code == 422
 
-    def test_adelete_source_error_returns_500(self, namespace: uuid.UUID) -> None:
-        """Unhandled exception from adelete_source bubbles up as 500."""
-        crashing_pipeline = AsyncMock()
-        crashing_pipeline.adelete_source = AsyncMock(
+    def test_adelete_source_error_returns_500(
+        self, make_client, namespace: uuid.UUID
+    ) -> None:
+        crashing = AsyncMock()
+        crashing.adelete_source = AsyncMock(
             side_effect=RuntimeError("qdrant unavailable")
         )
-
-        app.dependency_overrides[get_pipeline] = lambda: crashing_pipeline
-        try:
-            with TestClient(app, raise_server_exceptions=False) as c:
-                response = _delete(c, namespace, obj_id=str(OBJ_ID))
-        finally:
-            app.dependency_overrides.clear()
+        with make_client(crashing, raise_server_exceptions=False) as c:
+            response = _delete(c, namespace, obj_id=str(OBJ_ID))
 
         assert response.status_code == 500

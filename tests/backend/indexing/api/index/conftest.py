@@ -15,6 +15,10 @@ os.environ.setdefault("SQL_DB_PORT", "5432")
 os.environ.setdefault("SQL_DB_USER", "test")
 os.environ.setdefault("SQL_DB_PASSWORD", "test")
 os.environ.setdefault("SQL_DB_DATABASE", "test")
+os.environ.setdefault("S3_ENDPOINT", "test-minio:9000")
+os.environ.setdefault("S3_ACCESS_KEY", "test")
+os.environ.setdefault("S3_SECRET_KEY", "test")
+os.environ.setdefault("S3_SECURE", "false")
 
 
 @pytest.fixture(autouse=True)

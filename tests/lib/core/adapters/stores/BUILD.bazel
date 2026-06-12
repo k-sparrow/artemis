@@ -22,6 +22,17 @@ py_test(
 )
 
 py_test(
+    name = "test_blob",
+    srcs = ["test_blob.py"],
+    env = {},
+    tags = ["unit"],
+    deps = [
+        "//src/lib/core/adapters/stores/memory:blob",
+        requirement("pytest"),
+    ],
+)
+
+py_test(
     name = "test_sql",
     srcs = ["test_sql.py"],
     env = {},

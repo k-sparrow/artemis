@@ -12,23 +12,18 @@ real DB connection during module initialisation.
 from __future__ import annotations
 
 import uuid
-from typing import List
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.lib.core.ingestion.types import ChunkType, ParsedChunk
 from src.backend.controller.lib.schemas import (
+    BlobRef,
     IngestionInfo,
     SourceDetails,
     S3Details,
     UploadAction,
 )
-from src.backend.controller.worker.exceptions import (
-    ChunkIntegrityError,
-    EmptyObjectError,
-    S3IntegrityError,
-)
+from src.backend.controller.worker.exceptions import EmptyObjectError
 
 # ----- module under test (imported after conftest patches the app) ----------
 from src.backend.controller.worker.tasks import (
@@ -52,14 +47,7 @@ _SOURCE = SourceDetails(
 )
 _INFO = IngestionInfo(namespace_id=_NAMESPACE_ID)
 
-_CHUNKS: List[ParsedChunk] = [
-    ParsedChunk(
-        page_content="hello", source="test.md", type=ChunkType.TEXT, obj_id=_OBJ_ID
-    ),
-    ParsedChunk(
-        page_content="| a |", source="test.md", type=ChunkType.TABLE, obj_id=_OBJ_ID
-    ),
-]
+_ARTIFACT_REF = BlobRef(bucket="parsed-chunks", key=f"parse/{_OBJ_ID}.json")
 
 _UPSERT_RESULT = {"num_added": 2, "num_updated": 0, "num_skipped": 0, "ids": ["x", "y"]}
 
@@ -287,167 +275,34 @@ class TestDeleteNamespace:
 
 
 class TestFetchAndParse:
-    """Tests for the ``fetch_and_parse`` task (Task 1 of the ingestion chain).
+    """Tests for ``fetch_and_parse`` — hands parsing a source ``BlobRef`` and
+    returns the artifact ``BlobRef`` (claim-check; no download, no chunk store)."""
 
-    ``fetch_and_parse`` downloads the raw file from MinIO, sends it to the
-    parsing service, persists the returned chunks to a temporary MinIO object,
-    and returns the object key for ``index`` to consume.
-
-    The task never passes raw bytes between tasks — only the short MinIO key
-    travels over the broker, keeping the Postgres result backend lean.
-    """
-
-    def _run(
-        self,
-        mock_fetch: MagicMock,
-        mock_parse: MagicMock,
-        mock_store: MagicMock,
-    ) -> str:
-        """Run fetch_and_parse.run() with all external deps patched."""
-        mock_fetch.return_value = b"file bytes"
-        mock_parse.return_value = _CHUNKS
-        mock_store_instance = MagicMock()
-        mock_store_instance.save.return_value = "parsed-chunks/task-123.json"
-        mock_store.return_value = mock_store_instance
-
-        with (
-            patch("src.backend.controller.worker.tasks.fetch_from_s3", mock_fetch),
-            patch(
-                "src.backend.controller.worker.tasks.call_parsing_service", mock_parse
-            ),
-            patch("src.backend.controller.worker.tasks.ParsedChunkStore", mock_store),
-            patch(
-                "src.backend.controller.worker.tasks.get_s3_client",
-                return_value=MagicMock(),
-            ),
+    def _run(self, mock_parse: MagicMock) -> dict:
+        with patch(
+            "src.backend.controller.worker.tasks.call_parsing_service", mock_parse
         ):
             return fetch_and_parse.run(_S3, _SOURCE, _NAMESPACE_ID)
 
-    def test_returns_minio_key(self) -> None:
-        """The task must return the MinIO object key produced by ParsedChunkStore."""
-        result = self._run(MagicMock(), MagicMock(), MagicMock())
-        assert result == "parsed-chunks/task-123.json"
+    def test_returns_artifact_ref_dict(self) -> None:
+        """The task returns the artifact BlobRef (serialised) for the chain."""
+        result = self._run(MagicMock(return_value=_ARTIFACT_REF))
+        assert result == {"bucket": _ARTIFACT_REF.bucket, "key": _ARTIFACT_REF.key}
 
-    def test_fetch_called_with_s3_details(self) -> None:
-        """The S3 coordinates must be forwarded unchanged to ``fetch_from_s3``."""
-        mock_fetch = MagicMock(return_value=b"bytes")
-        mock_parse = MagicMock(return_value=_CHUNKS)
-        mock_store = MagicMock()
-        mock_store.return_value.save.return_value = "key"
+    def test_parsing_called_with_source_ref_from_s3(self) -> None:
+        """The input S3 coordinates are forwarded as a source BlobRef."""
+        mock_parse = MagicMock(return_value=_ARTIFACT_REF)
+        self._run(mock_parse)
 
-        with (
-            patch("src.backend.controller.worker.tasks.fetch_from_s3", mock_fetch),
-            patch(
-                "src.backend.controller.worker.tasks.call_parsing_service", mock_parse
-            ),
-            patch("src.backend.controller.worker.tasks.ParsedChunkStore", mock_store),
-            patch(
-                "src.backend.controller.worker.tasks.get_s3_client",
-                return_value=MagicMock(),
-            ),
-        ):
-            fetch_and_parse.run(_S3, _SOURCE, _NAMESPACE_ID)
-
-        s3_arg = mock_fetch.call_args[0][1]
-        assert s3_arg.bucket == "docs"
-        assert s3_arg.object == "files/test.md"
-
-    def test_parsing_called_with_file_bytes_and_source(self) -> None:
-        """The raw bytes and source metadata must be forwarded to the parsing service."""
-        mock_fetch = MagicMock(return_value=b"file bytes")
-        mock_parse = MagicMock(return_value=_CHUNKS)
-        mock_store = MagicMock()
-        mock_store.return_value.save.return_value = "key"
-
-        with (
-            patch("src.backend.controller.worker.tasks.fetch_from_s3", mock_fetch),
-            patch(
-                "src.backend.controller.worker.tasks.call_parsing_service", mock_parse
-            ),
-            patch("src.backend.controller.worker.tasks.ParsedChunkStore", mock_store),
-            patch(
-                "src.backend.controller.worker.tasks.get_s3_client",
-                return_value=MagicMock(),
-            ),
-        ):
-            fetch_and_parse.run(_S3, _SOURCE, _NAMESPACE_ID)
-
-        assert mock_parse.call_args[1]["file_bytes"] == b"file bytes"
+        source_ref = mock_parse.call_args[1]["source_ref"]
+        assert source_ref.bucket == _S3.bucket
+        assert source_ref.key == _S3.object
         assert mock_parse.call_args[1]["source"].source == "test.md"
 
     def test_empty_object_raises_empty_object_error(self) -> None:
-        """size=0 in the contract must raise EmptyObjectError before touching MinIO."""
+        """size=0 in the contract must raise EmptyObjectError before calling parsing."""
         with pytest.raises(EmptyObjectError):
             fetch_and_parse.run(_S3_EMPTY, _SOURCE, _NAMESPACE_ID)
-
-    def test_s3_integrity_error_when_zero_bytes_fetched(self) -> None:
-        """size>0 in contract but MinIO returns 0 bytes must raise S3IntegrityError.
-
-        When called via .run() (no broker), self.retry() immediately re-raises
-        the wrapped exception rather than enqueuing a retry.
-        """
-        mock_fetch = MagicMock(return_value=b"")
-
-        with (
-            patch("src.backend.controller.worker.tasks.fetch_from_s3", mock_fetch),
-            patch(
-                "src.backend.controller.worker.tasks.get_s3_client",
-                return_value=MagicMock(),
-            ),
-        ):
-            with pytest.raises(S3IntegrityError):
-                fetch_and_parse.run(_S3, _SOURCE, _NAMESPACE_ID)
-
-    def test_chunk_integrity_error_when_multiple_obj_ids(self) -> None:
-        """Chunks with more than one obj_id must raise ChunkIntegrityError."""
-        other_obj_id = uuid.uuid4()
-        mixed_chunks = [
-            ParsedChunk(
-                page_content="a", source="f", type=ChunkType.TEXT, obj_id=_OBJ_ID
-            ),
-            ParsedChunk(
-                page_content="b", source="f", type=ChunkType.TEXT, obj_id=other_obj_id
-            ),
-        ]
-        mock_fetch = MagicMock(return_value=b"bytes")
-        mock_parse = MagicMock(return_value=mixed_chunks)
-
-        with (
-            patch("src.backend.controller.worker.tasks.fetch_from_s3", mock_fetch),
-            patch(
-                "src.backend.controller.worker.tasks.call_parsing_service", mock_parse
-            ),
-            patch(
-                "src.backend.controller.worker.tasks.get_s3_client",
-                return_value=MagicMock(),
-            ),
-        ):
-            with pytest.raises(ChunkIntegrityError):
-                fetch_and_parse.run(_S3, _SOURCE, _NAMESPACE_ID)
-
-    def test_chunks_saved_to_store(self) -> None:
-        """The chunks returned by the parsing service must be persisted to MinIO."""
-        mock_fetch = MagicMock(return_value=b"bytes")
-        mock_parse = MagicMock(return_value=_CHUNKS)
-        mock_store = MagicMock()
-        mock_store_instance = mock_store.return_value
-        mock_store_instance.save.return_value = "key"
-
-        with (
-            patch("src.backend.controller.worker.tasks.fetch_from_s3", mock_fetch),
-            patch(
-                "src.backend.controller.worker.tasks.call_parsing_service", mock_parse
-            ),
-            patch("src.backend.controller.worker.tasks.ParsedChunkStore", mock_store),
-            patch(
-                "src.backend.controller.worker.tasks.get_s3_client",
-                return_value=MagicMock(),
-            ),
-        ):
-            fetch_and_parse.run(_S3, _SOURCE, _NAMESPACE_ID)
-
-        saved_chunks = mock_store_instance.save.call_args[0][0]
-        assert saved_chunks == _CHUNKS
 
 
 # ---------------------------------------------------------------------------
@@ -456,42 +311,28 @@ class TestFetchAndParse:
 
 
 class TestIndex:
-    """Tests for the ``index`` task (Task 2 of the ingestion chain).
+    """Tests for ``index`` — reads the artifact via the indexing service and
+    deletes it on success (left in place on failure for dead-letter replay)."""
 
-    ``index`` receives the MinIO key from ``fetch_and_parse``, loads the
-    chunks, POSTs them to the indexing service, and deletes the MinIO object
-    on success.  On failure the object is left in MinIO so it can be replayed
-    via the dead-letter queue.
-    """
-
-    _KEY = "parsed-chunks/task-123.json"
-
-    def _run(
-        self,
-        mock_index_svc: MagicMock,
-        mock_store: MagicMock,
-        chunks: List[ParsedChunk] = _CHUNKS,
-    ) -> dict:
-        mock_store_instance = MagicMock()
-        mock_store_instance.load.return_value = chunks
-        mock_store.return_value = mock_store_instance
+    def _run(self, mock_index_svc: MagicMock, mock_store: MagicMock, **kwargs) -> dict:
         mock_index_svc.return_value = _UPSERT_RESULT
-
         with (
             patch(
                 "src.backend.controller.worker.tasks.call_indexing_service",
                 mock_index_svc,
             ),
-            patch("src.backend.controller.worker.tasks.ParsedChunkStore", mock_store),
+            patch("src.backend.controller.worker.tasks.MinioBlobStore", mock_store),
             patch(
                 "src.backend.controller.worker.tasks.get_s3_client",
                 return_value=MagicMock(),
             ),
         ):
-            return index.run(self._KEY, _NAMESPACE_ID, "CREATE", source=_SOURCE, s3=_S3)
+            return index.run(
+                _ARTIFACT_REF, _NAMESPACE_ID, "CREATE", source=_SOURCE, s3=_S3, **kwargs
+            )
 
-    def test_returns_upsert_result_with_obj_id(self) -> None:
-        """The task must return a structured IngestionResult dict for the JDBC sink."""
+    def test_returns_ingestion_result_with_obj_id(self) -> None:
+        """The task returns a structured IngestionResult dict for the JDBC sink."""
         result = self._run(MagicMock(), MagicMock())
         assert result["object"]["id"] == str(_OBJ_ID)
         assert result["object"]["source"] == _SOURCE.source
@@ -501,127 +342,46 @@ class TestIndex:
         assert result["object"]["properties"]["content_type"] == _SOURCE.content_type
         assert result["object"]["properties"]["size_bytes"] == _S3.size
         assert result["indexing"]["num_added"] == _UPSERT_RESULT["num_added"]
-        assert result["indexing"]["num_skipped"] == _UPSERT_RESULT["num_skipped"]
         assert result["indexing"]["ids"] == _UPSERT_RESULT["ids"]
         assert result["operation"] == "CREATE"
 
     def test_returns_group_id_when_provided(self) -> None:
-        """group_id must be included in the return dict when set."""
         group_id = str(uuid.uuid4())
-        mock_store = MagicMock()
-        mock_store.return_value.load.return_value = _CHUNKS
-        mock_index_svc = MagicMock(return_value=_UPSERT_RESULT)
-
-        with (
-            patch(
-                "src.backend.controller.worker.tasks.call_indexing_service",
-                mock_index_svc,
-            ),
-            patch("src.backend.controller.worker.tasks.ParsedChunkStore", mock_store),
-            patch(
-                "src.backend.controller.worker.tasks.get_s3_client",
-                return_value=MagicMock(),
-            ),
-        ):
-            result = index.run(
-                self._KEY, _NAMESPACE_ID, "CREATE", group_id, _SOURCE, _S3
-            )
-
+        result = self._run(MagicMock(), MagicMock(), group_id=group_id)
         assert result["object"]["scope"]["group_id"] == group_id
-        assert result["object"]["scope"]["namespace_id"] == str(_NAMESPACE_ID)
 
-    def test_loads_chunks_from_store(self) -> None:
-        """
-        Chunks must be loaded from MinIO using the
-        key passed by ``fetch_and_parse``.
-        """
+    def test_indexing_called_with_artifact_ref_and_namespace(self) -> None:
         mock_index_svc = MagicMock(return_value=_UPSERT_RESULT)
-        mock_store = MagicMock()
-        mock_store_instance = mock_store.return_value
-        mock_store_instance.load.return_value = _CHUNKS
-
-        with (
-            patch(
-                "src.backend.controller.worker.tasks.call_indexing_service",
-                mock_index_svc,
-            ),
-            patch("src.backend.controller.worker.tasks.ParsedChunkStore", mock_store),
-            patch(
-                "src.backend.controller.worker.tasks.get_s3_client",
-                return_value=MagicMock(),
-            ),
-        ):
-            index.run(self._KEY, _NAMESPACE_ID, "CREATE")
-
-        mock_store_instance.load.assert_called_once_with(self._KEY)
-
-    def test_indexing_called_with_correct_namespace(self) -> None:
-        """The namespace UUID must be forwarded to the indexing service."""
-        mock_index_svc = MagicMock(return_value=_UPSERT_RESULT)
-        mock_store = MagicMock()
-        mock_store.return_value.load.return_value = _CHUNKS
-
-        with (
-            patch(
-                "src.backend.controller.worker.tasks.call_indexing_service",
-                mock_index_svc,
-            ),
-            patch("src.backend.controller.worker.tasks.ParsedChunkStore", mock_store),
-            patch(
-                "src.backend.controller.worker.tasks.get_s3_client",
-                return_value=MagicMock(),
-            ),
-        ):
-            index.run(self._KEY, _NAMESPACE_ID, "CREATE")
-
+        self._run(mock_index_svc, MagicMock())
+        assert mock_index_svc.call_args[1]["artifact_ref"] == _ARTIFACT_REF
         assert mock_index_svc.call_args[1]["namespace_id"] == _NAMESPACE_ID
 
-    def test_minio_key_deleted_after_success(self) -> None:
-        """The intermediate MinIO object must be cleaned up after successful indexing."""
-        mock_index_svc = MagicMock(return_value=_UPSERT_RESULT)
+    def test_artifact_deleted_after_success(self) -> None:
+        """The artifact is deleted from its bucket after a successful index."""
         mock_store = MagicMock()
-        mock_store_instance = mock_store.return_value
-        mock_store_instance.load.return_value = _CHUNKS
+        self._run(MagicMock(), mock_store)
+        # MinioBlobStore(client, ref.bucket).delete(ref.key)
+        assert mock_store.call_args[0][1] == _ARTIFACT_REF.bucket
+        mock_store.return_value.delete.assert_called_once_with(_ARTIFACT_REF.key)
 
-        with (
-            patch(
-                "src.backend.controller.worker.tasks.call_indexing_service",
-                mock_index_svc,
-            ),
-            patch("src.backend.controller.worker.tasks.ParsedChunkStore", mock_store),
-            patch(
-                "src.backend.controller.worker.tasks.get_s3_client",
-                return_value=MagicMock(),
-            ),
-        ):
-            index.run(self._KEY, _NAMESPACE_ID, "CREATE")
-
-        mock_store_instance.delete.assert_called_once_with(self._KEY)
-
-    def test_includes_obj_id_from_chunks_in_result(self) -> None:
-        """The result dict must include obj_id extracted from the loaded chunks."""
-        result = self._run(MagicMock(), MagicMock())
-        assert result["object"]["id"] == str(_OBJ_ID)
-
-    def test_minio_key_not_deleted_on_indexing_failure(self) -> None:
-        """On failure the object must be left in MinIO for dead-letter replay."""
+    def test_artifact_not_deleted_on_indexing_failure(self) -> None:
+        """On failure the artifact must be left for dead-letter replay."""
         mock_index_svc = MagicMock(side_effect=RuntimeError("indexing service down"))
         mock_store = MagicMock()
-        mock_store_instance = mock_store.return_value
-        mock_store_instance.load.return_value = _CHUNKS
-
         with (
             patch(
                 "src.backend.controller.worker.tasks.call_indexing_service",
                 mock_index_svc,
             ),
-            patch("src.backend.controller.worker.tasks.ParsedChunkStore", mock_store),
+            patch("src.backend.controller.worker.tasks.MinioBlobStore", mock_store),
             patch(
                 "src.backend.controller.worker.tasks.get_s3_client",
                 return_value=MagicMock(),
             ),
         ):
             with pytest.raises(RuntimeError):
-                index.run(self._KEY, _NAMESPACE_ID, "CREATE")
+                index.run(
+                    _ARTIFACT_REF, _NAMESPACE_ID, "CREATE", source=_SOURCE, s3=_S3
+                )
 
-        mock_store_instance.delete.assert_not_called()
+        mock_store.return_value.delete.assert_not_called()

@@ -1,29 +1,30 @@
 """Unit tests for controller worker utility functions.
 
-All external dependencies (MinIO, HTTP services) are replaced with mocks —
-no infrastructure is required.
+The service calls are claim-check: ``call_parsing_service`` sends a ``source_ref``
+and returns the artifact ``BlobRef``; ``call_indexing_service`` sends an
+``artifact_ref``. All HTTP is mocked with respx — no infrastructure required.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from unittest.mock import MagicMock
+from urllib.parse import parse_qs
 
+import pybreaker
 import pytest
 import respx
 from httpx import Response
 
-from src.backend.controller.lib.schemas import S3Details, SourceDetails
-import pybreaker
-
+from src.backend.controller.lib.schemas import BlobRef, S3Details, SourceDetails
 from src.backend.controller.worker.utils import (
     call_indexing_service,
     call_parsing_service,
     fetch_from_s3,
     parsing_breaker,
 )
-from src.lib.core.ingestion.types import ChunkType, ParsedChunk
 
 _logger = logging.getLogger(__name__)
 
@@ -31,34 +32,20 @@ _PARSING_URL = "http://test-parsing:10001"
 _INDEXING_URL = "http://test-indexing:10000"
 
 _OBJ_ID = uuid.UUID("12345678-1234-5678-1234-567812345678")
+_SOURCE_REF = BlobRef(bucket="artemis", key="artemis/in.md")
+_ARTIFACT_REF = BlobRef(bucket="parsed-chunks", key=f"parse/{_OBJ_ID}.json")
 
-_SAMPLE_CHUNKS = [
-    ParsedChunk(
-        page_content="chunk one", source="test.md", type=ChunkType.TEXT, obj_id=_OBJ_ID
-    ),
-    ParsedChunk(
-        page_content="| col |", source="test.md", type=ChunkType.TABLE, obj_id=_OBJ_ID
-    ),
-]
 
-_SAMPLE_CHUNKS_JSON = [
-    {
-        "page_content": "chunk one",
-        "source": "test.md",
-        "type": "text",
-        "obj_id": str(_OBJ_ID),
-    },
-    {
-        "page_content": "| col |",
-        "source": "test.md",
-        "type": "table",
-        "obj_id": str(_OBJ_ID),
-    },
-]
+def _source(
+    filename: str = "test.md", content_type: str = "text/markdown"
+) -> SourceDetails:
+    return SourceDetails(
+        source=filename, content_type=content_type, obj_id=_OBJ_ID, object_type="file"
+    )
 
 
 # ---------------------------------------------------------------------------
-# fetch_from_s3
+# fetch_from_s3 (still used as a generic util)
 # ---------------------------------------------------------------------------
 
 
@@ -86,95 +73,53 @@ class TestFetchFromS3:
 
 
 # ---------------------------------------------------------------------------
-# call_parsing_service
+# call_parsing_service (source_ref in → artifact BlobRef out)
 # ---------------------------------------------------------------------------
 
 
 class TestCallParsingService:
-    def _source(self, filename: str = "test.md") -> SourceDetails:
-        return SourceDetails(
-            source=filename,
-            content_type="text/markdown",
-            obj_id=_OBJ_ID,
-            object_type="file",
-        )
-
     @respx.mock
-    def test_happy_path_returns_parsed_chunks(self) -> None:
+    def test_happy_path_returns_artifact_ref(self) -> None:
         respx.post(f"{_PARSING_URL}/v1/parse").mock(
-            return_value=Response(200, json=_SAMPLE_CHUNKS_JSON)
+            return_value=Response(
+                200, json={"bucket": "parsed-chunks", "key": "parse/x.json"}
+            )
         )
 
-        chunks = call_parsing_service(
-            file_bytes=b"# Hello",
-            source=self._source(),
+        artifact = call_parsing_service(
+            source_ref=_SOURCE_REF,
+            source=_source(),
             parsing_url=_PARSING_URL,
             timeout=5.0,
             logger=_logger,
         )
 
-        assert len(chunks) == 2
-        assert chunks[0].page_content == "chunk one"
-        assert chunks[0].type == ChunkType.TEXT
-        assert chunks[1].type == ChunkType.TABLE
+        assert isinstance(artifact, BlobRef)
+        assert artifact.bucket == "parsed-chunks"
+        assert artifact.key == "parse/x.json"
 
     @respx.mock
-    def test_filename_forwarded_as_multipart_name(self) -> None:
+    def test_source_ref_filename_content_type_and_obj_id_sent_as_form(self) -> None:
         route = respx.post(f"{_PARSING_URL}/v1/parse").mock(
-            return_value=Response(200, json=[_SAMPLE_CHUNKS_JSON[0]])
+            return_value=Response(200, json={"bucket": "b", "key": "k"})
         )
 
         call_parsing_service(
-            file_bytes=b"content",
-            source=self._source("report.pdf"),
+            source_ref=_SOURCE_REF,
+            source=_source("report.pdf", "application/pdf"),
             parsing_url=_PARSING_URL,
             timeout=5.0,
             logger=_logger,
         )
 
-        request = route.calls.last.request
-        assert b"report.pdf" in request.content
-
-    @respx.mock
-    def test_obj_id_forwarded_as_metadata_form_field(self) -> None:
-        """obj_id must be JSON-encoded in the ``metadata`` form field."""
-
-        route = respx.post(f"{_PARSING_URL}/v1/parse").mock(
-            return_value=Response(200, json=[_SAMPLE_CHUNKS_JSON[0]])
-        )
-
-        call_parsing_service(
-            file_bytes=b"content",
-            source=self._source(),
-            parsing_url=_PARSING_URL,
-            timeout=5.0,
-            logger=_logger,
-        )
-
-        request = route.calls.last.request
-        assert str(_OBJ_ID).encode() in request.content
-
-    @respx.mock
-    def test_content_type_forwarded(self) -> None:
-        route = respx.post(f"{_PARSING_URL}/v1/parse").mock(
-            return_value=Response(200, json=[_SAMPLE_CHUNKS_JSON[0]])
-        )
-
-        call_parsing_service(
-            file_bytes=b"content",
-            source=SourceDetails(
-                source="doc.pdf",
-                content_type="application/pdf",
-                obj_id=_OBJ_ID,
-                object_type="file",
-            ),
-            parsing_url=_PARSING_URL,
-            timeout=5.0,
-            logger=_logger,
-        )
-
-        request = route.calls.last.request
-        assert b"application/pdf" in request.content
+        form = parse_qs(route.calls.last.request.content.decode())
+        assert json.loads(form["source_ref"][0]) == {
+            "bucket": _SOURCE_REF.bucket,
+            "key": _SOURCE_REF.key,
+        }
+        assert form["filename"][0] == "report.pdf"
+        assert form["content_type"][0] == "application/pdf"
+        assert json.loads(form["metadata"][0])["obj_id"] == str(_OBJ_ID)
 
     @respx.mock
     def test_non_200_raises_http_status_error(self) -> None:
@@ -184,8 +129,8 @@ class TestCallParsingService:
 
         with pytest.raises(Exception):
             call_parsing_service(
-                file_bytes=b"content",
-                source=self._source(),
+                source_ref=_SOURCE_REF,
+                source=_source(),
                 parsing_url=_PARSING_URL,
                 timeout=5.0,
                 logger=_logger,
@@ -193,7 +138,7 @@ class TestCallParsingService:
 
 
 # ---------------------------------------------------------------------------
-# call_indexing_service
+# call_indexing_service (artifact_ref in → result dict out)
 # ---------------------------------------------------------------------------
 
 
@@ -208,7 +153,7 @@ class TestCallIndexingService:
         )
 
         result = call_indexing_service(
-            chunks=_SAMPLE_CHUNKS,
+            artifact_ref=_ARTIFACT_REF,
             namespace_id=self._NAMESPACE,
             ingestion_url=_INDEXING_URL,
             timeout=5.0,
@@ -224,47 +169,43 @@ class TestCallIndexingService:
         )
 
         call_indexing_service(
-            chunks=_SAMPLE_CHUNKS,
+            artifact_ref=_ARTIFACT_REF,
             namespace_id=self._NAMESPACE,
             ingestion_url=_INDEXING_URL,
             timeout=5.0,
             logger=_logger,
         )
 
-        request = route.calls.last.request
-        assert str(self._NAMESPACE) in str(request.url)
+        assert str(self._NAMESPACE) in str(route.calls.last.request.url)
 
     @respx.mock
-    def test_chunks_serialised_as_json_body(self) -> None:
+    def test_artifact_ref_sent_as_json_body(self) -> None:
         route = respx.post(f"{_INDEXING_URL}/ingest").mock(
             return_value=Response(200, json=self._RESULT)
         )
 
         call_indexing_service(
-            chunks=_SAMPLE_CHUNKS,
+            artifact_ref=_ARTIFACT_REF,
             namespace_id=self._NAMESPACE,
             ingestion_url=_INDEXING_URL,
             timeout=5.0,
             logger=_logger,
         )
 
-        import json
-
         body = json.loads(route.calls.last.request.content)
-        assert len(body) == 2
-        assert body[0]["page_content"] == "chunk one"
-        assert body[0]["type"] == "text"
-        assert body[1]["type"] == "table"
+        assert body == {
+            "artifact_ref": {"bucket": _ARTIFACT_REF.bucket, "key": _ARTIFACT_REF.key}
+        }
 
     @respx.mock
     def test_non_200_raises(self) -> None:
         respx.post(f"{_INDEXING_URL}/ingest").mock(
-            return_value=Response(422, json={"detail": "bad chunks"})
+            return_value=Response(422, json={"detail": "bad artifact"})
         )
 
         with pytest.raises(Exception):
             call_indexing_service(
-                chunks=_SAMPLE_CHUNKS,
+                artifact_ref=_ARTIFACT_REF,
                 namespace_id=self._NAMESPACE,
                 ingestion_url=_INDEXING_URL,
                 timeout=5.0,
@@ -279,13 +220,8 @@ class TestCallIndexingService:
 
 def _parse(url: str = _PARSING_URL) -> None:
     call_parsing_service(
-        file_bytes=b"x",
-        source=SourceDetails(
-            source="f.md",
-            content_type="text/markdown",
-            obj_id=_OBJ_ID,
-            object_type="file",
-        ),
+        source_ref=_SOURCE_REF,
+        source=_source(),
         parsing_url=url,
         timeout=5.0,
         logger=_logger,
@@ -294,7 +230,7 @@ def _parse(url: str = _PARSING_URL) -> None:
 
 def _index(url: str = _INDEXING_URL) -> None:
     call_indexing_service(
-        chunks=_SAMPLE_CHUNKS,
+        artifact_ref=_ARTIFACT_REF,
         namespace_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
         ingestion_url=url,
         timeout=5.0,
@@ -317,10 +253,6 @@ class TestCircuitBreakers:
         indexing_breaker.close()
 
     def test_parsing_breaker_opens_after_fail_max_failures(self) -> None:
-        """
-        After fail_max=3 failures the breaker opens
-        and rejects without an HTTP call.
-        """
         with respx.mock:
             route = respx.post(f"{_PARSING_URL}/v1/parse").mock(
                 return_value=Response(503)
@@ -330,13 +262,11 @@ class TestCircuitBreakers:
                     _parse()
             assert route.call_count == 3
 
-            # 4th call — breaker OPEN: raises immediately, no HTTP request
             with pytest.raises(pybreaker.CircuitBreakerError):
                 _parse()
             assert route.call_count == 3
 
     def test_indexing_breaker_opens_after_fail_max_failures(self) -> None:
-        """Indexing breaker mirrors parsing breaker behaviour."""
         with respx.mock:
             route = respx.post(f"{_INDEXING_URL}/ingest").mock(
                 return_value=Response(503)
@@ -351,13 +281,12 @@ class TestCircuitBreakers:
             assert route.call_count == 3
 
     def test_success_resets_failure_count(self) -> None:
-        """Two failures then a success resets the counter; breaker stays CLOSED."""
         with respx.mock:
             respx.post(f"{_PARSING_URL}/v1/parse").mock(
                 side_effect=[
                     Response(503),
                     Response(503),
-                    Response(200, json=_SAMPLE_CHUNKS_JSON),
+                    Response(200, json={"bucket": "b", "key": "k"}),
                     Response(503),
                 ]
             )
@@ -373,7 +302,6 @@ class TestCircuitBreakers:
             assert parsing_breaker.current_state == "closed"
 
     def test_state_transition_logged_on_open(self, caplog) -> None:
-        """Opening the circuit must emit a WARNING log with the state transition."""
         with caplog.at_level(
             logging.WARNING, logger="src.backend.controller.worker.utils"
         ):

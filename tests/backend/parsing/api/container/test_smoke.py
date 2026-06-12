@@ -1,9 +1,10 @@
 """Container smoke tests for the parsing service.
 
 These tests start the real ``artemis/backend-parsing:dev`` image alongside
-a Docling testcontainer and verify the service starts correctly and its HTTP
-API works end-to-end: a real file is sent to POST /v1/parse and Docling
-returns parsed chunks.
+Docling + MinIO testcontainers and verify the service works end-to-end under
+the claim-check contract: POST /v1/parse parses the document, writes the
+artifact to MinIO, and returns a ``BlobRef`` — the chunks are then read back
+from MinIO to verify content.
 """
 
 import json
@@ -12,6 +13,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from minio import Minio
 from pydantic import TypeAdapter
 
 from src.lib.core.ingestion.types import ChunkType, ParsedChunk
@@ -30,6 +32,16 @@ def _metadata(obj_id: uuid.UUID | None = None) -> str:
     return json.dumps({"obj_id": str(obj_id or uuid.uuid4())})
 
 
+def _read_artifact(minio_client: Minio, ref: dict) -> list[ParsedChunk]:
+    """Read the parse artifact the service wrote and return its chunks."""
+    response = minio_client.get_object(ref["bucket"], ref["key"])
+    try:
+        return _chunks_adapter.validate_json(response.read())
+    finally:
+        response.close()
+        response.release_conn()
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_liveness_returns_200(client: httpx.AsyncClient) -> None:
@@ -46,16 +58,22 @@ async def test_readiness_returns_200(client: httpx.AsyncClient) -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_parse_markdown_returns_chunks(client: httpx.AsyncClient) -> None:
-    """End-to-end parse: Docling processes the document, service returns ParsedChunks."""
+async def test_parse_markdown_writes_artifact(
+    client: httpx.AsyncClient, minio_client: Minio
+) -> None:
+    """End-to-end parse: Docling processes the doc, the service writes the artifact
+    to MinIO and returns its BlobRef; chunks are read back from MinIO."""
     obj_id = uuid.uuid4()
     response = await client.post(
         "/v1/parse",
         files={"file": ("test.md", _TEST_DOCUMENT, "text/markdown")},
         data={"metadata": _metadata(obj_id)},
     )
-    assert response.status_code == 200, response.json()
-    chunks = _chunks_adapter.validate_python(response.json())
+    assert response.status_code == 200, response.text
+    ref = response.json()
+    assert ref == {"bucket": "parsed-chunks", "key": f"parse/{obj_id}.json"}
+
+    chunks = _read_artifact(minio_client, ref)
     assert len(chunks) >= 1
     assert all(c.obj_id == obj_id for c in chunks)
     assert all(c.source == "test.md" for c in chunks)
@@ -64,8 +82,8 @@ async def test_parse_markdown_returns_chunks(client: httpx.AsyncClient) -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_parse_pdf_returns_text_and_table_chunks(
-    client: httpx.AsyncClient,
+async def test_parse_pdf_writes_text_and_table_chunks(
+    client: httpx.AsyncClient, minio_client: Minio
 ) -> None:
     """PDF with complex tables: validates both text and table ChunkTypes are produced."""
     pdf_bytes = (_HERE / "complex-tables.pdf").read_bytes()
@@ -75,8 +93,8 @@ async def test_parse_pdf_returns_text_and_table_chunks(
         files={"file": ("complex-tables.pdf", pdf_bytes, "application/pdf")},
         data={"metadata": _metadata(obj_id)},
     )
-    assert response.status_code == 200, response.json()
-    chunks = _chunks_adapter.validate_python(response.json())
+    assert response.status_code == 200, response.text
+    chunks = _read_artifact(minio_client, response.json())
     assert len(chunks) >= 1
 
     chunk_types = {c.type for c in chunks}
@@ -89,16 +107,17 @@ async def test_parse_pdf_returns_text_and_table_chunks(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_parse_empty_file_returns_empty_list(client: httpx.AsyncClient) -> None:
-    """An empty document should return 200 with an empty chunk list, not crash."""
+async def test_parse_empty_file_writes_empty_artifact(
+    client: httpx.AsyncClient, minio_client: Minio
+) -> None:
+    """An empty document should return 200 with a BlobRef to an empty artifact."""
     response = await client.post(
         "/v1/parse",
         files={"file": ("empty.md", b"", "text/markdown")},
         data={"metadata": _metadata()},
     )
-    assert response.status_code == 200, response.json()
-    chunks = _chunks_adapter.validate_python(response.json())
-    assert chunks == []
+    assert response.status_code == 200, response.text
+    assert _read_artifact(minio_client, response.json()) == []
 
 
 @pytest.mark.integration

@@ -6,10 +6,12 @@ from collections.abc import AsyncIterator
 
 import httpx
 import pytest
+from minio import Minio
 from qdrant_client import AsyncQdrantClient
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
 
+from testcontainers.minio import MinioContainer
 from testcontainers.postgres import PostgresContainer
 from testcontainers.qdrant import QdrantContainer
 
@@ -54,6 +56,24 @@ def retrieval_mode(request: pytest.FixtureRequest) -> str:
 # ---------------------------------------------------------------------------
 # Infrastructure containers
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def minio_container(
+    docker_network: Network, request: pytest.FixtureRequest
+) -> MinioContainer:
+    container = (
+        MinioContainer().with_network(docker_network).with_network_aliases("minio")
+    )
+    container.start()
+    request.addfinalizer(container.stop)
+    return container
+
+
+@pytest.fixture(scope="session")
+def minio_client(minio_container: MinioContainer) -> Minio:
+    """Host-side MinIO client for seeding parse artifacts the service reads."""
+    return minio_container.get_client()
 
 
 @pytest.fixture(scope="session")
@@ -183,6 +203,7 @@ def app_container(
     vllm_container: VLLMContainer | None,
     migrations_container: None,
     postgres_container: PostgresContainer,
+    minio_container: MinioContainer,
     retrieval_mode: str,
     collection_name: str,
     request: pytest.FixtureRequest,
@@ -206,6 +227,10 @@ def app_container(
         .with_env("SQL_DB_PORT", "5432")
         .with_env("SQL_DB_DATABASE", postgres_container.dbname)
         .with_env("SQL_DRIVER", "postgresql+asyncpg")
+        .with_env("S3_ENDPOINT", "minio:9000")
+        .with_env("S3_ACCESS_KEY", "minioadmin")
+        .with_env("S3_SECRET_KEY", "minioadmin")
+        .with_env("S3_SECURE", "false")
         .with_env("DEBUG", "true")
         .with_exposed_ports(_APP_PORT)
     )

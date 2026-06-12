@@ -7,6 +7,7 @@ py_library(
     srcs = ["conftest.py"],
     visibility = ["//visibility:public"],
     deps = [
+        "//src/backend/parsing/api:utils",
         requirement("aiohttp"),
         requirement("pytest"),
     ],
@@ -17,10 +18,12 @@ py_test(
     srcs = ["test_parse.py"],
     deps = [
         ":conftest",
+        "//src/backend/parsing/api:config",
         "//src/backend/parsing/api:dependencies",
         "//src/backend/parsing/api:main",
         "//src/backend/parsing/api/parse:service",
         "//src/lib/core/adapters/loaders:pkg",
+        "//src/lib/core/adapters/stores/memory:blob",
         "//src/lib/core/ingestion:exceptions",
         "//src/lib/core/ingestion:types",
         requirement("httpx"),

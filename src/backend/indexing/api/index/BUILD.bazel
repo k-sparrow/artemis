@@ -7,10 +7,12 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//src/backend/indexing/api:dependencies",
+        "//src/lib/core/ingestion:contract",
         "//src/lib/core/ingestion:pkg",
         "//src/lib/core/ingestion:types",
         requirement("fastapi"),
         requirement("langchain-core"),
+        requirement("pydantic"),
     ],
 )
 

@@ -8,6 +8,7 @@ py_library(
     srcs = ["conftest.py"],
     deps = [
         requirement("httpx"),
+        requirement("minio"),
         requirement("pytest"),
         requirement("testcontainers"),
     ],
@@ -22,6 +23,8 @@ py_test(
         ":conftest",
         "//src/lib/core/ingestion:types",
         requirement("httpx"),
+        requirement("minio"),
+        requirement("pydantic"),
         requirement("pytest"),
         requirement("pytest-asyncio"),
     ],

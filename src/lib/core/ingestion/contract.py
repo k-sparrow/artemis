@@ -33,6 +33,7 @@ from pydantic import BaseModel
 __all__ = [
     "S3Details",
     "SourceDetails",
+    "BlobRef",
     "IngestionInfo",
     "IngestionTaskDetails",
     "ObjectScope",
@@ -49,6 +50,20 @@ class S3Details(BaseModel):
     bucket: str
     object: str
     size: int
+
+
+class BlobRef(BaseModel):
+    """Self-describing claim-check reference to bytes in object storage.
+
+    Used for both the input file (passed to parsing) and the parse artifact
+    (returned by parsing, threaded to indexing): the payload never crosses the
+    wire, only this ``{bucket, key}`` pair. Carrying the bucket makes the
+    reference self-describing — the consumer reads exactly where the producer
+    wrote, with no shared bucket-name config to keep in sync.
+    """
+
+    bucket: str
+    key: str
 
 
 class SourceDetails(BaseModel):

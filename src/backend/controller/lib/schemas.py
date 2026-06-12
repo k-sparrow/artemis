@@ -3,6 +3,7 @@ from enum import Enum
 
 # Re-export shared contract types so the worker can import them from here.
 from src.lib.core.ingestion.contract import (  # noqa: F401
+    BlobRef,
     IngestionInfo,
     IngestionResult,
     IngestionTaskDetails,

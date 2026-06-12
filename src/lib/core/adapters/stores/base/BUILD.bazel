@@ -28,3 +28,14 @@ py_library(
         requirement("langchain-core"),
     ],
 )
+
+# BlobStore port — dependency-light (stdlib only), broadly visible so the
+# backend services can depend on it directly.
+py_library(
+    name = "blob",
+    srcs = ["blob.py"],
+    visibility = [
+        "//src:__subpackages__",
+        "//tests:__subpackages__",
+    ],
+)

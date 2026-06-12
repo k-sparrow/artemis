@@ -5,14 +5,26 @@ from collections.abc import AsyncIterator
 
 import httpx
 import pytest
+from minio import Minio
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
 from testcontainers.core.wait_strategies import HttpWaitStrategy
+from testcontainers.minio import MinioContainer
 
 _DOCLING_IMAGE = "ghcr.io/docling-project/docling-serve-cu128:v1.15.0"
 _DOCLING_PORT = 5001
 _APP_IMAGE = "artemis/backend-parsing:dev"
 _APP_PORT = 10001
+
+
+def _with_s3_env(container: DockerContainer) -> DockerContainer:
+    """Wire a container to the MinIO testcontainer (alias 'minio')."""
+    return (
+        container.with_env("S3_ENDPOINT", "minio:9000")
+        .with_env("S3_ACCESS_KEY", "minioadmin")
+        .with_env("S3_SECRET_KEY", "minioadmin")
+        .with_env("S3_SECURE", "false")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -29,6 +41,24 @@ def docker_network():
 # ---------------------------------------------------------------------------
 # Infrastructure containers
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def minio_container(
+    docker_network: Network, request: pytest.FixtureRequest
+) -> MinioContainer:
+    container = (
+        MinioContainer().with_network(docker_network).with_network_aliases("minio")
+    )
+    container.start()
+    request.addfinalizer(container.stop)
+    return container
+
+
+@pytest.fixture(scope="session")
+def minio_client(minio_container: MinioContainer) -> Minio:
+    """Host-side MinIO client for reading the parse artifacts the service wrote."""
+    return minio_container.get_client()
 
 
 @pytest.fixture(scope="session")
@@ -71,10 +101,11 @@ def _wait_for_liveness(url: str, timeout: int = 120, interval: float = 2.0) -> N
 def app_container(
     docker_network: Network,
     docling_container: DockerContainer,
+    minio_container: MinioContainer,
     request: pytest.FixtureRequest,
 ) -> DockerContainer:
-    """The real parsing service image, wired to the Docling testcontainer."""
-    container = (
+    """The real parsing service image, wired to the Docling + MinIO testcontainers."""
+    container = _with_s3_env(
         DockerContainer(_APP_IMAGE)
         .with_network(docker_network)
         .with_env("DOCLING_SERVE_URI", f"http://docling-serve:{_DOCLING_PORT}")
@@ -111,6 +142,7 @@ async def client(app_base_url: str) -> AsyncIterator[httpx.AsyncClient]:
 @pytest.fixture(scope="session")
 def app_container_no_docling(
     docker_network: Network,
+    minio_container: MinioContainer,
     request: pytest.FixtureRequest,
 ) -> DockerContainer:
     """Parsing service started with a Docling URI that is guaranteed unreachable.
@@ -118,7 +150,7 @@ def app_container_no_docling(
     Uses TEST-NET (192.0.2.x, RFC 5737) which is non-routable by definition,
     so any HTTP call to it will time-out or be refused without side effects.
     """
-    container = (
+    container = _with_s3_env(
         DockerContainer(_APP_IMAGE)
         .with_network(docker_network)
         .with_env("DOCLING_SERVE_URI", "http://docling-does-not-exist.invalid:5001")

@@ -47,6 +47,15 @@ class IndexingSettings(BaseSettings):
     SQL_DB_DATABASE: str
     SQL_DRIVER: str = "postgresql+asyncpg"
 
+    # MinIO S3 client — used to read parse artifacts by reference (claim-check).
+    # The artifact's bucket travels in the BlobRef (self-describing), so no
+    # bucket-name config is needed here. Required (no defaults) so a
+    # misconfigured deployment fails fast at startup.
+    S3_ENDPOINT: str
+    S3_ACCESS_KEY: str
+    S3_SECRET_KEY: str
+    S3_SECURE: bool
+
     @computed_field
     @property
     def SQL_DB_URL(self) -> str:
