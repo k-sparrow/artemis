@@ -498,7 +498,12 @@ services:
   tei:
     profiles: [ai-tei]
     image: "{TEI_IMAGE}"
-    command: --model-id {TEI_MODEL} --pooling {TEI_POOLING} --auto-truncate
+    # TEI native OTel tracing — extracts the incoming traceparent so embedding
+    # spans nest under the caller's trace. The --otlp-* flags are appended only
+    # when OTEL_EXPORTER_OTLP_ENDPOINT is set (i.e. the observability profile is
+    # up). compose resolves ${VAR:+...} at parse time, so when it's unset TEI
+    # starts with no exporter and emits no warnings.
+    command: "--model-id {TEI_MODEL} --pooling {TEI_POOLING} --auto-truncate${OTEL_EXPORTER_OTLP_ENDPOINT:+ --otlp-endpoint http://otel-collector:4317 --otlp-service-name tei}"
     container_name: tei
     ports:
       - "11435:80"
@@ -514,8 +519,25 @@ services:
       - default
   colbert:
     profiles: [ai-colbert]
-    image: "vllm/vllm-openai:v0.20.2" # ColBERT late-interaction model{COLBERT_COMMAND_BLOCK}
+    image: "vllm/vllm-openai:v0.20.2" # ColBERT late-interaction model
+    # Wrap the image's `vllm serve` entrypoint so the OTel flag can be appended
+    # only when OTEL_EXPORTER_OTLP_ENDPOINT is set (observability profile up).
+    # compose resolves ${VAR:+...} at parse time; $$@ becomes the literal $@ that
+    # forwards the model + flags from the command list below. vLLM's
+    # --otlp-traces-endpoint is gated by `is not None`, so a list-form item can't
+    # be conditionally omitted — hence the wrapper.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - 'exec vllm serve "$$@"${OTEL_EXPORTER_OTLP_ENDPOINT:+ --otlp-traces-endpoint http://otel-collector:4317}'
+      - vllm{COLBERT_COMMAND_BLOCK}
     container_name: colbert
+    environment:
+      # Standard OTel SDK var (not vLLM-specific) — names vLLM's spans 'colbert'
+      # in Jaeger via the SDK's resource detector. Inert when
+      # OTEL_EXPORTER_OTLP_ENDPOINT is unset: no tracer is built, so the resource
+      # is never created and this is never read (default would be unknown_service).
+      OTEL_SERVICE_NAME: colbert
     shm_size: "10g"
     ipc: host
     ports:
