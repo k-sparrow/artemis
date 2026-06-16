@@ -60,7 +60,7 @@ async def parse_endpoint(
         logger.info("parse_started", source="ref", bucket=ref.bucket, key=ref.key)
 
     try:
-        chunks = await service.a_parse(
+        artifact, replay = await service.a_parse(
             content=content,
             filename=in_name,
             content_type=in_type,
@@ -71,10 +71,23 @@ async def parse_endpoint(
         logger.error("parse_failed", filename=in_name, error=str(e))
         raise
 
-    key = service.artifact_key(metadata["obj_id"])
-    writer = blob_store(settings.PARSED_ARTIFACTS_BUCKET)
-    await writer.aput(
-        key, service.encode_artifact(chunks), content_type="application/json"
+    obj_id = metadata["obj_id"]
+
+    # Private replay cache (lossless DoclingDocument) — best-effort, never in the
+    # contract; persist before the artifact so a write failure surfaces here.
+    await blob_store(settings.REPLAY_CACHE_BUCKET).aput(
+        service.replay_key(obj_id), replay, content_type="application/json"
     )
-    logger.info("parse_completed", filename=in_name, num_chunks=len(chunks), key=key)
+
+    key = service.artifact_key(obj_id)
+    await blob_store(settings.PARSED_ARTIFACTS_BUCKET).aput(
+        key, service.encode_artifact(artifact), content_type="application/json"
+    )
+    logger.info(
+        "parse_completed",
+        filename=in_name,
+        num_pages=len(artifact.pages),
+        num_chunks=len(artifact.chunks),
+        key=key,
+    )
     return BlobRef(bucket=settings.PARSED_ARTIFACTS_BUCKET, key=key)

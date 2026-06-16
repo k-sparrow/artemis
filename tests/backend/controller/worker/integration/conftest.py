@@ -3,7 +3,7 @@
 Infrastructure (session-scoped):
   - RabbitMQ testcontainer   — broker
   - Postgres testcontainer   — result backend
-  - MinIO testcontainer      — S3 source + ParsedChunkStore intermediate
+  - MinIO testcontainer      — S3 source + parse-artifact (claim-check) intermediate
 
 Stub HTTP servers (session-scoped, in-process threads):
   - parsing_stub   — returns a BlobRef on POST /v1/parse (claim-check; the
@@ -52,20 +52,25 @@ _IMAGE_TAG = "artemis/backend-controller-worker:latest"
 
 _STUB_OBJ_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 
-_SAMPLE_CHUNKS = [
-    {
-        "page_content": "hello world",
-        "source": "test.md",
-        "type": "text",
-        "obj_id": _STUB_OBJ_ID,
-    },
-    {
-        "page_content": "| a | b |",
-        "source": "test.md",
-        "type": "table",
-        "obj_id": _STUB_OBJ_ID,
-    },
-]
+_SAMPLE_ARTIFACT = {
+    "pages": [{"page_no": 1, "markdown": "# hello world\n\n| a | b |"}],
+    "chunks": [
+        {
+            "page_content": "hello world",
+            "source": "test.md",
+            "type": "text",
+            "obj_id": _STUB_OBJ_ID,
+            "page_no": 1,
+        },
+        {
+            "page_content": "| a | b |",
+            "source": "test.md",
+            "type": "table",
+            "obj_id": _STUB_OBJ_ID,
+            "page_no": 1,
+        },
+    ],
+}
 
 # Claim-check: the parsing stub returns a BlobRef pointing at an artifact the
 # seed_artifact fixture pre-writes to MinIO (mirrors the real parsing service
@@ -428,7 +433,7 @@ def seed_artifact(minio_client: Minio):
     object — mirroring the parsing service writing the artifact."""
     if not minio_client.bucket_exists(_ARTIFACT_BUCKET):
         minio_client.make_bucket(_ARTIFACT_BUCKET)
-    data = json.dumps(_SAMPLE_CHUNKS).encode()
+    data = json.dumps(_SAMPLE_ARTIFACT).encode()
     minio_client.put_object(
         _ARTIFACT_BUCKET,
         _ARTIFACT_KEY,

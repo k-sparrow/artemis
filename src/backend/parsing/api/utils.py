@@ -23,11 +23,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     logger = get_logger("parsing")
 
-    # Create the artifact bucket once at startup (writer-store ensure-bucket is
+    # Create the output buckets once at startup (writer-store ensure-bucket is
     # explicit; construction is pure). S3 settings are required, so this always
     # runs — a misconfigured/unreachable MinIO fails fast here.
-    MinioBlobStore(get_s3_client(), settings.PARSED_ARTIFACTS_BUCKET).ensure_bucket()
-    logger.info("artifact_bucket_ready", bucket=settings.PARSED_ARTIFACTS_BUCKET)
+    s3 = get_s3_client()
+    for bucket in (settings.PARSED_ARTIFACTS_BUCKET, settings.REPLAY_CACHE_BUCKET):
+        MinioBlobStore(s3, bucket).ensure_bucket()
+        logger.info("bucket_ready", bucket=bucket)
 
     logger.info("lifespan_started")
     yield

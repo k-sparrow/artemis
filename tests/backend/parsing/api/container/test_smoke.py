@@ -14,9 +14,8 @@ from pathlib import Path
 import httpx
 import pytest
 from minio import Minio
-from pydantic import TypeAdapter
 
-from src.lib.core.ingestion.types import ChunkType, ParsedChunk
+from src.lib.core.ingestion.types import ChunkType, ParseArtifact
 
 _HERE = Path(__file__).parent
 
@@ -25,18 +24,16 @@ _TEST_DOCUMENT = (
     b"# Test Document\n\nThis is a smoke test document with some content.\n"
 )
 
-_chunks_adapter = TypeAdapter(list[ParsedChunk])
-
 
 def _metadata(obj_id: uuid.UUID | None = None) -> str:
     return json.dumps({"obj_id": str(obj_id or uuid.uuid4())})
 
 
-def _read_artifact(minio_client: Minio, ref: dict) -> list[ParsedChunk]:
-    """Read the parse artifact the service wrote and return its chunks."""
+def _read_artifact(minio_client: Minio, ref: dict) -> ParseArtifact:
+    """Read the ParseArtifact (pages + chunks) the service wrote to MinIO."""
     response = minio_client.get_object(ref["bucket"], ref["key"])
     try:
-        return _chunks_adapter.validate_json(response.read())
+        return ParseArtifact.model_validate_json(response.read())
     finally:
         response.close()
         response.release_conn()
@@ -73,11 +70,24 @@ async def test_parse_markdown_writes_artifact(
     ref = response.json()
     assert ref == {"bucket": "parsed-chunks", "key": f"parse/{obj_id}.json"}
 
-    chunks = _read_artifact(minio_client, ref)
+    artifact = _read_artifact(minio_client, ref)
+    chunks = artifact.chunks
     assert len(chunks) >= 1
     assert all(c.obj_id == obj_id for c in chunks)
     assert all(c.source == "test.md" for c in chunks)
     assert all(c.source != str(c.obj_id) for c in chunks)
+
+    # Page parents are produced alongside the chunks and carry real Markdown.
+    assert len(artifact.pages) >= 1
+    assert any("Test Document" in p.markdown for p in artifact.pages)
+
+    # The private replay cache holds the lossless DoclingDocument JSON.
+    replay = minio_client.get_object("docling-replay", f"replay/{obj_id}.json")
+    try:
+        assert b"schema_name" in replay.read()
+    finally:
+        replay.close()
+        replay.release_conn()
 
 
 @pytest.mark.integration
@@ -94,7 +104,7 @@ async def test_parse_pdf_writes_text_and_table_chunks(
         data={"metadata": _metadata(obj_id)},
     )
     assert response.status_code == 200, response.text
-    chunks = _read_artifact(minio_client, response.json())
+    chunks = _read_artifact(minio_client, response.json()).chunks
     assert len(chunks) >= 1
 
     chunk_types = {c.type for c in chunks}
@@ -117,7 +127,7 @@ async def test_parse_empty_file_writes_empty_artifact(
         data={"metadata": _metadata()},
     )
     assert response.status_code == 200, response.text
-    assert _read_artifact(minio_client, response.json()) == []
+    assert _read_artifact(minio_client, response.json()).chunks == []
 
 
 @pytest.mark.integration

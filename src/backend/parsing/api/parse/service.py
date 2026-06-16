@@ -1,9 +1,8 @@
 import uuid
-from typing import List, Optional
+from typing import Any, List, Optional, Protocol, Tuple, runtime_checkable
 
 import httpx
 from langchain_core.documents import Document
-from pydantic import TypeAdapter
 
 from src.lib.core.adapters.loaders import LoaderError, LoaderFactory
 from src.lib.core.ingestion.exceptions import (
@@ -11,11 +10,24 @@ from src.lib.core.ingestion.exceptions import (
     UpstreamServiceException,
 )
 from src.lib.core.ingestion.normalizer.metadata import MetadataFieldNormalizer
-from src.lib.core.ingestion.types import ChunkType, ParsedChunk
+from src.lib.core.ingestion.types import ChunkType, Page, ParseArtifact, ParsedChunk
 
-__all__ = ["a_parse", "encode_artifact", "artifact_key"]
+__all__ = ["a_parse", "encode_artifact", "artifact_key", "replay_key"]
 
-_chunks_adapter: TypeAdapter[List[ParsedChunk]] = TypeAdapter(List[ParsedChunk])
+
+@runtime_checkable
+class _ArtifactLoader(Protocol):
+    """Loader capable of producing a page-aware parse artifact.
+
+    Only the Docling loader implements this; the parse service narrows to it at
+    runtime so a misconfigured (non-Docling) loader fails loudly rather than
+    silently dropping pages. ``dl_doc`` is intentionally typed ``Any`` — the
+    service treats it opaquely (only ``model_dump_json`` for the replay cache).
+    """
+
+    async def aload_artifact(
+        self,
+    ) -> Tuple[List[Document], List[Tuple[int, str]], Any]: ...
 
 
 async def a_parse(
@@ -24,12 +36,22 @@ async def a_parse(
     content_type: Optional[str],
     loader_factory: LoaderFactory,
     metadata: dict[str, str],
-) -> List[ParsedChunk]:
-    """Parse raw *content* into chunks. Input bytes are resolved by the router
-    from either an inline upload or a claim-check ``BlobRef``."""
+) -> Tuple[ParseArtifact, bytes]:
+    """Parse raw *content* into a :class:`ParseArtifact` plus replay-cache bytes.
+
+    Input bytes are resolved by the router from either an inline upload or a
+    claim-check ``BlobRef``. Returns ``(artifact, replay)`` where ``artifact``
+    carries page parents + agnostic chunks and ``replay`` is the lossless
+    ``DoclingDocument`` JSON the router persists to the private replay bucket.
+    """
+    loader = loader_factory(content, filename, content_type)
+    if not isinstance(loader, _ArtifactLoader):
+        raise DocumentProcessingException(
+            "configured loader does not support page-aware artifacts"
+        )
+
     try:
-        loader = loader_factory(content, filename, content_type)
-        docs = loader.load()
+        chunk_docs, page_tuples, dl_doc = await loader.aload_artifact()
     except LoaderError as exc:
         raise DocumentProcessingException(str(exc)) from exc
     except httpx.HTTPError as exc:
@@ -40,19 +62,29 @@ async def a_parse(
 
     if metadata:
         normalizer = MetadataFieldNormalizer(fields=metadata)
-        docs = normalizer.normalize(docs)
+        chunk_docs = normalizer.normalize(chunk_docs)
 
-    return [_to_parsed_chunk(doc) for doc in docs]
+    artifact = ParseArtifact(
+        pages=[Page(page_no=page_no, markdown=md) for page_no, md in page_tuples],
+        chunks=[_to_parsed_chunk(doc) for doc in chunk_docs],
+    )
+    replay = dl_doc.model_dump_json().encode()
+    return artifact, replay
 
 
-def encode_artifact(chunks: List[ParsedChunk]) -> bytes:
-    """Serialise the parse artifact (Phase 1: a chunk list) to JSON bytes."""
-    return _chunks_adapter.dump_json(chunks)
+def encode_artifact(artifact: ParseArtifact) -> bytes:
+    """Serialise the parse artifact to JSON bytes for object storage."""
+    return artifact.model_dump_json().encode()
 
 
 def artifact_key(obj_id: str) -> str:
     """Object-storage key for an object's parse artifact (idempotent per obj_id)."""
     return f"parse/{obj_id}.json"
+
+
+def replay_key(obj_id: str) -> str:
+    """Private replay-cache key for an object's lossless ``DoclingDocument``."""
+    return f"replay/{obj_id}.json"
 
 
 def _to_parsed_chunk(doc: Document) -> ParsedChunk:
@@ -67,4 +99,5 @@ def _to_parsed_chunk(doc: Document) -> ParsedChunk:
         source=metadata.get("source", ""),
         type=chunk_type,
         obj_id=uuid.UUID(metadata["obj_id"]),
+        page_no=metadata.get("page_no"),
     )

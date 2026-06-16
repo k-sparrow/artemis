@@ -107,13 +107,17 @@ class TestDoclingAPIServeLoaderIntegration:
         docs = list(loader.lazy_load())
         assert all("type" in d.metadata for d in docs)
 
-    def test_lazy_load_dl_meta_present_on_every_doc(
+    def test_lazy_load_dl_meta_dropped_page_no_present(
         self, docling_base_url: str
     ) -> None:
-        """DOC_CHUNKS mode: every Document has a ``dl_meta`` metadata field."""
+        """DOC_CHUNKS mode: ``dl_meta`` is stripped at the boundary and never
+        reaches a Document; ``page_no`` is stamped instead (``None`` here, since
+        this non-paginated Markdown carries no page provenance)."""
         loader = _make_loader(docling_base_url)
         docs = list(loader.lazy_load())
-        assert all("dl_meta" in d.metadata for d in docs)
+        assert docs  # sanity: Docling produced at least one chunk
+        assert all("dl_meta" not in d.metadata for d in docs)
+        assert all("page_no" in d.metadata for d in docs)
 
     # --- lazy_load / MARKDOWN ---
 

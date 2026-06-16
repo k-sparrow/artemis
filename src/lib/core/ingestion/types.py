@@ -30,6 +30,8 @@ __all__ = [
     # Concrete types
     "ChunkType",
     "ParsedChunk",
+    "Page",
+    "ParseArtifact",
     "SplitChunks",
     "UpsertResult",
     # Type variables for generics
@@ -136,6 +138,33 @@ class ParsedChunk(BaseModel):
     source: str
     type: ChunkType
     obj_id: UUID
+    # The page this chunk primarily belongs to (first provenance page_no).
+    # Links the chunk to its parent page; ``None`` when provenance is absent.
+    page_no: int | None = None
+
+
+class Page(BaseModel):
+    """A reconstructed document page — the parent doc for parent-page retrieval.
+
+    ``markdown`` is the page's content, produced from a single whole-document
+    ``export_to_markdown(page_break_placeholder=...)`` split on the placeholder
+    (not per-page export, which is O(P·N)).
+    """
+
+    page_no: int
+    markdown: str
+
+
+class ParseArtifact(BaseModel):
+    """The parse artifact handed parsing → indexing by reference (claim-check).
+
+    Replaces the bare ``List[ParsedChunk]``: carries the per-page Markdown (the
+    parent docs) alongside the embeddable chunks. Both are derived from the same
+    ``DoclingDocument``, which parsing also caches privately (lossless) for replay.
+    """
+
+    pages: List[Page]
+    chunks: List[ParsedChunk]
 
 
 @dataclass

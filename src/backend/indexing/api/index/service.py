@@ -1,14 +1,12 @@
 from typing import List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel
 
 from src.lib.core.ingestion import BasePipeline
 from src.lib.core.ingestion.contract import BlobRef
 from src.lib.core.ingestion.normalizer import MetadataFieldNormalizer
-from src.lib.core.ingestion.types import ParsedChunk, UpsertResult
-
-_chunks_adapter: TypeAdapter[List[ParsedChunk]] = TypeAdapter(List[ParsedChunk])
+from src.lib.core.ingestion.types import ParseArtifact, ParsedChunk, UpsertResult
 
 
 class IngestRequest(BaseModel):
@@ -18,9 +16,9 @@ class IngestRequest(BaseModel):
     chunks: Optional[List[ParsedChunk]] = None
 
 
-def decode_artifact(data: bytes) -> List[ParsedChunk]:
-    """Deserialise a parse artifact (Phase 1: a chunk list) from JSON bytes."""
-    return _chunks_adapter.validate_json(data)
+def decode_artifact(data: bytes) -> ParseArtifact:
+    """Deserialise a :class:`ParseArtifact` (pages + chunks) from JSON bytes."""
+    return ParseArtifact.model_validate_json(data)
 
 
 async def a_delete(

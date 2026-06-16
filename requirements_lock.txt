@@ -8,6 +8,10 @@ accelerate==1.13.0 \
     --hash=sha256:cf1a3efb96c18f7b152eb0fa7490f3710b19c3f395699358f08decca2b8b62e0 \
     --hash=sha256:d631b4e0f5b3de4aff2d7e9e6857d164810dfc3237d54d017f075122d057b236
     # via docling-ibm-models
+aiobotocore==3.7.0 \
+    --hash=sha256:680bde7c64679a821a9312641b759d9497f790ba8b2e88c6959e6273ee765b8e \
+    --hash=sha256:c64d871ed5491a6571948dd48eabd185b46c6c23b64e3afd0c059fc7593ada30
+    # via -r requirements.in
 aiohappyeyeballs==2.6.1 \
     --hash=sha256:c3f9d0113123803ccadfdf3f0faa505bc78e6a72d1cc4806cbd719826e943558 \
     --hash=sha256:f349ba8f4b75cb25c99c5c2d84e997e485204d2902a9597802b0371f09331fb8
@@ -134,8 +138,13 @@ aiohttp==3.13.5 \
     --hash=sha256:fe6970addfea9e5e081401bcbadf865d2b6da045472f58af08427e108d618540 \
     --hash=sha256:fee86b7c4bd29bdaf0d53d14739b08a106fdda809ca5fe032a15f52fae5fe254
     # via
+    #   aiobotocore
     #   aioresponses
     #   langchain-community
+aioitertools==0.13.0 \
+    --hash=sha256:0be0292b856f08dfac90e31f4739432f4cb6d7520ab9eb73e143f4f2fa5259be \
+    --hash=sha256:620bd241acc0bbb9ec819f1ab215866871b4bbd1f73836a55f799200ee86950c
+    # via aiobotocore
 aioresponses==0.7.8 \
     --hash=sha256:b73bd4400d978855e55004b23a3a84cb0f018183bcf066a85ad392800b5b9a94 \
     --hash=sha256:b861cdfe5dc58f3b8afac7b0a6973d5d7b2cb608dd0f6253d16b8ee8eaf6df11
@@ -357,6 +366,10 @@ bleach[css]==6.3.0 \
     --hash=sha256:6f3b91b1c0a02bb9a78b5a454c92506aa0fdf197e1d5e114d2e00c6f64306d22 \
     --hash=sha256:fe10ec77c93ddf3d13a73b035abaac7a9f5e436513864ccdad516693213c65d6
     # via nbconvert
+botocore==1.43.0 \
+    --hash=sha256:cc5b15eaec3c6eac05d8012cb5ef17ebe891beb88a16ca13c374bfaece1241e6 \
+    --hash=sha256:e933b31a2d644253e1d029d7d39e99ba41b87e29300534f189744cc438cdf928
+    # via aiobotocore
 celery[pydantic]==5.6.2 \
     --hash=sha256:3ffafacbe056951b629c7abcf9064c4a2366de0bdfc9fdba421b97ebb68619a5 \
     --hash=sha256:4a8921c3fcf2ad76317d3b29020772103581ed2454c4c042cc55dcc43585009b
@@ -1345,6 +1358,12 @@ jinja2==3.1.6 \
     #   nbconvert
     #   openapi-python-client
     #   torch
+jmespath==1.1.0 \
+    --hash=sha256:472c87d80f36026ae83c6ddd0f1d05d4e510134ed462851fd5f754c8c3cbb88d \
+    --hash=sha256:a5663118de4908c91729bea0acadca56526eb2698e83de10cd116ae0f4e97c64
+    # via
+    #   aiobotocore
+    #   botocore
 json5==0.14.0 \
     --hash=sha256:56cf861bab076b1178eb8c92e1311d273a9b9acea2ccc82c276abf839ebaef3a \
     --hash=sha256:b3f492fad9f6cdbced8b7d40b28b9b1c9701c5f561bef0d33b81c2ff433fefcb
@@ -2087,6 +2106,7 @@ multidict==6.7.1 \
     --hash=sha256:fc5907494fccf3e7d3f94f95c91d6336b092b5fc83811720fae5e2765890dfba \
     --hash=sha256:fcee94dfbd638784645b066074b338bc9cc155d4b4bffa4adce1615c5a426c19
     # via
+    #   aiobotocore
     #   aiohttp
     #   yarl
 multiprocess==0.70.19 \
@@ -3540,7 +3560,9 @@ python-dateutil==2.9.0.post0 \
     --hash=sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3 \
     --hash=sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427
     # via
+    #   aiobotocore
     #   arrow
+    #   botocore
     #   celery
     #   jupyter-client
     #   openapi-python-client
@@ -4844,6 +4866,7 @@ urllib3==2.6.3 \
     --hash=sha256:1b62b6884944a57dbe321509ab94fd4d3b307075e0c2eae991ac71ee15ad38ed \
     --hash=sha256:bf272323e553dfb2e87d9bfd225ca7b0f467b919d7bbd355436d3fd37cb0acd4
     # via
+    #   botocore
     #   docker
     #   minio
     #   qdrant-client
@@ -4977,6 +5000,7 @@ wrapt==1.17.3 \
     --hash=sha256:fbd3c8319de8e1dc79d346929cd71d523622da527cca14e0c1d257e31c2b8b10 \
     --hash=sha256:fd341868a4b6714a5962c1af0bd44f7c404ef78720c7de4892901e540417111c
     # via
+    #   aiobotocore
     #   opentelemetry-instrumentation
     #   opentelemetry-instrumentation-httpx
     #   opentelemetry-instrumentation-sqlalchemy

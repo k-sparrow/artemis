@@ -87,6 +87,7 @@ redis==5.2.1
 
 # storage
 minio==7.2.15  # S3 compatible
+aiobotocore==3.7.0  # native-async S3 client (parent doc store; no run_in_executor seam)
 
 # interactive development
 jupyter

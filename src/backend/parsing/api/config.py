@@ -27,6 +27,11 @@ class ParsingSettings(BaseSettings):
     # Bucket where parse artifacts are written for the indexing service to read.
     PARSED_ARTIFACTS_BUCKET: str = "parsed-chunks"
 
+    # Private bucket for the lossless DoclingDocument replay cache. Never part of
+    # the parse→index contract — insurance for re-chunk / future citations
+    # without a GPU re-parse.
+    REPLAY_CACHE_BUCKET: str = "docling-replay"
+
     @computed_field
     @property
     def DOCLING_SERVE_HEALTHCHECK_URL(self) -> str:

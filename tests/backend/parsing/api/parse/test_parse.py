@@ -18,7 +18,7 @@ import json
 import uuid
 from contextlib import contextmanager
 from typing import List
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -40,6 +40,12 @@ from src.lib.core.ingestion.types import ChunkType
 
 OBJ_ID = uuid.UUID("12345678-1234-5678-1234-567812345678")
 ARTIFACT_BUCKET = settings.PARSED_ARTIFACTS_BUCKET
+REPLAY_BUCKET = settings.REPLAY_CACHE_BUCKET
+
+# Sample page parents the fake loader returns alongside the chunks.
+SAMPLE_PAGES = [(1, "# Hello\n\nWorld")]
+# Stand-in for the lossless DoclingDocument JSON written to the replay cache.
+REPLAY_JSON = '{"schema_name":"DoclingDocument"}'
 
 
 # ---------------------------------------------------------------------------
@@ -47,24 +53,51 @@ ARTIFACT_BUCKET = settings.PARSED_ARTIFACTS_BUCKET
 # ---------------------------------------------------------------------------
 
 
+def _fake_dl_doc() -> MagicMock:
+    """Opaque stand-in for a DoclingDocument; only ``model_dump_json`` is used."""
+    doc = MagicMock()
+    doc.model_dump_json = MagicMock(return_value=REPLAY_JSON)
+    return doc
+
+
+def _loader_returning(
+    docs: List[Document], pages: list[tuple[int, str]] | None = None
+) -> MagicMock:
+    """Loader whose ``aload_artifact`` yields the given chunk docs + pages."""
+    loader = MagicMock()
+    loader.aload_artifact = AsyncMock(
+        return_value=(
+            docs,
+            pages if pages is not None else SAMPLE_PAGES,
+            _fake_dl_doc(),
+        )
+    )
+    return loader
+
+
+def _loader_raising(exc: Exception) -> MagicMock:
+    loader = MagicMock()
+    loader.aload_artifact = AsyncMock(side_effect=exc)
+    return loader
+
+
 @pytest.fixture
 def sample_docs() -> List[Document]:
     return [
         Document(
-            page_content="chunk one", metadata={"source": "test.md", "type": "text"}
+            page_content="chunk one",
+            metadata={"source": "test.md", "type": "text", "page_no": 1},
         ),
         Document(
-            page_content="chunk two", metadata={"source": "test.md", "type": "text"}
+            page_content="chunk two",
+            metadata={"source": "test.md", "type": "text", "page_no": 1},
         ),
     ]
 
 
 @pytest.fixture
 def mock_loader_factory(sample_docs: List[Document]) -> MagicMock:
-    loader = MagicMock()
-    loader.load = MagicMock(return_value=sample_docs)
-    factory = MagicMock(return_value=loader)
-    return factory
+    return MagicMock(return_value=_loader_returning(sample_docs))
 
 
 @pytest.fixture
@@ -99,9 +132,14 @@ def client(make_client, mock_loader_factory: MagicMock):
         yield c
 
 
+def _artifact(store: InMemoryBlobStore, ref: dict) -> dict:
+    """Read the ParseArtifact the endpoint wrote (pages + chunks)."""
+    return json.loads(store.get(ref["key"]))
+
+
 def _artifact_chunks(store: InMemoryBlobStore, ref: dict) -> list[dict]:
     """Read the artifact the endpoint wrote and return its chunk dicts."""
-    return json.loads(store.get(ref["key"]))
+    return _artifact(store, ref)["chunks"]
 
 
 def _post_file(
@@ -155,13 +193,34 @@ class TestParseEndpoint:
         ref = response.json()
         assert ref == {"bucket": ARTIFACT_BUCKET, "key": f"parse/{OBJ_ID}.json"}
 
-        chunks = _artifact_chunks(store, ref)
+        artifact = _artifact(store, ref)
+        chunks = artifact["chunks"]
         assert len(chunks) == 2
         assert chunks[0]["page_content"] == "chunk one"
         assert chunks[0]["source"] == "test.md"
         assert chunks[0]["type"] == "text"
         assert chunks[0]["obj_id"] == str(OBJ_ID)
+        assert chunks[0]["page_no"] == 1
         assert chunks[1]["page_content"] == "chunk two"
+
+        # Page parents travel in the same artifact; dl_meta never does.
+        assert artifact["pages"] == [{"page_no": 1, "markdown": "# Hello\n\nWorld"}]
+        assert "dl_meta" not in chunks[0]
+
+        # The lossless replay cache is written to its private bucket.
+        assert store.get(f"replay/{OBJ_ID}.json").decode() == REPLAY_JSON
+
+    def test_replay_cache_written_to_private_bucket(
+        self, client: TestClient, store: InMemoryBlobStore
+    ) -> None:
+        """Replay cache is keyed by obj_id and holds the DoclingDocument JSON.
+
+        The in-memory store backs every bucket, so we assert on the key; the
+        bucket name (``REPLAY_BUCKET``) is exercised by the integration tier.
+        """
+        _post_file(client)
+        assert REPLAY_BUCKET  # configured, distinct from the artifact bucket
+        assert store.exists(f"replay/{OBJ_ID}.json")
 
     def test_source_ref_reads_input_then_writes_artifact(
         self, client: TestClient, store: InMemoryBlobStore
@@ -188,13 +247,14 @@ class TestParseEndpoint:
     def test_empty_document_writes_empty_artifact(
         self, make_client, store: InMemoryBlobStore
     ) -> None:
-        empty_loader = MagicMock()
-        empty_loader.load = MagicMock(return_value=[])
+        empty_loader = _loader_returning([], pages=[])
         with make_client(MagicMock(return_value=empty_loader)) as c:
             response = _post_file(c)
 
         assert response.status_code == 200
-        assert _artifact_chunks(store, response.json()) == []
+        artifact = _artifact(store, response.json())
+        assert artifact["chunks"] == []
+        assert artifact["pages"] == []
 
     def test_requires_exactly_one_input(self, client: TestClient) -> None:
         """Neither file nor source_ref → 422."""
@@ -221,8 +281,7 @@ class TestParseEndpoint:
     # -- error mapping (unchanged behaviour; happens before the artifact write) --
 
     def test_docling_connect_error_returns_503(self, make_client) -> None:
-        failing = MagicMock()
-        failing.load = MagicMock(side_effect=httpx.ConnectError("connection refused"))
+        failing = _loader_raising(httpx.ConnectError("connection refused"))
         with make_client(MagicMock(return_value=failing)) as c:
             response = _post_file(c)
 
@@ -233,9 +292,8 @@ class TestParseEndpoint:
         assert "test.md" in body["detail"]
 
     def test_loader_error_returns_400(self, make_client) -> None:
-        failing = MagicMock()
-        failing.load = MagicMock(
-            side_effect=DoclingConversionError(
+        failing = _loader_raising(
+            DoclingConversionError(
                 [
                     {
                         "component_type": "user_input",
@@ -257,8 +315,7 @@ class TestParseEndpoint:
         class _SomeOtherLoaderError(LoaderError):
             pass
 
-        failing = MagicMock()
-        failing.load = MagicMock(side_effect=_SomeOtherLoaderError("some other"))
+        failing = _loader_raising(_SomeOtherLoaderError("some other"))
         with make_client(MagicMock(return_value=failing)) as c:
             response = _post_file(c)
 
@@ -266,10 +323,7 @@ class TestParseEndpoint:
         assert response.json()["type"] == "document_processing_error"
 
     def test_document_processing_exception_returns_400(self, make_client) -> None:
-        failing = MagicMock()
-        failing.load = MagicMock(
-            side_effect=DocumentProcessingException("unsupported format")
-        )
+        failing = _loader_raising(DocumentProcessingException("unsupported format"))
         with make_client(MagicMock(return_value=failing)) as c:
             response = _post_file(c)
 
@@ -279,8 +333,7 @@ class TestParseEndpoint:
         assert "unsupported format" in body["detail"]
 
     def test_unexpected_error_returns_500(self, make_client) -> None:
-        crashing = MagicMock()
-        crashing.load = MagicMock(side_effect=RuntimeError("unexpected crash"))
+        crashing = _loader_raising(RuntimeError("unexpected crash"))
         with make_client(
             MagicMock(return_value=crashing), raise_server_exceptions=False
         ) as c:
@@ -306,6 +359,25 @@ class TestToParsedChunk:
         assert chunk.source == "doc.pdf"
         assert chunk.type == ChunkType.TEXT
         assert chunk.obj_id == OBJ_ID
+
+    def test_page_no_carried_when_present(self) -> None:
+        doc = Document(
+            page_content="text",
+            metadata={
+                "source": "a.md",
+                "type": "text",
+                "obj_id": str(OBJ_ID),
+                "page_no": 4,
+            },
+        )
+        assert _to_parsed_chunk(doc).page_no == 4
+
+    def test_page_no_defaults_to_none(self) -> None:
+        doc = Document(
+            page_content="text",
+            metadata={"source": "a.md", "type": "text", "obj_id": str(OBJ_ID)},
+        )
+        assert _to_parsed_chunk(doc).page_no is None
 
     def test_missing_source_defaults_to_empty_string(self) -> None:
         doc = Document(

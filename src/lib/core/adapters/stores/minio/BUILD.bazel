@@ -12,17 +12,6 @@ package(
 py_library(
     name = "pkg",
     srcs = ["__init__.py"],
-    deps = [":parsed_chunks"],
-)
-
-py_library(
-    name = "parsed_chunks",
-    srcs = ["parsed_chunks.py"],
-    deps = [
-        "//src/lib/core/ingestion:types",
-        requirement("minio"),
-        requirement("pydantic"),
-    ],
 )
 
 # MinIO-backed BlobStore — broadly visible so parsing + indexing can read/write

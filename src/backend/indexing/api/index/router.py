@@ -54,13 +54,16 @@ async def ingest_endpoint(
     """
     if (body.artifact_ref is None) == (body.chunks is None):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="provide exactly one of 'artifact_ref' or 'chunks'",
         )
 
     if body.artifact_ref is not None:
         reader = blob_store(body.artifact_ref.bucket)
-        chunks = service.decode_artifact(await reader.aget(body.artifact_ref.key))
+        # Phase 2: pages are carried in the artifact but not yet persisted —
+        # Phase 3 wires page parents into the doc store. Embed chunks for now.
+        artifact = service.decode_artifact(await reader.aget(body.artifact_ref.key))
+        chunks = artifact.chunks
     else:
         chunks = body.chunks
 

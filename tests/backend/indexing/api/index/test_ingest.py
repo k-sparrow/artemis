@@ -42,6 +42,11 @@ def _chunk(content: str = "hello world", obj_id: uuid.UUID = OBJ_ID) -> dict:
     }
 
 
+def _artifact_bytes(chunks: list[dict], pages: list[dict] | None = None) -> bytes:
+    """Encode a ParseArtifact (pages + chunks) as the parsing service would."""
+    return json.dumps({"pages": pages or [], "chunks": chunks}).encode()
+
+
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
@@ -143,9 +148,17 @@ class TestIngestEndpoint:
         store: InMemoryBlobStore,
         mock_pipeline: AsyncMock,
     ) -> None:
-        """artifact_ref path: chunks are read from the store by key, then indexed."""
+        """artifact_ref path: the ParseArtifact is read by key, its chunks indexed.
+
+        Pages travel in the artifact but are not embedded in Phase 2 — only the
+        chunks reach the pipeline.
+        """
         store.put(
-            "parsed-chunks/x.json", json.dumps([_chunk("from artifact")]).encode()
+            "parsed-chunks/x.json",
+            _artifact_bytes(
+                [_chunk("from artifact")],
+                pages=[{"page_no": 1, "markdown": "# from artifact"}],
+            ),
         )
         response = _post_artifact_ref(
             client, namespace, bucket="parsed-chunks", key="parsed-chunks/x.json"
