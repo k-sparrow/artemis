@@ -56,6 +56,12 @@ class IndexingSettings(BaseSettings):
     S3_SECRET_KEY: str
     S3_SECURE: bool
 
+    # Bucket holding the parent-page doc store (parent-page caching is always on,
+    # so this is required — a misconfigured deployment fails fast at startup).
+    # Pages are keyed ``{namespace_id}/{obj_id}/p{n}`` so one bucket serves every
+    # tenant (namespace lives in the key prefix and is prefix-deletable).
+    PAGE_BUCKET: str
+
     @computed_field
     @property
     def SQL_DB_URL(self) -> str:

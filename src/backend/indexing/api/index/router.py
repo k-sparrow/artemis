@@ -60,16 +60,20 @@ async def ingest_endpoint(
 
     if body.artifact_ref is not None:
         reader = blob_store(body.artifact_ref.bucket)
-        # Phase 2: pages are carried in the artifact but not yet persisted —
-        # Phase 3 wires page parents into the doc store. Embed chunks for now.
         artifact = service.decode_artifact(await reader.aget(body.artifact_ref.key))
         chunks = artifact.chunks
+        pages = artifact.pages
     else:
+        # Inline chunks carry no page parents; indexing still stamps parent_id
+        # (chunks fall back to their object's first page when one exists).
         chunks = body.chunks
+        pages = []
 
-    logger.info("ingest_started", num_chunks=len(chunks))
+    logger.info("ingest_started", num_chunks=len(chunks), num_pages=len(pages))
     try:
-        result = await service.a_index_and_ingest(chunks, pipeline, namespace, group_id)
+        result = await service.a_index_and_ingest(
+            chunks, pages, pipeline, namespace, group_id
+        )
         logger.info(
             "ingest_completed",
             num_added=result.num_added,

@@ -28,6 +28,7 @@ from src.backend.indexing.api.dependencies import (
 from src.backend.indexing.api.main import app
 from src.lib.core.adapters.stores.memory.blob import InMemoryBlobStore
 from src.lib.core.ingestion.exceptions import DocumentProcessingException
+from src.lib.core.ingestion.pipeline.parent_page import PagedInput
 from src.lib.core.ingestion.types import UpsertResult
 
 OBJ_ID = uuid.UUID("12345678-1234-5678-1234-567812345678")
@@ -42,9 +43,18 @@ def _chunk(content: str = "hello world", obj_id: uuid.UUID = OBJ_ID) -> dict:
     }
 
 
+def _page(markdown: str, page_no: int = 1, obj_id: uuid.UUID = OBJ_ID) -> dict:
+    return {"obj_id": str(obj_id), "page_no": page_no, "markdown": markdown}
+
+
 def _artifact_bytes(chunks: list[dict], pages: list[dict] | None = None) -> bytes:
     """Encode a ParseArtifact (pages + chunks) as the parsing service would."""
     return json.dumps({"pages": pages or [], "chunks": chunks}).encode()
+
+
+def _paged_arg(mock_pipeline: AsyncMock) -> PagedInput:
+    """The :class:`PagedInput` the service handed the (wrapped) pipeline."""
+    return mock_pipeline.aprocess.call_args[0][0]
 
 
 # ---------------------------------------------------------------------------
@@ -148,16 +158,13 @@ class TestIngestEndpoint:
         store: InMemoryBlobStore,
         mock_pipeline: AsyncMock,
     ) -> None:
-        """artifact_ref path: the ParseArtifact is read by key, its chunks indexed.
-
-        Pages travel in the artifact but are not embedded in Phase 2 — only the
-        chunks reach the pipeline.
-        """
+        """artifact_ref path: the ParseArtifact is read by key; BOTH its chunks
+        and its page parents reach the pipeline as a ``PagedInput``."""
         store.put(
             "parsed-chunks/x.json",
             _artifact_bytes(
                 [_chunk("from artifact")],
-                pages=[{"page_no": 1, "markdown": "# from artifact"}],
+                pages=[_page("# from artifact")],
             ),
         )
         response = _post_artifact_ref(
@@ -165,9 +172,10 @@ class TestIngestEndpoint:
         )
 
         assert response.status_code == 200
-        docs_arg = mock_pipeline.aprocess.call_args[0][0]
-        assert len(docs_arg) == 1
-        assert docs_arg[0].page_content == "from artifact"
+        paged = _paged_arg(mock_pipeline)
+        assert [d.page_content for d in paged.chunks] == ["from artifact"]
+        assert [d.page_content for d in paged.pages] == ["# from artifact"]
+        assert paged.pages[0].metadata["obj_id"] == str(OBJ_ID)
 
     def test_requires_exactly_one_input(
         self, client: TestClient, namespace: uuid.UUID
@@ -219,7 +227,7 @@ class TestIngestEndpoint:
         _post_chunks(client, namespace)
 
         mock_pipeline.aprocess.assert_called_once()
-        docs_arg = mock_pipeline.aprocess.call_args[0][0]
+        docs_arg = _paged_arg(mock_pipeline).chunks
         assert all(
             doc.metadata.get("namespace_id") == str(namespace) for doc in docs_arg
         )
@@ -231,7 +239,7 @@ class TestIngestEndpoint:
         group_id = str(uuid.uuid4())
         _post_chunks(client, namespace, group_id=group_id)
 
-        docs_arg = mock_pipeline.aprocess.call_args[0][0]
+        docs_arg = _paged_arg(mock_pipeline).chunks
         assert all(doc.metadata.get("group_id") == group_id for doc in docs_arg)
 
     def test_group_id_absent_when_not_provided(
@@ -239,7 +247,7 @@ class TestIngestEndpoint:
     ) -> None:
         _post_chunks(client, namespace)
 
-        docs_arg = mock_pipeline.aprocess.call_args[0][0]
+        docs_arg = _paged_arg(mock_pipeline).chunks
         assert all("group_id" not in doc.metadata for doc in docs_arg)
 
     def test_multiple_chunks_all_passed_to_pipeline(
@@ -248,7 +256,7 @@ class TestIngestEndpoint:
         chunks = [_chunk(f"chunk {i}") for i in range(5)]
         _post_chunks(client, namespace, chunks=chunks)
 
-        assert len(mock_pipeline.aprocess.call_args[0][0]) == 5
+        assert len(_paged_arg(mock_pipeline).chunks) == 5
 
 
 class TestDeleteEndpoint:
@@ -268,11 +276,12 @@ class TestDeleteEndpoint:
     ) -> None:
         assert _delete(client, namespace).status_code == 204
 
-    def test_namespace_deletion_calls_aprocess_with_empty_list(
+    def test_namespace_deletion_calls_aprocess_with_empty_paged_input(
         self, client: TestClient, namespace: uuid.UUID, mock_pipeline: AsyncMock
     ) -> None:
         _delete(client, namespace)
-        mock_pipeline.aprocess.assert_called_once_with([])
+        # Empty PagedInput is the namespace-wipe signal to the wrapped pipeline.
+        mock_pipeline.aprocess.assert_called_once_with(PagedInput())
 
     def test_missing_namespace_returns_422(self, client: TestClient) -> None:
         assert client.delete("/ingest").status_code == 422

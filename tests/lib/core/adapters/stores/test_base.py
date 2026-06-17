@@ -13,7 +13,10 @@ import pytest
 from langchain_core.documents import Document
 from langchain_core.stores import InMemoryByteStore
 
-from src.lib.core.adapters.stores.base.store import StoreDocumentIndex
+from src.lib.core.adapters.stores.base.store import (
+    MetadataKeyedDocumentIndex,
+    StoreDocumentIndex,
+)
 
 
 @pytest.fixture
@@ -137,3 +140,58 @@ class TestStoreDocumentIndex:
         result = await store.adelete()
         assert result["num_deleted"] == 3
         assert await store.aget(["a", "b", "c"]) == [None, None, None]
+
+
+class TestMetadataKeyedDocumentIndex:
+    """The store key comes from a metadata field (``upsert_kwargs={"key": ...}``),
+    not the content-hash uid lc_index would assign — the basis of deterministic
+    page keys (see ingestion/RECORD_MANAGER.md §9)."""
+
+    @pytest.fixture
+    def keyed_store(self) -> MetadataKeyedDocumentIndex:
+        return MetadataKeyedDocumentIndex(store=InMemoryByteStore())
+
+    @pytest.mark.asyncio
+    async def test_aupsert_keys_by_metadata_field(
+        self, keyed_store: MetadataKeyedDocumentIndex
+    ) -> None:
+        docs = [
+            Document(page_content="page one", metadata={"page_key": "ns/obj/p1"}),
+            Document(page_content="page two", metadata={"page_key": "ns/obj/p2"}),
+        ]
+        result = await keyed_store.aupsert(docs, key="page_key")
+        # The store key is the metadata value, not a generated uid.
+        assert set(result["succeeded"]) == {"ns/obj/p1", "ns/obj/p2"}
+        got = await keyed_store.aget(["ns/obj/p1", "ns/obj/p2"])
+        assert [d.page_content for d in got] == ["page one", "page two"]
+
+    @pytest.mark.asyncio
+    async def test_aupsert_per_document_key_not_static_list(
+        self, keyed_store: MetadataKeyedDocumentIndex
+    ) -> None:
+        # Each doc is keyed by ITS OWN field value, in order — so it stays aligned
+        # with the post-skip subset lc_index hands the destination.
+        docs = [
+            Document(page_content=f"c{i}", metadata={"page_key": f"k{i}"})
+            for i in range(3)
+        ]
+        result = await keyed_store.aupsert(docs, key="page_key")
+        assert result["succeeded"] == ["k0", "k1", "k2"]
+
+    @pytest.mark.asyncio
+    async def test_aupsert_without_key_falls_back_to_base(
+        self, keyed_store: MetadataKeyedDocumentIndex
+    ) -> None:
+        # No ``key`` kwarg ⇒ behaves exactly like StoreDocumentIndex.
+        result = await keyed_store.aupsert(
+            [Document(page_content="x", metadata={})], ids=["id-1"]
+        )
+        assert result["succeeded"] == ["id-1"]
+
+    def test_upsert_keys_by_metadata_field_sync(
+        self, keyed_store: MetadataKeyedDocumentIndex
+    ) -> None:
+        keyed_store.upsert(
+            [Document(page_content="p", metadata={"page_key": "k1"})], key="page_key"
+        )
+        assert keyed_store.get(["k1"])[0].page_content == "p"

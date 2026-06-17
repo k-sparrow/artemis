@@ -45,6 +45,22 @@ py_library(
 )
 
 py_test(
+    name = "test_parent_page",
+    srcs = [
+        "__init__.py",
+        "test_parent_page.py",
+    ],
+    tags = ["unit"],
+    deps = [
+        "//src/lib/core/retrieval:parent_page",
+        requirement("langchain"),
+        requirement("langchain-core"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+    ],
+)
+
+py_test(
     name = "test_namespace_retriever",
     srcs = [
         "__init__.py",

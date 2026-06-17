@@ -7,9 +7,8 @@ load("@pip//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", "py_library")
 
 package(default_visibility = [
-    "//src/backend:__subpackages__",
-    "//src/lib/core:__subpackages__",
-    "//tests/lib/core:__subpackages__",
+    "//src:__subpackages__",
+    "//tests:__subpackages__",
 ])
 
 py_library(
@@ -20,23 +19,13 @@ py_library(
     ],
 )
 
+# S3 ByteStore — native-async via aiobotocore; server-agnostic (MinIO/Ceph/AWS).
 py_library(
     name = "store",
     srcs = ["store.py"],
-    visibility = ["//visibility:private"],
     deps = [
-        requirement("langchain"),
+        requirement("aiobotocore"),
+        requirement("botocore"),
         requirement("langchain-core"),
-    ],
-)
-
-# BlobStore port — dependency-light (stdlib only), broadly visible so the
-# backend services can depend on it directly.
-py_library(
-    name = "blob",
-    srcs = ["blob.py"],
-    visibility = [
-        "//src:__subpackages__",
-        "//tests:__subpackages__",
     ],
 )

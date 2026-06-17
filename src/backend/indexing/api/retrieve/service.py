@@ -9,8 +9,11 @@ from typing import Optional
 from langchain_core.runnables import ConfigurableField
 
 from langchain_core.documents.compressor import BaseDocumentCompressor
+from langchain_core.stores import ByteStore
 
+from src.lib.core.ingestion.pipeline.parent_page import PARENT_ID_FIELD
 from src.lib.core.retrieval.adapters.base import BaseRetrievalAdapter
+from src.lib.core.retrieval.parent_page import ParentPageRetriever
 from src.backend.indexing.api.retrieve.retriever import NamespaceRetriever
 
 
@@ -37,13 +40,24 @@ def initialize(
     retrieval_adapter: BaseRetrievalAdapter,
     reranker: Optional[BaseDocumentCompressor],
     candidates_multiplier: int,
+    byte_store: Optional[ByteStore] = None,
 ) -> None:
     global _retriever
+    # Build the parent-page decorator HERE (where the byte store lives), bound to
+    # the store + the index↔retrieve field contract; NamespaceRetriever re-bases
+    # it onto each request's namespace-scoped retriever. None ⇒ no page store
+    # configured ⇒ parent-page dereference simply unavailable.
+    parent_page_retriever = (
+        ParentPageRetriever(byte_store=byte_store, id_key=PARENT_ID_FIELD)
+        if byte_store is not None
+        else None
+    )
     _retriever = NamespaceRetriever(
         namespace_id=None,
         retrieval_adapter=retrieval_adapter,
         reranker=reranker,
         candidates_multiplier=candidates_multiplier,
+        parent_page_retriever=parent_page_retriever,
     ).configurable_fields(
         namespace_id=ConfigurableField(
             id="namespace_id",

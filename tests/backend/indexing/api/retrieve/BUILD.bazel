@@ -28,9 +28,11 @@ py_test(
     deps = [
         "//src/backend/indexing/api/retrieve:retriever",
         "//src/lib/core/retrieval:params",
+        "//src/lib/core/retrieval:parent_page",
         requirement("langchain"),
         requirement("langchain-core"),
         requirement("pytest"),
+        requirement("pytest-asyncio"),
     ],
 )
 

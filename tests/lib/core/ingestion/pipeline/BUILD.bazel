@@ -29,3 +29,21 @@ py_test(
         requirement("pytest-asyncio"),
     ],
 )
+
+py_test(
+    name = "test_parent_page",
+    srcs = [
+        "test_parent_page.py",
+    ],
+    tags = ["unit"],
+    deps = [
+        "//src/lib/core/adapters/stores/base:pkg",
+        "//src/lib/core/ingestion:types",
+        "//src/lib/core/ingestion/pipeline:base",
+        "//src/lib/core/ingestion/pipeline:parent_page",
+        requirement("langchain"),
+        requirement("langchain-core"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+    ],
+)

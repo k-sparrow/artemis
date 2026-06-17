@@ -43,6 +43,15 @@ class _LazyRetriever(RunnableSerializable):
     ) -> List[Document]:
         return retrieve_service.get_retriever().invoke(input, config=config, **kwargs)
 
+    async def ainvoke(
+        self, input: str, config: Optional[RunnableConfig] = None, **kwargs: Any
+    ) -> List[Document]:
+        # LangServe's /invoke endpoint awaits this; the async path is what
+        # enables per-request parent-page dereference (async-only byte store).
+        return await retrieve_service.get_retriever().ainvoke(
+            input, config=config, **kwargs
+        )
+
 
 router = APIRouter(prefix="/retrieve", tags=["Retrieval"])
 

@@ -12,7 +12,7 @@ vectorstore or embeddings service is needed.
 from __future__ import annotations
 
 import uuid
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -30,7 +30,11 @@ _SAMPLE_DOCS = [
 
 @pytest.fixture
 def mock_retriever():
+    # LangServe's async /invoke endpoint calls the runnable's ``ainvoke``
+    # (NamespaceRetriever now defines it for the parent-page path), so the
+    # singleton mock must answer on ``ainvoke``.
     m = MagicMock()
+    m.ainvoke = AsyncMock(return_value=_SAMPLE_DOCS)
     m.invoke.return_value = _SAMPLE_DOCS
     return m
 
@@ -71,8 +75,8 @@ class TestRetrieveEndpoint:
         group_id = str(uuid.uuid4())
         client.post("/retrieve/invoke", json=_invoke_body(extra={"group_id": group_id}))
         config_passed = (
-            mock_retriever.invoke.call_args.kwargs.get("config")
-            or mock_retriever.invoke.call_args.args[1]
+            mock_retriever.ainvoke.call_args.kwargs.get("config")
+            or mock_retriever.ainvoke.call_args.args[1]
         )
         assert config_passed["configurable"]["group_id"] == group_id
 

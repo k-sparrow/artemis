@@ -7,6 +7,7 @@ from fastapi import FastAPI
 
 from src.backend.indexing.api.config import settings
 from src.backend.indexing.api.dependencies import (
+    build_page_byte_store,
     get_vectorstore_handler_solved,
     VectorStoreHandler,
 )
@@ -42,6 +43,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     retrieval_adapter = SimpleVectorStoreRetrieverAdapter(vs)
 
+    # Parent-page doc store — always built (indexing caches pages for every
+    # object). ensure_bucket runs once here so the first ingest can PUT pages;
+    # the same store backs per-request parent-page dereference on /retrieve.
+    logger.info("page_store_init_started", bucket=settings.PAGE_BUCKET)
+    page_byte_store = build_page_byte_store()
+    await page_byte_store.ensure_bucket()
+    logger.info("page_store_init_done")
+
     reranker: Optional[CohereRerank] = None
     if settings.COLBERT_RERANKER_URL:
         logger.info("reranker_init_started", model=settings.COLBERT_MODEL_NAME)
@@ -56,7 +65,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("reranker_init_done")
 
     retrieve_service.initialize(
-        retrieval_adapter, reranker, settings.RETRIEVE_CANDIDATES_MULTIPLIER
+        retrieval_adapter,
+        reranker,
+        settings.RETRIEVE_CANDIDATES_MULTIPLIER,
+        byte_store=page_byte_store,
     )
     logger.info("lifespan_ready")
 

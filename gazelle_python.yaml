@@ -10,8 +10,10 @@ manifest:
     IPython: ipython
     PIL: pillow
     accelerate: accelerate
+    aiobotocore: aiobotocore
     aiohappyeyeballs: aiohappyeyeballs
     aiohttp: aiohttp
+    aioitertools: aioitertools
     aioresponses: aioresponses
     aiosignal: aiosignal
     aiosqlite: aiosqlite
@@ -33,6 +35,7 @@ manifest:
     bidi: python_bidi
     billiard: billiard
     bleach: bleach
+    botocore: botocore
     bs4: beautifulsoup4
     celery: celery
     certifi: certifi
@@ -178,6 +181,7 @@ manifest:
     isympy: sympy
     jedi: jedi
     jinja2: jinja2
+    jmespath: jmespath
     json5: json5
     jsonlines: jsonlines
     jsonpatch: jsonpatch
@@ -264,6 +268,7 @@ manifest:
     opentelemetry.instrumentation.auto_instrumentation: opentelemetry_instrumentation
     opentelemetry.instrumentation.bootstrap: opentelemetry_instrumentation
     opentelemetry.instrumentation.bootstrap_gen: opentelemetry_instrumentation
+    opentelemetry.instrumentation.celery: opentelemetry_instrumentation_celery
     opentelemetry.instrumentation.dependencies: opentelemetry_instrumentation
     opentelemetry.instrumentation.distro: opentelemetry_instrumentation
     opentelemetry.instrumentation.environment_variables: opentelemetry_instrumentation
@@ -467,4 +472,4 @@ manifest:
     zstandard: zstandard
   pip_repository:
     name: pip
-integrity: ba1253c3c0e7458110d27c0aede17f01e30379d9166de574a4607588df7d9392
+integrity: 04169ddc4e1a8cd02f14c6c9c3926e5d474b52e63e75814fc25443065d187760

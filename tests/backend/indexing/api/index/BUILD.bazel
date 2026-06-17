@@ -22,6 +22,7 @@ py_test(
         "//src/lib/core/adapters/stores/memory:blob",
         "//src/lib/core/ingestion:exceptions",
         "//src/lib/core/ingestion:types",
+        "//src/lib/core/ingestion/pipeline:parent_page",
         requirement("pytest"),
     ],
 )

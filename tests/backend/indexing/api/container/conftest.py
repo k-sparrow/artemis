@@ -231,6 +231,9 @@ def app_container(
         .with_env("S3_ACCESS_KEY", "minioadmin")
         .with_env("S3_SECRET_KEY", "minioadmin")
         .with_env("S3_SECURE", "false")
+        # Parent-page doc store bucket — the lifespan ensure_bucket creates it
+        # in the MinIO testcontainer at startup.
+        .with_env("PAGE_BUCKET", "parent-pages")
         .with_env("DEBUG", "true")
         .with_exposed_ports(_APP_PORT)
     )

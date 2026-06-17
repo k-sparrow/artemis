@@ -30,6 +30,20 @@ py_library(
     ],
 )
 
+# Parent-page dereference decorator — composes over any base retriever.
+py_library(
+    name = "parent_page",
+    srcs = [
+        "parent_page.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        requirement("langchain"),
+        requirement("langchain-core"),
+        requirement("pydantic"),
+    ],
+)
+
 py_library(
     name = "params",
     srcs = [

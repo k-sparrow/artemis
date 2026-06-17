@@ -312,6 +312,8 @@ services:
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
       S3_SECURE: false
+      # Parent-page doc store bucket; lifespan ensure_bucket creates it in MinIO.
+      PAGE_BUCKET: parent-pages
       DEBUG: true
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
     extra_hosts:
@@ -488,7 +490,7 @@ services:
   # ---------------------------------------------------------------------------
   docling-serve:
     profiles: [ai]
-    image: "ghcr.io/docling-project/docling-serve-cu126:main"
+    image: "ghcr.io/docling-project/docling-serve-cu128:v1.24.0"
     container_name: docling-serve
     ports:
       - "5001:5001"

@@ -10,6 +10,7 @@ py_library(
         "//src/lib/core/ingestion:contract",
         "//src/lib/core/ingestion:pkg",
         "//src/lib/core/ingestion:types",
+        "//src/lib/core/ingestion/pipeline:parent_page",
         requirement("fastapi"),
         requirement("langchain-core"),
         requirement("pydantic"),

@@ -5,6 +5,7 @@
 # gazelle:python_root
 
 load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
 
 package(
     default_visibility = [
@@ -20,6 +21,7 @@ py_library(
     ],
     deps = [
         ":base",
+        ":parent_page",
     ],
 )
 
@@ -33,5 +35,24 @@ py_library(
         "//src/lib/core/ingestion/indexer:pkg",
         "//src/lib/core/ingestion/normalizer:pkg",
         "//src/lib/core/ingestion/upserter:pkg",
+    ],
+)
+
+# Parent-page decorator pipeline — depends only on abstractions; backend-visible
+# so the indexing service can wrap the chosen inner pipeline with it.
+py_library(
+    name = "parent_page",
+    srcs = [
+        "parent_page.py",
+    ],
+    visibility = [
+        "//src:__subpackages__",
+        "//tests:__subpackages__",
+    ],
+    deps = [
+        ":base",
+        "//src/lib/core/ingestion:types",
+        requirement("langchain"),
+        requirement("langchain-core"),
     ],
 )

@@ -203,8 +203,11 @@ class TestParseEndpoint:
         assert chunks[0]["page_no"] == 1
         assert chunks[1]["page_content"] == "chunk two"
 
-        # Page parents travel in the same artifact; dl_meta never does.
-        assert artifact["pages"] == [{"page_no": 1, "markdown": "# Hello\n\nWorld"}]
+        # Page parents travel in the same artifact, carrying their own obj_id;
+        # dl_meta never does.
+        assert artifact["pages"] == [
+            {"obj_id": str(OBJ_ID), "page_no": 1, "markdown": "# Hello\n\nWorld"}
+        ]
         assert "dl_meta" not in chunks[0]
 
         # The lossless replay cache is written to its private bucket.

@@ -17,13 +17,16 @@ from typing import Any, List, Optional, Sequence
 from unittest.mock import MagicMock, patch
 
 import pytest
+from langchain.storage import create_kv_docstore
 from langchain_core.callbacks import Callbacks
 from langchain_core.documents import Document
 from langchain_core.documents.compressor import BaseDocumentCompressor
 from langchain_core.retrievers import BaseRetriever
+from langchain_core.stores import InMemoryByteStore
 
 from src.backend.indexing.api.retrieve.retriever import NamespaceRetriever
 from src.lib.core.retrieval.adapters.base import BaseRetrievalAdapter
+from src.lib.core.retrieval.parent_page import ParentPageRetriever
 
 
 _NS = str(uuid.uuid4())
@@ -153,3 +156,67 @@ class TestNamespaceRetriever:
         assert str(params.namespace_id) == _NS
         assert str(params.group_id) == _GROUP
         assert str(params.doc_id) == _DOC
+
+
+# ---------------------------------------------------------------------------
+# Parent-page composition (async; per-request return_parents re-base)
+# ---------------------------------------------------------------------------
+
+
+def _chunk(parent_id: str) -> Document:
+    return Document(page_content="chunk", metadata={"parent_id": parent_id})
+
+
+async def _store_with_pages(*keys: str) -> InMemoryByteStore:
+    store = InMemoryByteStore()
+    docstore = create_kv_docstore(store)
+    await docstore.amset(
+        [(k, Document(page_content=f"PAGE {k}", metadata={})) for k in keys]
+    )
+    return store
+
+
+def _config(**extra: Any) -> dict:
+    return {"configurable": {"namespace_id": _NS, **extra}}
+
+
+class TestParentPageComposition:
+    """The store-bound ParentPageRetriever is built in the service wiring and
+    re-based per request onto the namespace-scoped base — NamespaceRetriever
+    never holds the byte store."""
+
+    @pytest.mark.asyncio
+    async def test_return_parents_derefs_chunks_to_pages(self):
+        store = await _store_with_pages("ns/obj/p1")
+        # Two chunks → one parent page (dedup), proving the deref ran.
+        adapter = _FakeAdapter(docs=[_chunk("ns/obj/p1"), _chunk("ns/obj/p1")])
+        ppr = ParentPageRetriever(byte_store=store, id_key="parent_id")
+        nr = NamespaceRetriever(retrieval_adapter=adapter, parent_page_retriever=ppr)
+
+        result = await nr.ainvoke("q", config=_config(return_parents=True))
+
+        assert [d.page_content for d in result] == ["PAGE ns/obj/p1"]
+
+    @pytest.mark.asyncio
+    async def test_without_return_parents_yields_chunks(self):
+        store = await _store_with_pages("ns/obj/p1")
+        chunks = [_chunk("ns/obj/p1")]
+        adapter = _FakeAdapter(docs=chunks)
+        ppr = ParentPageRetriever(byte_store=store, id_key="parent_id")
+        nr = NamespaceRetriever(retrieval_adapter=adapter, parent_page_retriever=ppr)
+
+        # Flag absent ⇒ no deref, the chunks pass straight through.
+        result = await nr.ainvoke("q", config=_config())
+
+        assert result == chunks
+
+    @pytest.mark.asyncio
+    async def test_return_parents_without_decorator_is_graceful(self):
+        chunks = [_chunk("ns/obj/p1")]
+        adapter = _FakeAdapter(docs=chunks)
+        # No page store configured ⇒ parent_page_retriever is None.
+        nr = NamespaceRetriever(retrieval_adapter=adapter)
+
+        result = await nr.ainvoke("q", config=_config(return_parents=True))
+
+        assert result == chunks

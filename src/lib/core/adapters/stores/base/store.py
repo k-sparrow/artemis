@@ -26,7 +26,7 @@ from langchain_core.documents import Document
 from langchain_core.indexing.base import DeleteResponse, DocumentIndex, UpsertResponse
 from langchain_core.stores import ByteStore
 
-__all__ = ["StoreDocumentIndex"]
+__all__ = ["StoreDocumentIndex", "MetadataKeyedDocumentIndex"]
 
 
 class StoreDocumentIndex(DocumentIndex):
@@ -124,3 +124,36 @@ class StoreDocumentIndex(DocumentIndex):
         self, query: str, *, run_manager: CallbackManagerForRetrieverRun
     ) -> List[Document]:
         return []
+
+
+class MetadataKeyedDocumentIndex(StoreDocumentIndex):
+    """A :class:`StoreDocumentIndex` that keys the store by a metadata field
+    instead of the content-hash uid ``lc_index`` assigns.
+
+    Pass the field name through ``lc_index``'s ``upsert_kwargs={"key": "<field>"}``;
+    ``upsert``/``aupsert`` then derive each item's store key from
+    ``item.metadata[<field>]`` — *per document*, so it stays aligned with the
+    post-skip ``docs_to_index`` subset ``lc_index`` hands the destination (a
+    static ``ids`` list would not). The record manager still tracks the
+    content-hash uid, so unchanged docs are still skipped (free diffing); only
+    the *store key* is the caller's deterministic value.
+
+    Consequence (see ``ingestion/RECORD_MANAGER.md`` §9): because the record
+    manager tracks uids but the store is keyed deterministically, ``lc_index``'s
+    uid-based cleanup ``adelete`` will MISS these objects. Deletion must be done
+    by the deterministic key / prefix on the underlying ``store``.
+    """
+
+    def upsert(self, items: Sequence[Document], /, **kwargs: Any) -> UpsertResponse:
+        key_field = kwargs.pop("key", None)
+        if key_field is not None:
+            kwargs["ids"] = [item.metadata[key_field] for item in items]
+        return super().upsert(items, **kwargs)
+
+    async def aupsert(
+        self, items: Sequence[Document], /, **kwargs: Any
+    ) -> UpsertResponse:
+        key_field = kwargs.pop("key", None)
+        if key_field is not None:
+            kwargs["ids"] = [item.metadata[key_field] for item in items]
+        return await super().aupsert(items, **kwargs)

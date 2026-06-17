@@ -53,7 +53,13 @@ _IMAGE_TAG = "artemis/backend-controller-worker:latest"
 _STUB_OBJ_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 
 _SAMPLE_ARTIFACT = {
-    "pages": [{"page_no": 1, "markdown": "# hello world\n\n| a | b |"}],
+    "pages": [
+        {
+            "obj_id": _STUB_OBJ_ID,
+            "page_no": 1,
+            "markdown": "# hello world\n\n| a | b |",
+        }
+    ],
     "chunks": [
         {
             "page_content": "hello world",

@@ -41,7 +41,10 @@ _GPU_DEPLOY_BLOCK = (
 )
 
 _DEV_SUBS: dict[str, str] = {
-    "DOCLING_IMAGE": "ghcr.io/docling-project/docling-serve-cu126:main",
+    # Pinned to the latest stable release (NOT a moving :main tag): the
+    # parsing-service redesign depends on the /v1/chunk/hybrid response shape
+    # (per-chunk page_numbers + documents[].md_content). cu128 GPU variant.
+    "DOCLING_IMAGE": "ghcr.io/docling-project/docling-serve-cu128:v1.24.0",
     "DOCLING_GPU_BLOCK": _GPU_DEPLOY_BLOCK,
     "TEI_IMAGE": "ghcr.io/huggingface/text-embeddings-inference:1.6",
     "TEI_MODEL": "Alibaba-NLP/gte-large-en-v1.5",

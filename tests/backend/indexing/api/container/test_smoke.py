@@ -79,7 +79,13 @@ async def test_ingest_via_artifact_ref(client: httpx.AsyncClient, minio_client: 
     obj_id = uuid.uuid4()
     bucket, key = "parsed-chunks", f"parse/{obj_id}.json"
     artifact = {
-        "pages": [{"page_no": 1, "markdown": "# chunk read from the parse artifact"}],
+        "pages": [
+            {
+                "obj_id": str(obj_id),
+                "page_no": 1,
+                "markdown": "# chunk read from the parse artifact",
+            }
+        ],
         "chunks": [
             {
                 "page_content": "chunk read from the parse artifact",

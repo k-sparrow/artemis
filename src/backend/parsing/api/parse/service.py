@@ -64,8 +64,15 @@ async def a_parse(
         normalizer = MetadataFieldNormalizer(fields=metadata)
         chunk_docs = normalizer.normalize(chunk_docs)
 
+    # Pages belong to the same object as the chunks; obj_id is stamped upstream
+    # (storage service) and travels in the parse metadata, exactly as it does for
+    # each chunk via ``_to_parsed_chunk``.
+    obj_id = uuid.UUID(metadata["obj_id"])
     artifact = ParseArtifact(
-        pages=[Page(page_no=page_no, markdown=md) for page_no, md in page_tuples],
+        pages=[
+            Page(obj_id=obj_id, page_no=page_no, markdown=md)
+            for page_no, md in page_tuples
+        ],
         chunks=[_to_parsed_chunk(doc) for doc in chunk_docs],
     )
     replay = dl_doc.model_dump_json().encode()

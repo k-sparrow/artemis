@@ -19,16 +19,19 @@ os.environ.setdefault("S3_ENDPOINT", "test-minio:9000")
 os.environ.setdefault("S3_ACCESS_KEY", "test")
 os.environ.setdefault("S3_SECRET_KEY", "test")
 os.environ.setdefault("S3_SECURE", "false")
+os.environ.setdefault("PAGE_BUCKET", "test-pages")
 
 
 @pytest.fixture(autouse=True)
 def mock_lifespan(monkeypatch):
     """Prevent lifespan from attempting real infrastructure connections.
 
-    The lifespan now also initialises the retrieve singleton via
-    ``retrieve_service.initialize()``.  We stub both the vectorstore handler
-    and the initialise call so that unit and HTTP tests start with a clean,
-    un-initialised service state each time.
+    The lifespan now also builds the parent-page byte store (calling
+    ``ensure_bucket``) and initialises the retrieve singleton via
+    ``retrieve_service.initialize()``.  We stub the vectorstore handler, the
+    page-store builder (so ``ensure_bucket`` makes no MinIO call), and the
+    initialise call so unit and HTTP tests start with a clean, un-initialised
+    service state each time.
     """
     from src.backend.indexing.api import utils
 
@@ -40,4 +43,7 @@ def mock_lifespan(monkeypatch):
         return mock_handler
 
     monkeypatch.setattr(utils, "get_vectorstore_handler_solved", _noop_handler)
+    # initialize is stubbed below, so the byte store never reaches a real
+    # NamespaceRetriever — an AsyncMock (no-op async ensure_bucket) suffices.
+    monkeypatch.setattr(utils, "build_page_byte_store", lambda: AsyncMock())
     monkeypatch.setattr(utils.retrieve_service, "initialize", lambda *a, **kw: None)
