@@ -38,9 +38,11 @@ py_test(
     tags = ["unit"],
     deps = [
         "//src/lib/core/adapters/stores/base:pkg",
+        "//src/lib/core/ingestion:config",
         "//src/lib/core/ingestion:types",
         "//src/lib/core/ingestion/pipeline:base",
         "//src/lib/core/ingestion/pipeline:parent_page",
+        "//src/lib/core/retrieval:parent_page",
         requirement("langchain"),
         requirement("langchain-core"),
         requirement("pytest"),
