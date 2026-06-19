@@ -34,3 +34,19 @@ py_test(
         requirement("qdrant-client"),
     ],
 )
+
+py_test(
+    name = "test_parent_page",
+    srcs = ["test_parent_page.py"],
+    data = ["//src/backend/alembic:tarball.dev"],
+    env = {"TC_MAX_TRIES": "1000000000"},
+    tags = ["local"],
+    deps = [
+        ":conftest",
+        requirement("httpx"),
+        requirement("minio"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+        requirement("qdrant-client"),
+    ],
+)
