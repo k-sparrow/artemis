@@ -68,14 +68,20 @@ def _invoke_retriever(
     query: str = "document",
     group_id: str | None = None,
     k: int = _RETRIEVE_K,
+    return_parents: bool = False,
 ) -> list[Document]:
     """Invoke the /retrieve LangServe endpoint via RemoteRunnable.
+
+    With ``return_parents`` the request opts into parent-page dereference, so the
+    response is the matched chunks' parent pages instead of the chunks.
 
     Returns an empty list on any transient failure so the polling loop retries.
     """
     configurable: dict = {"namespace_id": namespace_id, "k": k}
     if group_id is not None:
         configurable["group_id"] = group_id
+    if return_parents:
+        configurable["return_parents"] = True
     try:
         remote: RemoteRunnable = RemoteRunnable(f"{indexing_url}/retrieve")
         return remote.invoke(query, config={"configurable": configurable})
@@ -174,6 +180,67 @@ class TestSingleNamespaceFullPipeline:
                 f"chunk missing or wrong group_id="
                 f"{doc.metadata.get('group_id')!r}, expected {source_id!r}"
             )
+
+    def test_chunks_carry_parent_id(self, indexed_documents: list[Document]) -> None:
+        """Every chunk carries a parent_id pointer at its page (Epic 19).
+
+        The parent-page layer stamps parent_id on every chunk during indexing,
+        so retrieval can dereference chunks to their parent pages on request.
+        A missing parent_id here means the page link was lost in the pipeline.
+        """
+        for doc in indexed_documents:
+            parent_id = doc.metadata.get("parent_id")
+            assert parent_id, (
+                f"chunk missing parent_id (parent-page link not stamped): "
+                f"{doc.metadata}"
+            )
+
+    def test_return_parents_returns_parent_pages(
+        self,
+        indexed_documents: list[Document],
+        data_source: dict,
+        indexing_url: str,
+    ) -> None:
+        """``return_parents`` dereferences chunks to their parent pages.
+
+        Setting ``configurable.return_parents`` makes /retrieve return the
+        page-delimited parent pages instead of the chunks.  The results must be
+        pages (each carries a ``page_key``, none carry a chunk ``parent_id``),
+        and every retrieved chunk's ``parent_id`` must resolve to one of them —
+        proving the chunk→page link survives the full pipeline and the pages are
+        actually present in the parent-page store.
+        """
+        namespace_id: str = data_source["namespace_id"]
+        chunk_parent_ids = {d.metadata.get("parent_id") for d in indexed_documents}
+
+        def _parents():
+            pages = _invoke_retriever(indexing_url, namespace_id, return_parents=True)
+            return pages or None
+
+        try:
+            pages = poll_until(
+                _parents,
+                timeout=_QDRANT_POLL_TIMEOUT_S,
+                interval=_QDRANT_POLL_INTERVAL_S,
+            )
+        except TimeoutError:
+            pytest.fail(
+                f"return_parents yielded no parent pages for "
+                f"namespace_id={namespace_id} after {_QDRANT_POLL_TIMEOUT_S}s"
+            )
+
+        returned_page_keys = {p.metadata.get("page_key") for p in pages}
+        assert all(
+            returned_page_keys
+        ), f"parent results must carry page_key; got {[p.metadata for p in pages]}"
+        for p in pages:
+            assert (
+                "parent_id" not in p.metadata
+            ), "a parent page must not itself carry a chunk parent_id pointer"
+        assert chunk_parent_ids <= returned_page_keys, (
+            f"chunk parent_ids {chunk_parent_ids} did not all resolve to returned "
+            f"page keys {returned_page_keys} (page-store miss?)"
+        )
 
     def test_object_not_leaked_to_other_namespaces(
         self,
