@@ -158,6 +158,7 @@ def ingest(
                 kwargs={
                     "source": source.model_dump(),
                     "namespace_id": str(namespace_id),
+                    "task_id": task_id,
                 }
             )
             return {"task_id": str(result.id)}
@@ -295,6 +296,8 @@ def index(
                 ids=result["ids"],
             ),
             operation=upload_action,
+            # Contract task_id (the id the caller holds) → keys ingestion_tasks.
+            task_id=task_id,
         ).model_dump(mode="json")
 
 
@@ -313,12 +316,17 @@ def index(
     retry_backoff=True,
     retry_backoff_max=120,
 )
-def delete_document(source: SourceDetails, namespace_id: uuid.UUID) -> dict:
+def delete_document(
+    source: SourceDetails,
+    namespace_id: uuid.UUID,
+    task_id: str | None = None,
+) -> dict:
     """Remove a single document from the indexing service.
 
     Calls ``DELETE /ingest?namespace=<namespace_id>&obj_id=<obj_id>`` on the
     indexing service, which deletes all vectorstore chunks and record-manager
-    entries for the object.
+    entries for the object. ``task_id`` is the contract id propagated from
+    ``ingest`` so the deletion's ``ingestion_tasks`` row is keyed by it.
     """
     call_delete_service(
         namespace_id=namespace_id,
@@ -343,6 +351,7 @@ def delete_document(source: SourceDetails, namespace_id: uuid.UUID) -> dict:
         ),
         indexing=IndexingOutcome(num_added=0, num_skipped=0, ids=[]),
         operation=UploadAction.DELETE.value,
+        task_id=task_id,
     ).model_dump(mode="json")
 
 

@@ -128,11 +128,18 @@ class IngestionResult(BaseModel):
     Serialised as JSON into ``apollo_celery_taskmeta.result``.
     The ksqlDB CSAS reads this to populate ``ingested_objects`` and
     ``ingestion_tasks`` via two JDBC sink connectors.
+
+    ``task_id`` is the **contract** task_id — the id the storage service returned
+    to the caller (= the ``tasks.ingest`` entry task's id), propagated down the
+    chain. It is carried here so the ksqlDB ``ingestion_tasks`` fan-out can key the
+    row by it, instead of by the per-subtask Celery id that owns this result row.
+    Without it, ``GET /tasks/{task_id}`` for the caller's id finds nothing.
     """
 
     object: ObjectMetadata
     indexing: IndexingOutcome
     operation: str
+    task_id: str | None = None
 
 
 class IngestionTaskDetails(BaseModel):

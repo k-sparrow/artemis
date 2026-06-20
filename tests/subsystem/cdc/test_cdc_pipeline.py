@@ -52,6 +52,7 @@ def _make_result_json(
     namespace_id: uuid.UUID,
     group_id: uuid.UUID | None = None,
     operation: str = "CREATE",
+    task_id: uuid.UUID | None = None,
 ) -> str:
     return json.dumps(
         {
@@ -70,6 +71,10 @@ def _make_result_json(
             },
             "indexing": {"num_added": 0, "num_skipped": 0, "ids": []},
             "operation": operation,
+            # The ingestion_tasks fan-out keys the row by result.task_id (the
+            # contract id), so a synthetic row must carry it here. The synthetic
+            # tests treat it as equal to the taskmeta column task_id.
+            "task_id": str(task_id) if task_id is not None else None,
         }
     )
 
@@ -98,7 +103,9 @@ def _insert_taskmeta(
             {
                 "task_id": str(task_id),
                 "status": status,
-                "result": _make_result_json(obj_id, namespace_id, group_id, operation),
+                "result": _make_result_json(
+                    obj_id, namespace_id, group_id, operation, task_id
+                ),
                 "date_done": date_done,
                 "name": name,
             },

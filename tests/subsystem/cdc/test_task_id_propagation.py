@@ -345,15 +345,6 @@ def test_real_worker_result_reaches_ingestion_tasks(
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "task_id propagation bug (issue/task_id_propagation_fix): ingestion_tasks "
-        "is keyed by the index subtask id <C>, not the contract task_id <A> that "
-        "storage returns to the caller. The contract-id lookup finds no row. "
-        "Remove this marker when the recovering JOIN lands."
-    ),
-)
 def test_contract_task_id_resolves_in_ingestion_tasks(
     dispatch_app: Celery,
     worker_container: DockerContainer,
@@ -369,15 +360,18 @@ def test_contract_task_id_resolves_in_ingestion_tasks(
     was registered AND reached SUCCESS. Liveness of the worker→CDC path is proven
     by ``test_real_worker_result_reaches_ingestion_tasks``, so a miss here is a
     keying failure.
+
+    Regression guard for issue/task_id_propagation_fix: ``ingestion_tasks`` used to
+    be keyed by the per-subtask Celery id (``tasks.index``), which the caller never
+    sees. The contract id is now carried in ``IngestionResult.task_id`` and the
+    ksqlDB ``ingestion_tasks`` fan-out keys the row by it.
     """
     _seed_minio(minio_client)
 
     contract_task_id = uuid.uuid4()  # <A> — the id storage returns to the caller
     _dispatch_ingest(dispatch_app, namespace_row, task_id=contract_task_id)
 
-    # The row must be resolvable by the CONTRACT task_id the caller holds — today
-    # it is keyed by the index subtask id instead, so this lookup finds nothing
-    # (xfail). The fix makes it resolve to SUCCESS.
+    # The row must be resolvable by the CONTRACT task_id the caller holds.
     try:
         row = poll_until(
             lambda: _fetch_one(

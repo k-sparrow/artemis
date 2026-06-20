@@ -337,13 +337,20 @@ EMIT CHANGES;
 -- namespace_id and obj_id are extracted from the IngestionResult JSON and
 -- are guaranteed non-NULL for SUCCESS tasks.
 --
--- Note: FAILURE tasks are excluded because result is NULL on FAILURE — Celery
--- stores the exception repr rather than an IngestionResult, so namespace_id
--- cannot be recovered from the result column alone. FAILURE tracking is a
--- future enhancement (requires parsing the BYTEA kwargs column or a separate
--- side channel).
+-- KEY = the CONTRACT task_id, read from result.task_id — NOT the `task_id`
+-- column. The column holds the per-subtask Celery id of THIS (`tasks.index`)
+-- result row, which the caller never sees; the contract id (the `tasks.ingest`
+-- entry id the storage service returned) is propagated down the chain and
+-- carried in IngestionResult.task_id. Keying by it is what makes
+-- `GET /tasks/{task_id}` resolve for the id the caller actually holds.
 --
--- The JDBC sink uses primary.key.mode=record_value, primary.key.fields=task_id.
+-- Note: FAILURE tasks are excluded because result is NULL on FAILURE — Celery
+-- stores the exception repr rather than an IngestionResult, so neither the
+-- contract task_id nor namespace_id can be recovered from the result column
+-- alone. FAILURE tracking is a future enhancement (requires parsing the BYTEA
+-- kwargs column or a separate side channel).
+--
+-- The JDBC sink uses primary.key.mode=record_key, primary.key.fields=task_id.
 -- ---------------------------------------------------------------------------
 
 CREATE OR REPLACE STREAM `artemis-celery-ingestion-tasks`
@@ -356,7 +363,7 @@ WITH (
 AS SELECT
     -- task_id_key is the Kafka record key (record_key PK mode); PARTITION BY strips it from the value.
     -- task_id must NOT appear as a separate value projection — the JDBC sink reads it from the key struct.
-    STRUCT(`task_id` := task_id)                             AS task_id_key,
+    STRUCT(`task_id` := EXTRACTJSONFIELD(result, '$.task_id'))                             AS task_id_key,
     EXTRACTJSONFIELD(result, '$.object.id')                  AS `obj_id`,
     EXTRACTJSONFIELD(result, '$.object.scope.namespace_id')  AS `namespace_id`,
     status                                                   AS `status`,
@@ -364,7 +371,7 @@ AS SELECT
     EXTRACTJSONFIELD(result, '$.operation')                  AS `operation`
 FROM `artemis-celery-taskmeta`
 WHERE name = 'tasks.index' AND status = 'SUCCESS'
-PARTITION BY STRUCT(`task_id` := task_id)
+PARTITION BY STRUCT(`task_id` := EXTRACTJSONFIELD(result, '$.task_id'))
 EMIT CHANGES;
 
 
@@ -377,7 +384,7 @@ EMIT CHANGES;
 
 INSERT INTO `artemis-celery-ingestion-tasks`
 SELECT
-    STRUCT(`task_id` := task_id)                             AS task_id_key,
+    STRUCT(`task_id` := EXTRACTJSONFIELD(result, '$.task_id'))                             AS task_id_key,
     EXTRACTJSONFIELD(result, '$.object.id')                  AS `obj_id`,
     EXTRACTJSONFIELD(result, '$.object.scope.namespace_id')  AS `namespace_id`,
     status                                                   AS `status`,
@@ -385,7 +392,7 @@ SELECT
     EXTRACTJSONFIELD(result, '$.operation')                  AS `operation`
 FROM `artemis-celery-taskmeta`
 WHERE name = 'tasks.delete_document' AND status = 'SUCCESS'
-PARTITION BY STRUCT(`task_id` := task_id);
+PARTITION BY STRUCT(`task_id` := EXTRACTJSONFIELD(result, '$.task_id'));
 
 
 -- ---------------------------------------------------------------------------
