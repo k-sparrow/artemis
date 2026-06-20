@@ -28,7 +28,6 @@ from __future__ import annotations
 import io
 import json
 import threading
-import time
 import uuid
 from collections import deque
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -294,16 +293,18 @@ def _wait_for_worker(broker_url: str, timeout: int = 60) -> None:
     from celery import Celery as _Celery
 
     check = _Celery(broker=broker_url)
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            active = check.control.inspect(timeout=2).active_queues()
-            if active:
-                return
-        except Exception:
-            pass
-        time.sleep(2)
-    raise TimeoutError("Celery worker did not become ready within timeout")
+
+    def _ready() -> bool:
+        # inspect() raises while the broker is still coming up; active_queues()
+        # returns None until a worker replies. poll_until retries on both.
+        return bool(check.control.inspect(timeout=2).active_queues())
+
+    try:
+        poll_until(_ready, timeout=timeout, interval=2.0)
+    except TimeoutError:
+        raise TimeoutError(
+            "Celery worker did not become ready within timeout"
+        ) from None
 
 
 @pytest.fixture(scope="session")
