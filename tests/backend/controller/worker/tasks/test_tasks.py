@@ -12,7 +12,7 @@ real DB connection during module initialisation.
 from __future__ import annotations
 
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -140,7 +140,10 @@ class TestIngest:
         """DELETE action must dispatch ``delete_document`` with serialised kwargs.
 
         ``source`` must be a dict (``model_dump()``) and ``namespace_id`` a
-        string so the broker can JSON-encode them.
+        string so the broker can JSON-encode them.  The contract ``task_id`` is
+        threaded through so CDC keys ``ingestion_tasks`` by the id storage
+        returned (``ANY`` here — a fresh UUID since the direct ``.run()`` has no
+        request id).
         """
         mock_task_result = MagicMock()
         mock_task_result.id = "task-del-1"
@@ -160,6 +163,7 @@ class TestIngest:
                 kwargs={
                     "source": _SOURCE.model_dump(),
                     "namespace_id": str(_NAMESPACE_ID),
+                    "task_id": ANY,
                 }
             )
 
@@ -183,6 +187,7 @@ class TestIngest:
                 kwargs={
                     "source": _SOURCE.model_dump(),
                     "namespace_id": str(_NAMESPACE_ID),
+                    "task_id": ANY,
                 }
             )
 

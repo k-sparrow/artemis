@@ -144,6 +144,7 @@ def _make_ingestion_result(
     namespace_id: str,
     group_id: str | None = None,
     operation: str = "CREATE",
+    task_id: str | None = None,
 ) -> str:
     return json.dumps(
         {
@@ -159,6 +160,10 @@ def _make_ingestion_result(
             },
             "indexing": {"num_added": 0, "num_skipped": 0, "ids": []},
             "operation": operation,
+            # Contract task_id <A> — ksqlDB keys ingestion_tasks off
+            # EXTRACTJSONFIELD(result, '$.task_id'), not the taskmeta task_id
+            # column (which holds the index subtask id <C>).
+            "task_id": task_id,
         }
     )
 
@@ -169,13 +174,21 @@ def _produce_cdc_row(
     obj_id: str,
     namespace_id: str,
     *,
+    column_task_id: str | None = None,
     status: str = "SUCCESS",
     name: str = "tasks.index",
     date_done: int = _DATE_DONE_US,
     group_id: str | None = None,
     operation: str = "CREATE",
 ) -> None:
-    """Produce a flat CDC row matching the ExtractNewRecordState output shape."""
+    """Produce a flat CDC row matching the ExtractNewRecordState output shape.
+
+    ``task_id`` is the *contract* id ``<A>`` (what storage returned) and is
+    carried in ``result.$.task_id`` — this is what the ksql topology keys
+    ``ingestion_tasks`` off. ``column_task_id`` is the taskmeta ``task_id``
+    column, which in production holds the *index subtask* id ``<C>``; it
+    defaults to ``task_id`` for callers that don't care to distinguish them.
+    """
     producer = KafkaProducer(
         bootstrap_servers=[bootstrap_server],
         value_serializer=lambda v: json.dumps(v).encode(),
@@ -183,9 +196,11 @@ def _produce_cdc_row(
     producer.send(
         _SOURCE_TOPIC,
         value={
-            "task_id": task_id,
+            "task_id": column_task_id if column_task_id is not None else task_id,
             "status": status,
-            "result": _make_ingestion_result(obj_id, namespace_id, group_id, operation),
+            "result": _make_ingestion_result(
+                obj_id, namespace_id, group_id, operation, task_id
+            ),
             "date_done": date_done,
             "traceback": None,
             "name": name,
@@ -332,15 +347,24 @@ class TestIngestionTasksContract:
     def test_record_produced_on_success(
         self, bootstrap_server: str, streams: None
     ) -> None:
-        task_id = str(uuid.uuid4())
+        task_id = str(uuid.uuid4())  # contract id <A>, carried in result
+        column_task_id = str(uuid.uuid4())  # index subtask id <C>, taskmeta column
         obj_id = str(uuid.uuid4())
         namespace_id = str(uuid.uuid4())
 
         start = _end_offset(bootstrap_server, _TASKS_TOPIC)
-        _produce_cdc_row(bootstrap_server, task_id, obj_id, namespace_id)
+        _produce_cdc_row(
+            bootstrap_server,
+            task_id,
+            obj_id,
+            namespace_id,
+            column_task_id=column_task_id,
+        )
 
         record = _consume_one(bootstrap_server, _TASKS_TOPIC, start)
+        # The record must key off the contract id in the result, NOT the column.
         assert record["task_id"] == task_id
+        assert record["task_id"] != column_task_id
 
     def test_required_fields_present(
         self, bootstrap_server: str, streams: None
@@ -365,15 +389,23 @@ class TestIngestionTasksContract:
     def test_fields_extracted_correctly(
         self, bootstrap_server: str, streams: None
     ) -> None:
-        task_id = str(uuid.uuid4())
+        task_id = str(uuid.uuid4())  # contract id <A>, carried in result
+        column_task_id = str(uuid.uuid4())  # index subtask id <C>, taskmeta column
         obj_id = str(uuid.uuid4())
         namespace_id = str(uuid.uuid4())
 
         start = _end_offset(bootstrap_server, _TASKS_TOPIC)
-        _produce_cdc_row(bootstrap_server, task_id, obj_id, namespace_id)
+        _produce_cdc_row(
+            bootstrap_server,
+            task_id,
+            obj_id,
+            namespace_id,
+            column_task_id=column_task_id,
+        )
 
         record = _consume_one(bootstrap_server, _TASKS_TOPIC, start)
         assert record["task_id"] == task_id
+        assert record["task_id"] != column_task_id
         assert record["obj_id"] == obj_id
         assert record["namespace_id"] == namespace_id
         assert record["status"] == "SUCCESS"
@@ -395,7 +427,8 @@ class TestDeleteDocumentContract:
     def test_delete_record_produced_on_success(
         self, bootstrap_server: str, streams: None
     ) -> None:
-        task_id = str(uuid.uuid4())
+        task_id = str(uuid.uuid4())  # contract id <A>, carried in result
+        column_task_id = str(uuid.uuid4())  # delete subtask id <C>, taskmeta column
         obj_id = str(uuid.uuid4())
         namespace_id = str(uuid.uuid4())
 
@@ -405,17 +438,20 @@ class TestDeleteDocumentContract:
             task_id,
             obj_id,
             namespace_id,
+            column_task_id=column_task_id,
             name="tasks.delete_document",
             operation="DELETE",
         )
 
         record = _consume_one(bootstrap_server, _TASKS_TOPIC, start)
         assert record["task_id"] == task_id
+        assert record["task_id"] != column_task_id
 
     def test_delete_record_fields_correct(
         self, bootstrap_server: str, streams: None
     ) -> None:
-        task_id = str(uuid.uuid4())
+        task_id = str(uuid.uuid4())  # contract id <A>, carried in result
+        column_task_id = str(uuid.uuid4())  # delete subtask id <C>, taskmeta column
         obj_id = str(uuid.uuid4())
         namespace_id = str(uuid.uuid4())
 
@@ -425,12 +461,14 @@ class TestDeleteDocumentContract:
             task_id,
             obj_id,
             namespace_id,
+            column_task_id=column_task_id,
             name="tasks.delete_document",
             operation="DELETE",
         )
 
         record = _consume_one(bootstrap_server, _TASKS_TOPIC, start)
         assert record["task_id"] == task_id
+        assert record["task_id"] != column_task_id
         assert record["obj_id"] == obj_id
         assert record["namespace_id"] == namespace_id
         assert record["status"] == "SUCCESS"
