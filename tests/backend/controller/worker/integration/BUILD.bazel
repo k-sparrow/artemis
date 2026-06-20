@@ -7,17 +7,19 @@ py_library(
     testonly = True,
     srcs = ["conftest.py"],
     # Exposed so the CDC subsystem task_id-propagation test can reuse the
-    # StubServer + chain wire-contract constants (keeps the two suites in step).
+    # chain wire-contract constants + worker bring-up (keeps the two suites in step).
     visibility = ["//tests/subsystem/cdc:__pkg__"],
     deps = [
         "//tests/lib:polling",
         "//tests/lib/testcontainers:migrations",
         requirement("celery"),
+        requirement("httpx"),
         requirement("minio"),
         requirement("pika"),
         requirement("psycopg"),
         requirement("pytest"),
         requirement("testcontainers"),
+        requirement("wiremock"),
     ],
 )
 

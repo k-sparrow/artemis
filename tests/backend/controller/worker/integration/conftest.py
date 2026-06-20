@@ -5,19 +5,21 @@ Infrastructure (session-scoped):
   - Postgres testcontainer   — result backend
   - MinIO testcontainer      — S3 source + parse-artifact (claim-check) intermediate
 
-Stub HTTP servers (session-scoped, in-process threads):
+HTTP service stubs — one WireMock container, two path-scoped views (session-scoped):
   - parsing_stub   — returns a BlobRef on POST /v1/parse (claim-check; the
                      artifact itself is pre-seeded into MinIO by seed_artifact)
-  - indexing_stub  — minimal server that returns UpsertResult on POST /ingest
+  - indexing_stub  — returns UpsertResult on POST /ingest, 204 on DELETE /ingest
+  Each ``WireMockStub`` filters the shared WireMock request journal by its path,
+  keeping the old StubServer surface (``requests``/``push_response``/``clear``).
 
 Worker container (session-scoped):
   - Real Celery worker running inside the pre-built Docker image with host
-    networking so it can reach all testcontainer ports and in-process stubs.
+    networking so it can reach all testcontainer ports and the WireMock stub.
   - Requires the image to be loaded before the test run:
       bazel run //src/backend/controller/worker:image.tarball
 
 Per-test helpers:
-  - reset_stubs (autouse)        - clears stub request log and response queue
+  - reset_stubs (autouse)        - resets the WireMock journal + scenarios
                                    between tests
   - s3_source_bucket (autouse)   - ensures "ingest-source" bucket exists;
                                    cleans up objects after
@@ -25,14 +27,13 @@ Per-test helpers:
 
 from __future__ import annotations
 
+import base64
 import io
 import json
-import threading
 import uuid
-from collections import deque
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
+import httpx
 import psycopg
 import pytest
 from minio import Minio
@@ -40,8 +41,11 @@ from testcontainers.core.container import DockerContainer
 from testcontainers.minio import MinioContainer
 from testcontainers.postgres import PostgresContainer
 from testcontainers.rabbitmq import RabbitMqContainer
+from wiremock.testing.testcontainer import WireMockContainer
 
 from tests.lib.polling import poll_until
+
+_WIREMOCK_PORT = 8080
 
 _IMAGE_TAG = "artemis/backend-controller-worker:latest"
 
@@ -93,83 +97,76 @@ _UPSERT_RESULT = {
 }
 
 
-class _StubHandler(BaseHTTPRequestHandler):
-    def do_POST(self) -> None:
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length)
+class WireMockStub:
+    """A ``StubServer``-compatible facade over a WireMock container, scoped to one
+    URL path.
 
-        with self.server._lock:
-            self.server._requests.append(
+    The parsing and indexing services share a single WireMock instance; each
+    ``WireMockStub`` filters the shared request journal by its own path so callers
+    keep two independent views. The public surface (``url``, ``requests``,
+    ``push_response``, ``clear``) matches the old in-process stub so the tests are
+    unchanged. ``requests`` entries keep the old shape — ``method``/``path``/
+    ``headers``/``body`` with ``body`` as **bytes** (decoded from the journal's
+    ``bodyAsBase64``), so existing ``b"..." in body`` and ``json.loads(body)``
+    assertions still work.
+    """
+
+    def __init__(self, base_url: str, path: str) -> None:
+        self.url = base_url  # the worker points PARSING/INGESTION_SERVICE_URL here
+        self._admin = f"{base_url}/__admin"
+        self._path = path  # "/v1/parse" or "/ingest"
+        self._oneshot_mapping_ids: list[str] = []
+
+    @property
+    def requests(self) -> list[dict]:
+        resp = httpx.get(f"{self._admin}/requests", timeout=5.0)
+        resp.raise_for_status()
+        out: list[dict] = []
+        for entry in resp.json()["requests"]:
+            req = entry["request"]
+            url = req.get("url", "")
+            if not url.split("?")[0].startswith(self._path):
+                continue
+            if req.get("bodyAsBase64"):
+                body = base64.b64decode(req["bodyAsBase64"])
+            else:
+                body = (req.get("body") or "").encode()
+            out.append(
                 {
-                    "method": "POST",
-                    "path": self.path,
-                    "headers": dict(self.headers),
+                    "method": req.get("method", ""),
+                    "path": url,
+                    "headers": req.get("headers", {}),
                     "body": body,
                 }
             )
-            if self.server._responses:
-                status, resp_body = self.server._responses.popleft()
-            else:
-                status, resp_body = self.server._default
-
-        encoded = json.dumps(resp_body).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(encoded)))
-        self.end_headers()
-        self.wfile.write(encoded)
-
-    def do_DELETE(self) -> None:
-        with self.server._lock:
-            self.server._requests.append(
-                {
-                    "method": "DELETE",
-                    "path": self.path,
-                    "headers": dict(self.headers),
-                    "body": b"",
-                }
-            )
-
-        self.send_response(204)
-        self.end_headers()
-
-    def log_message(self, *args) -> None:
-        pass
-
-
-class StubServer:
-    def __init__(self, default_status: int, default_body: Any) -> None:
-        self._server = HTTPServer(("127.0.0.1", 0), _StubHandler)
-        self._server._lock = threading.Lock()
-        self._server._requests: list = []
-        self._server._responses: deque = deque()
-        self._server._default = (default_status, default_body)
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
-
-    @property
-    def url(self) -> str:
-        port = self._server.server_address[1]
-        return f"http://127.0.0.1:{port}"
-
-    def start(self) -> None:
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._server.shutdown()
+        return out
 
     def push_response(self, status: int, body: Any) -> None:
-        with self._server._lock:
-            self._server._responses.append((status, body))
-
-    @property
-    def requests(self) -> list:
-        with self._server._lock:
-            return list(self._server._requests)
+        """Make the NEXT POST to this path return *status*, then fall back to the
+        default mapping. Implemented as a one-shot WireMock scenario transition."""
+        scenario = f"oneshot-{self._path.strip('/').replace('/', '-')}"
+        mapping = {
+            "scenarioName": scenario,
+            "requiredScenarioState": "Started",
+            "newScenarioState": "served",
+            "priority": 1,  # outrank the default mapping while in the Started state
+            "request": {"method": "POST", "urlPath": self._path},
+            "response": {
+                "status": status,
+                "headers": {"Content-Type": "application/json"},
+                "jsonBody": body,
+            },
+        }
+        resp = httpx.post(f"{self._admin}/mappings", json=mapping, timeout=5.0)
+        resp.raise_for_status()
+        self._oneshot_mapping_ids.append(resp.json()["id"])
 
     def clear(self) -> None:
-        with self._server._lock:
-            self._server._requests.clear()
-            self._server._responses.clear()
+        for mapping_id in self._oneshot_mapping_ids:
+            httpx.delete(f"{self._admin}/mappings/{mapping_id}", timeout=5.0)
+        self._oneshot_mapping_ids.clear()
+        httpx.post(f"{self._admin}/scenarios/reset", timeout=5.0)
+        httpx.post(f"{self._admin}/requests/reset", timeout=5.0)
 
 
 # ---------------------------------------------------------------------------
@@ -226,24 +223,65 @@ def minio_container(request: pytest.FixtureRequest) -> MinioContainer:
 
 
 # ---------------------------------------------------------------------------
-# Stub servers
+# WireMock — stubs the parsing + indexing HTTP services (session-scoped)
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="session")
-def parsing_stub(request: pytest.FixtureRequest) -> StubServer:
-    stub = StubServer(default_status=200, default_body=_PARSE_RESPONSE)
-    stub.start()
-    request.addfinalizer(stub.stop)
-    return stub
+def wiremock(request: pytest.FixtureRequest) -> WireMockContainer:
+    """One WireMock stubbing both HTTP deps of the chain, matched by path:
+    parsing (``POST /v1/parse`` → claim-check BlobRef) and indexing
+    (``POST /ingest`` → UpsertResult, ``DELETE /ingest`` → 204)."""
+    wm = WireMockContainer(secure=False)
+    wm.with_mapping(
+        "parsing-parse.json",
+        {
+            "request": {"method": "POST", "urlPath": "/v1/parse"},
+            "response": {
+                "status": 200,
+                "headers": {"Content-Type": "application/json"},
+                "jsonBody": _PARSE_RESPONSE,
+            },
+        },
+    )
+    wm.with_mapping(
+        "indexing-ingest.json",
+        {
+            "request": {"method": "POST", "urlPath": "/ingest"},
+            "response": {
+                "status": 200,
+                "headers": {"Content-Type": "application/json"},
+                "jsonBody": _UPSERT_RESULT,
+            },
+        },
+    )
+    wm.with_mapping(
+        "indexing-delete.json",
+        {
+            "request": {"method": "DELETE", "urlPath": "/ingest"},
+            "response": {"status": 204},
+        },
+    )
+    wm.start()
+    request.addfinalizer(wm.stop)
+    return wm
 
 
 @pytest.fixture(scope="session")
-def indexing_stub(request: pytest.FixtureRequest) -> StubServer:
-    stub = StubServer(default_status=200, default_body=_UPSERT_RESULT)
-    stub.start()
-    request.addfinalizer(stub.stop)
-    return stub
+def _wiremock_base_url(wiremock: WireMockContainer) -> str:
+    host = wiremock.get_container_host_ip()
+    port = wiremock.get_exposed_port(_WIREMOCK_PORT)
+    return f"http://{host}:{port}"
+
+
+@pytest.fixture(scope="session")
+def parsing_stub(_wiremock_base_url: str) -> WireMockStub:
+    return WireMockStub(_wiremock_base_url, "/v1/parse")
+
+
+@pytest.fixture(scope="session")
+def indexing_stub(_wiremock_base_url: str) -> WireMockStub:
+    return WireMockStub(_wiremock_base_url, "/ingest")
 
 
 # ---------------------------------------------------------------------------
@@ -255,8 +293,8 @@ def _worker_env(
     rabbitmq_container: RabbitMqContainer,
     postgres_container: PostgresContainer,
     minio_container: MinioContainer,
-    parsing_stub: StubServer,
-    indexing_stub: StubServer,
+    parsing_stub: WireMockStub,
+    indexing_stub: WireMockStub,
 ) -> dict:
     minio_host = minio_container.get_container_host_ip()
     minio_port = minio_container.get_exposed_port(9000)
@@ -312,8 +350,8 @@ def worker_container(
     rabbitmq_container: RabbitMqContainer,
     postgres_container: PostgresContainer,
     minio_container: MinioContainer,
-    parsing_stub: StubServer,
-    indexing_stub: StubServer,
+    parsing_stub: WireMockStub,
+    indexing_stub: WireMockStub,
     migrations_container: None,
     request: pytest.FixtureRequest,
 ) -> DockerContainer:
@@ -415,7 +453,7 @@ def minio_client(minio_container: MinioContainer) -> Minio:
 
 
 @pytest.fixture(autouse=True)
-def reset_stubs(parsing_stub: StubServer, indexing_stub: StubServer):
+def reset_stubs(parsing_stub: WireMockStub, indexing_stub: WireMockStub):
     parsing_stub.clear()
     indexing_stub.clear()
     yield
@@ -475,7 +513,7 @@ def upload_file(
 
 
 def wait_until_stub_called(
-    stub: StubServer, timeout: int = 60, method: str = "POST"
+    stub: WireMockStub, timeout: int = 60, method: str = "POST"
 ) -> None:
     """Block until the stub receives at least one request with *method*."""
     poll_until(
@@ -486,7 +524,7 @@ def wait_until_stub_called(
 
 
 def wait_until_stub_called_n_times(
-    stub: StubServer,
+    stub: WireMockStub,
     n: int,
     timeout: int = 60,
     method: str = "POST",

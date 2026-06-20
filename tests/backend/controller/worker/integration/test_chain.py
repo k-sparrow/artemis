@@ -22,7 +22,7 @@ from minio import Minio
 from testcontainers.core.container import DockerContainer
 
 from tests.backend.controller.worker.integration.conftest import (
-    StubServer,
+    WireMockStub,
     upload_file,
     wait_until_minio_empty,
     wait_until_stub_called,
@@ -100,8 +100,8 @@ class TestFetchAndParseIndexChain:
     def test_happy_path_chain_calls_both_stubs(
         self,
         dispatch_app,
-        parsing_stub: StubServer,
-        indexing_stub: StubServer,
+        parsing_stub: WireMockStub,
+        indexing_stub: WireMockStub,
         s3_source_bucket: str,
         minio_client: Minio,
         namespace_id: uuid.UUID,
@@ -118,8 +118,8 @@ class TestFetchAndParseIndexChain:
     def test_parsing_stub_receives_correct_filename(
         self,
         dispatch_app,
-        parsing_stub: StubServer,
-        indexing_stub: StubServer,
+        parsing_stub: WireMockStub,
+        indexing_stub: WireMockStub,
         s3_source_bucket: str,
         minio_client: Minio,
         namespace_id: uuid.UUID,
@@ -135,8 +135,8 @@ class TestFetchAndParseIndexChain:
     def test_indexing_stub_receives_correct_namespace(
         self,
         dispatch_app,
-        parsing_stub: StubServer,
-        indexing_stub: StubServer,
+        parsing_stub: WireMockStub,
+        indexing_stub: WireMockStub,
         s3_source_bucket: str,
         minio_client: Minio,
         namespace_id: uuid.UUID,
@@ -155,8 +155,8 @@ class TestFetchAndParseIndexChain:
     def test_indexing_stub_receives_artifact_ref(
         self,
         dispatch_app,
-        parsing_stub: StubServer,
-        indexing_stub: StubServer,
+        parsing_stub: WireMockStub,
+        indexing_stub: WireMockStub,
         s3_source_bucket: str,
         minio_client: Minio,
         namespace_id: uuid.UUID,
@@ -175,8 +175,8 @@ class TestFetchAndParseIndexChain:
     def test_intermediate_minio_object_cleaned_up_after_success(
         self,
         dispatch_app,
-        parsing_stub: StubServer,
-        indexing_stub: StubServer,
+        parsing_stub: WireMockStub,
+        indexing_stub: WireMockStub,
         s3_source_bucket: str,
         minio_client: Minio,
         namespace_id: uuid.UUID,
@@ -208,8 +208,8 @@ class TestDeleteDocumentTask:
     def test_delete_document_hits_indexing_stub(
         self,
         dispatch_app,
-        parsing_stub: StubServer,
-        indexing_stub: StubServer,
+        parsing_stub: WireMockStub,
+        indexing_stub: WireMockStub,
         s3_source_bucket: str,
         namespace_id: uuid.UUID,
         worker_container: DockerContainer,
@@ -228,7 +228,7 @@ class TestDeleteDocumentTask:
     def test_delete_document_stub_receives_correct_namespace(
         self,
         dispatch_app,
-        indexing_stub: StubServer,
+        indexing_stub: WireMockStub,
         s3_source_bucket: str,
         namespace_id: uuid.UUID,
         worker_container: DockerContainer,
@@ -243,7 +243,7 @@ class TestDeleteDocumentTask:
     def test_delete_document_stub_receives_correct_obj_id(
         self,
         dispatch_app,
-        indexing_stub: StubServer,
+        indexing_stub: WireMockStub,
         s3_source_bucket: str,
         namespace_id: uuid.UUID,
         worker_container: DockerContainer,
@@ -272,7 +272,7 @@ class TestDeleteNamespaceTask:
     def test_delete_namespace_hits_indexing_stub(
         self,
         dispatch_app,
-        indexing_stub: StubServer,
+        indexing_stub: WireMockStub,
         namespace_id: uuid.UUID,
         worker_container: DockerContainer,
     ) -> None:
@@ -286,7 +286,7 @@ class TestDeleteNamespaceTask:
     def test_delete_namespace_stub_receives_correct_namespace(
         self,
         dispatch_app,
-        indexing_stub: StubServer,
+        indexing_stub: WireMockStub,
         namespace_id: uuid.UUID,
         worker_container: DockerContainer,
     ) -> None:
@@ -300,7 +300,7 @@ class TestDeleteNamespaceTask:
     def test_delete_namespace_stub_receives_no_source(
         self,
         dispatch_app,
-        indexing_stub: StubServer,
+        indexing_stub: WireMockStub,
         namespace_id: uuid.UUID,
         worker_container: DockerContainer,
     ) -> None:
@@ -325,8 +325,8 @@ class TestRetryBehavior:
     def test_index_retries_on_transient_indexing_failure(
         self,
         dispatch_app,
-        parsing_stub: StubServer,
-        indexing_stub: StubServer,
+        parsing_stub: WireMockStub,
+        indexing_stub: WireMockStub,
         s3_source_bucket: str,
         minio_client: Minio,
         namespace_id: uuid.UUID,
