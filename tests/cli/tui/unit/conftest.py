@@ -69,6 +69,7 @@ def make_task(**overrides) -> IngestionTaskResponse:
         obj_id=str(OBJ_ID),
         namespace_id=str(NS_ID),
         status="SUCCESS",
+        operation="CREATE",
         failure_reason=None,
         completed_at=_NOW.isoformat(),
     )

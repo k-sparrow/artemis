@@ -38,6 +38,7 @@ class IngestionTaskResponse(BaseModel):
     obj_id: uuid.UUID | None
     namespace_id: uuid.UUID
     status: str
+    operation: str
     failure_reason: str | None
     completed_at: datetime
 

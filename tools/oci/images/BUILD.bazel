@@ -924,7 +924,11 @@ multirun(
     ] + [
         "//tools/oci/images/apisix:init_tarball",
     ] + [
-        "//tools/oci/images/ksqldb:load.all",
+        # Flattened (NOT a nested ":load.all" multirun — that silently failed to
+        # run, leaving ksqldb-init stale while SUCCESS-path tests still passed on
+        # the old fan-outs). List the runnable oci_load tarballs directly.
+        "//tools/oci/images/ksqldb:artemis_init_tarball",
+        "//tools/oci/images/ksqldb:enterprise_init_tarball",
     ],
     visibility = ["//:__pkg__"],
 )

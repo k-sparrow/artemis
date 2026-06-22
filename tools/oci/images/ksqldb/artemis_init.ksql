@@ -344,11 +344,11 @@ EMIT CHANGES;
 -- carried in IngestionResult.task_id. Keying by it is what makes
 -- `GET /tasks/{task_id}` resolve for the id the caller actually holds.
 --
--- Note: FAILURE tasks are excluded because result is NULL on FAILURE — Celery
--- stores the exception repr rather than an IngestionResult, so neither the
--- contract task_id nor namespace_id can be recovered from the result column
--- alone. FAILURE tracking is a future enhancement (requires parsing the BYTEA
--- kwargs column or a separate side channel).
+-- failure_reason is NULL on SUCCESS — it is projected here (and on Fan-out C)
+-- so every producer into this stream/topic shares ONE value schema; the FAILURE
+-- fan-out (§7b) populates it. See §7b for how FAILURE rows get a CDC-readable
+-- result (a FailureRecordingTask.on_failure overwrite), since Celery's native
+-- FAILURE result is an exception encoding with no task_id/namespace_id.
 --
 -- The JDBC sink uses primary.key.mode=record_key, primary.key.fields=task_id.
 -- ---------------------------------------------------------------------------
@@ -368,7 +368,8 @@ AS SELECT
     EXTRACTJSONFIELD(result, '$.object.scope.namespace_id')  AS `namespace_id`,
     status                                                   AS `status`,
     FROM_UNIXTIME(date_done / 1000)                          AS `completed_at`,
-    EXTRACTJSONFIELD(result, '$.operation')                  AS `operation`
+    EXTRACTJSONFIELD(result, '$.operation')                  AS `operation`,
+    CAST(NULL AS VARCHAR)                                    AS `failure_reason`
 FROM `artemis-celery-taskmeta`
 WHERE name = 'tasks.index' AND status = 'SUCCESS'
 PARTITION BY STRUCT(`task_id` := EXTRACTJSONFIELD(result, '$.task_id'))
@@ -389,9 +390,50 @@ SELECT
     EXTRACTJSONFIELD(result, '$.object.scope.namespace_id')  AS `namespace_id`,
     status                                                   AS `status`,
     FROM_UNIXTIME(date_done / 1000)                          AS `completed_at`,
-    EXTRACTJSONFIELD(result, '$.operation')                  AS `operation`
+    EXTRACTJSONFIELD(result, '$.operation')                  AS `operation`,
+    CAST(NULL AS VARCHAR)                                    AS `failure_reason`
 FROM `artemis-celery-taskmeta`
 WHERE name = 'tasks.delete_document' AND status = 'SUCCESS'
+PARTITION BY STRUCT(`task_id` := EXTRACTJSONFIELD(result, '$.task_id'));
+
+
+-- ---------------------------------------------------------------------------
+-- 7b. Fan-out D: task FAILURES → ingestion_tasks
+--
+-- INSERT INTO artemis.celery.ingestion_tasks for terminal task FAILURES, so
+-- `GET /tasks/{task_id}` can distinguish "failed" from "still running"/"unknown".
+--
+-- A native Celery FAILURE row has result = the exception encoding
+-- ({exc_type, exc_message, exc_module}) — no task_id/namespace_id — so it cannot
+-- be keyed or shaped here. FailureRecordingTask.on_failure OVERWRITES that row's
+-- result with a FailureRecord (contract task_id + object.scope.namespace_id +
+-- operation + failure_reason) and nulls the traceback column, so the SAME
+-- EXTRACTJSONFIELD(result, …) paths used for SUCCESS work. status is already
+-- 'FAILURE' (projected directly, no literal needed).
+--
+-- DOUBLE-WRITE GUARD: mark_as_failure writes the exception-encoded result FIRST,
+-- on_failure overwrites it SECOND — Debezium emits BOTH. The pre-overwrite event
+-- has no $.task_id, so `EXTRACTJSONFIELD(result, '$.task_id') IS NOT NULL` drops
+-- it; only the overwrite (keyed by the contract <A>) reaches the JDBC sink.
+-- ---------------------------------------------------------------------------
+
+INSERT INTO `artemis-celery-ingestion-tasks`
+SELECT
+    STRUCT(`task_id` := EXTRACTJSONFIELD(result, '$.task_id'))                             AS task_id_key,
+    EXTRACTJSONFIELD(result, '$.object.id')                  AS `obj_id`,
+    EXTRACTJSONFIELD(result, '$.object.scope.namespace_id')  AS `namespace_id`,
+    status                                                   AS `status`,
+    FROM_UNIXTIME(date_done / 1000)                          AS `completed_at`,
+    EXTRACTJSONFIELD(result, '$.operation')                  AS `operation`,
+    EXTRACTJSONFIELD(result, '$.failure_reason')             AS `failure_reason`
+FROM `artemis-celery-taskmeta`
+WHERE status = 'FAILURE'
+  AND (
+    name = 'tasks.fetch_and_parse'
+    OR name = 'tasks.index'
+    OR name = 'tasks.delete_document'
+  )
+  AND EXTRACTJSONFIELD(result, '$.task_id') IS NOT NULL
 PARTITION BY STRUCT(`task_id` := EXTRACTJSONFIELD(result, '$.task_id'));
 
 

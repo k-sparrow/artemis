@@ -145,27 +145,31 @@ def _make_ingestion_result(
     group_id: str | None = None,
     operation: str = "CREATE",
     task_id: str | None = None,
+    failure_reason: str | None = None,
 ) -> str:
-    return json.dumps(
-        {
-            "object": {
-                "id": obj_id,
-                "source": "doc.txt",
-                "scope": {"namespace_id": namespace_id, "group_id": group_id},
-                "properties": {
-                    "object_type": "file",
-                    "content_type": "text/plain",
-                    "size_bytes": 2048 if operation != "DELETE" else None,
-                },
+    payload = {
+        "object": {
+            "id": obj_id,
+            "source": "doc.txt",
+            "scope": {"namespace_id": namespace_id, "group_id": group_id},
+            "properties": {
+                "object_type": "file",
+                "content_type": "text/plain",
+                "size_bytes": 2048 if operation != "DELETE" else None,
             },
-            "indexing": {"num_added": 0, "num_skipped": 0, "ids": []},
-            "operation": operation,
-            # Contract task_id <A> — ksqlDB keys ingestion_tasks off
-            # EXTRACTJSONFIELD(result, '$.task_id'), not the taskmeta task_id
-            # column (which holds the index subtask id <C>).
-            "task_id": task_id,
-        }
-    )
+        },
+        "indexing": {"num_added": 0, "num_skipped": 0, "ids": []},
+        "operation": operation,
+        # Contract task_id <A> — ksqlDB keys ingestion_tasks off
+        # EXTRACTJSONFIELD(result, '$.task_id'), not the taskmeta task_id
+        # column (which holds the index subtask id <C>).
+        "task_id": task_id,
+    }
+    if failure_reason is not None:
+        # On FAILURE the worker's on_failure hook overwrites result with a
+        # FailureRecord carrying failure_reason (mirrors the IngestionResult paths).
+        payload["failure_reason"] = failure_reason
+    return json.dumps(payload)
 
 
 def _produce_cdc_row(
@@ -180,6 +184,8 @@ def _produce_cdc_row(
     date_done: int = _DATE_DONE_US,
     group_id: str | None = None,
     operation: str = "CREATE",
+    failure_reason: str | None = None,
+    result_override: str | None = None,
 ) -> None:
     """Produce a flat CDC row matching the ExtractNewRecordState output shape.
 
@@ -188,7 +194,18 @@ def _produce_cdc_row(
     ``ingestion_tasks`` off. ``column_task_id`` is the taskmeta ``task_id``
     column, which in production holds the *index subtask* id ``<C>``; it
     defaults to ``task_id`` for callers that don't care to distinguish them.
+
+    ``result_override`` injects a raw ``result`` JSON string verbatim (used to
+    simulate the pre-overwrite exception encoding Celery writes on FAILURE,
+    which has no ``$.task_id`` and must be filtered out by the FAILURE fan-out).
     """
+    result = (
+        result_override
+        if result_override is not None
+        else _make_ingestion_result(
+            obj_id, namespace_id, group_id, operation, task_id, failure_reason
+        )
+    )
     producer = KafkaProducer(
         bootstrap_servers=[bootstrap_server],
         value_serializer=lambda v: json.dumps(v).encode(),
@@ -198,9 +215,7 @@ def _produce_cdc_row(
         value={
             "task_id": column_task_id if column_task_id is not None else task_id,
             "status": status,
-            "result": _make_ingestion_result(
-                obj_id, namespace_id, group_id, operation, task_id
-            ),
+            "result": result,
             "date_done": date_done,
             "traceback": None,
             "name": name,
@@ -384,6 +399,9 @@ class TestIngestionTasksContract:
             "status",
             "completed_at",
             "operation",
+            # NULL on SUCCESS — projected so every producer into the stream/topic
+            # shares one value schema; the FAILURE fan-out populates it.
+            "failure_reason",
         }
 
     def test_fields_extracted_correctly(
@@ -502,3 +520,109 @@ class TestDeleteDocumentContract:
         )
         key = _decode_sr(key_bytes)
         assert key["id"] == obj_id
+
+
+# ---------------------------------------------------------------------------
+# Contract: task FAILURES recorded in ingestion_tasks (Fan-out D, §7b)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+class TestRecordFailureContract:
+    """Terminal task FAILURES are recorded in artemis.celery.ingestion_tasks.
+
+    The worker's ``FailureRecordingTask.on_failure`` overwrites the failure row's
+    ``result`` with a FailureRecord JSON (so it carries the contract ``task_id`` +
+    namespace_id + operation + failure_reason); the FAILURE fan-out emits a row
+    keyed by the contract ``<A>`` with ``status='FAILURE'``.
+    """
+
+    @pytest.mark.parametrize(
+        "name",
+        ["tasks.fetch_and_parse", "tasks.index", "tasks.delete_document"],
+    )
+    def test_failure_row_keyed_by_contract_id(
+        self, bootstrap_server: str, streams: None, name: str
+    ) -> None:
+        task_id = str(uuid.uuid4())  # contract id <A>, carried in result
+        column_task_id = str(uuid.uuid4())  # failing subtask id <C>, taskmeta column
+        obj_id = str(uuid.uuid4())
+        namespace_id = str(uuid.uuid4())
+
+        start = _end_offset(bootstrap_server, _TASKS_TOPIC)
+        _produce_cdc_row(
+            bootstrap_server,
+            task_id,
+            obj_id,
+            namespace_id,
+            column_task_id=column_task_id,
+            status="FAILURE",
+            name=name,
+            operation="CREATE",
+            failure_reason="RuntimeError: boom",
+        )
+
+        record = _consume_one(bootstrap_server, _TASKS_TOPIC, start)
+        # Keyed by the contract id in the result, NOT the taskmeta column.
+        assert record["task_id"] == task_id
+        assert record["task_id"] != column_task_id
+        assert record["status"] == "FAILURE"
+        assert record["namespace_id"] == namespace_id
+        assert record["obj_id"] == obj_id
+        assert record["operation"] == "CREATE"
+        assert record["failure_reason"] == "RuntimeError: boom"
+        assert record["completed_at"] is not None
+
+    def test_double_write_guard_drops_exception_encoded_row(
+        self, bootstrap_server: str, streams: None
+    ) -> None:
+        """The pre-overwrite event (Celery's exception encoding, no ``$.task_id``)
+        must NOT produce an ``ingestion_tasks`` record.
+
+        Produce the exception-encoded row FIRST then the on_failure overwrite for
+        the SAME failing subtask; the first (and only) emitted record must be the
+        overwrite, keyed by the contract id — proving the ``task_id IS NOT NULL``
+        guard filtered the exception-encoded event.
+        """
+        task_id = str(uuid.uuid4())  # contract id <A>
+        column_task_id = str(uuid.uuid4())  # the failing subtask's row id <C>
+        obj_id = str(uuid.uuid4())
+        namespace_id = str(uuid.uuid4())
+
+        start = _end_offset(bootstrap_server, _TASKS_TOPIC)
+        # 1. mark_as_failure: exception encoding, NO $.task_id → must be filtered.
+        _produce_cdc_row(
+            bootstrap_server,
+            task_id,
+            obj_id,
+            namespace_id,
+            column_task_id=column_task_id,
+            status="FAILURE",
+            name="tasks.index",
+            result_override=json.dumps(
+                {
+                    "exc_type": "RuntimeError",
+                    "exc_message": ["boom"],
+                    "exc_module": "builtins",
+                }
+            ),
+        )
+        # 2. on_failure overwrite: FailureRecord carrying the contract id.
+        _produce_cdc_row(
+            bootstrap_server,
+            task_id,
+            obj_id,
+            namespace_id,
+            column_task_id=column_task_id,
+            status="FAILURE",
+            name="tasks.index",
+            operation="CREATE",
+            failure_reason="RuntimeError: boom",
+        )
+
+        record = _consume_one(bootstrap_server, _TASKS_TOPIC, start)
+        # If the guard were missing, the FIRST emitted record would be the
+        # exception-encoded one with a null task_id key.
+        assert record["task_id"] == task_id
+        assert record["status"] == "FAILURE"
+        assert record["failure_reason"] == "RuntimeError: boom"

@@ -197,8 +197,19 @@ def ksqldb(
 
 
 @pytest.fixture(scope="session")
-def streams(network: Network, ksqldb: KSQLDbContainer) -> None:
-    """Run the ksqldb-init sidecar to create all six streams (S3 + CDC)."""
+def streams(
+    network: Network,
+    ksqldb: KSQLDbContainer,
+    request: pytest.FixtureRequest,
+) -> None:
+    """Run the ksqldb-init sidecar to create all six streams (S3 + CDC).
+
+    The sidecar runs ``ksql --file``, which PRINTS per-statement errors but still
+    exits 0 — so a malformed stream/fan-out is silently skipped and the container
+    exits cleanly. We therefore ALWAYS capture the init output and dump it on any
+    test failure, so a swallowed ksqlDB error (e.g. a fan-out that never registered)
+    is visible in the test log instead of needing a manual re-run to diagnose.
+    """
     internal_url = f"http://{_KSQLDB_ALIAS}:{KSQLDbContainer.HTTP_PORT}"
     container = (
         DockerContainer(_INIT_IMAGE)
@@ -208,14 +219,23 @@ def streams(network: Network, ksqldb: KSQLDbContainer) -> None:
     )
     container.start()
     result = container.get_wrapped_container().wait(timeout=120)
+    stdout, stderr = container.get_logs()
+    logs = f"stdout:\n{stdout.decode()}\nstderr:\n{stderr.decode()}"
+    container.stop()
+
     if result["StatusCode"] != 0:
-        stdout, stderr = container.get_logs()
-        container.stop()
-        logs = f"stdout:\n{stdout.decode()}\nstderr:\n{stderr.decode()}"
         raise RuntimeError(
             f"artemis/ksqldb-init exited with {result['StatusCode']}\n{logs}"
         )
-    container.stop()
+
+    def _dump_init_logs_on_failure() -> None:
+        if request.session.testsfailed:
+            print(
+                "\n=== artemis/ksqldb-init logs (ksql --file output) ===\n" + logs,
+                flush=True,
+            )
+
+    request.addfinalizer(_dump_init_logs_on_failure)
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +261,24 @@ def kafka_connect(
         .with_log_level("WARN")
     )
     container.start()
-    request.addfinalizer(container.stop)
+
+    def _dump_logs_on_failure() -> None:
+        # The Debezium source + JDBC sink connectors run in THIS container; a sink
+        # task that throws on a record (e.g. a FAILURE row) fails silently as far as
+        # the test is concerned — the row just never lands. Surface the connect logs
+        # on any test failure so the task's exception is visible in the test log.
+        if request.session.testsfailed:
+            stdout, stderr = container.get_logs()
+            print(
+                "\n=== kafka-connect logs ===\n"
+                + stdout.decode(errors="replace")
+                + "\n--- stderr ---\n"
+                + stderr.decode(errors="replace"),
+                flush=True,
+            )
+        container.stop()
+
+    request.addfinalizer(_dump_logs_on_failure)
     return container
 
 

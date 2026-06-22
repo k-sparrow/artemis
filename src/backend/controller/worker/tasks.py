@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 import uuid
 
-from celery import chain
+from celery import Task, chain, states
 from celery.signals import worker_ready
 from celery.utils.log import get_task_logger
 from opentelemetry import trace
@@ -38,6 +38,9 @@ import pybreaker
 
 from src.backend.controller.lib.schemas import (
     BlobRef,
+    FailureObject,
+    FailureRecord,
+    FailureScope,
     IngestionInfo,
     IngestionResult,
     IndexingOutcome,
@@ -73,6 +76,75 @@ _db_backend = DatabaseBackend(
     engine_options={"echo": False},
     serializer="json",
 )
+
+# Bound on the failure_reason length so a multi-KB traceback message never bloats
+# the result column / CDC payload — the full traceback still lives elsewhere.
+_FAILURE_REASON_MAX = 2000
+
+
+class FailureRecordingTask(Task):
+    """Base task that records a clean, CDC-readable FAILURE row on terminal failure.
+
+    On a native failure Celery stores the exception encoding
+    (``{exc_type, exc_message, exc_module}``) in ``apollo_celery_taskmeta.result``
+    — it has no contract ``task_id``/``namespace_id``, so the ksqlDB
+    ``ingestion_tasks`` fan-out cannot key or populate a row from it.  This hook
+    OVERWRITES this task's own result row with a :class:`FailureRecord` (identity
+    recovered from the task kwargs) and nulls the traceback column, so the fan-out
+    reads it with the same ``EXTRACTJSONFIELD(result, …)`` paths it uses for SUCCESS.
+
+    Celery's ``handle_failure`` runs ``mark_as_failure`` (the exception write) BEFORE
+    ``on_failure``, so this overwrite is the LAST write — no ``Ignore()`` needed (and
+    the FAILURE state still short-circuits the chain).  The two writes surface as two
+    Debezium events; the fan-out's ``$.task_id IS NOT NULL`` guard drops the
+    pre-overwrite (exception-encoded) one.
+
+    Uses ``self.backend`` (the bound per-task ``_db_backend``) — NOT
+    ``self.app.AsyncResult``: this app has no app-level backend.
+    """
+
+    def on_failure(self, exc, task_id, args, kwargs, einfo):
+        contract_task_id = kwargs.get("task_id")
+        namespace_id = kwargs.get("namespace_id")
+        if not contract_task_id or not namespace_id:
+            # Without the contract id + NOT-NULL namespace_id we cannot build a
+            # resolvable row — leave the native FAILURE row untouched.
+            return
+
+        source = kwargs.get("source") or {}
+        obj_id = source.get("obj_id") if isinstance(source, dict) else None
+        operation = kwargs.get("operation") or kwargs.get("upload_action") or ""
+        operation = getattr(operation, "value", operation)
+
+        payload = FailureRecord(
+            task_id=str(contract_task_id),
+            object=FailureObject(
+                id=obj_id,
+                scope=FailureScope(namespace_id=namespace_id),
+            ),
+            operation=str(operation),
+            failure_reason=f"{type(exc).__name__}: {exc}"[:_FAILURE_REASON_MAX],
+        ).model_dump(mode="json")
+
+        # Pass request= so the backend preserves the extended columns (name, args,
+        # kwargs, worker, …). Our custom DatabaseBackend._update_result writes EVERY
+        # column from the result meta, and _get_result_meta only fills the extended
+        # columns when a request is given — omitting it NULLs `name`, which would make
+        # the ksqlDB FAILURE fan-out's `name IN (…)` filter drop this row.
+        self.backend.store_result(
+            self.request.id,
+            payload,
+            state=states.FAILURE,
+            traceback=None,
+            request=self.request,
+        )
+        logger.warning(
+            "task_failure=recorded task=%s contract_task_id=%s obj_id=%s op=%s",
+            self.name,
+            contract_task_id,
+            obj_id,
+            operation,
+        )
 
 
 @worker_ready.connect
@@ -132,23 +204,30 @@ def ingest(
 
     group_id = str(info.group_id) if info.group_id is not None else None
 
+    # Identity (namespace_id, source, task_id, operation) is passed by KEYWORD so
+    # FailureRecordingTask.on_failure can recover it uniformly from the task kwargs
+    # to build a CDC-readable FAILURE row keyed by the contract task_id.
+    # Over the broker `upload_action` arrives as a plain str (celery's pydantic
+    # coercion doesn't rebuild the enum), so normalize to its string value.
+    operation = getattr(upload_action, "value", upload_action)
     match upload_action:
         case UploadAction.CREATE | UploadAction.UPDATE:
             result = chain(
                 fetch_and_parse.s(
                     s3.model_dump(),
-                    source.model_dump(),
-                    str(namespace_id),
-                    group_id,
-                    task_id,
+                    source=source.model_dump(),
+                    namespace_id=str(namespace_id),
+                    group_id=group_id,
+                    task_id=task_id,
+                    operation=operation,
                 ),
                 index.s(
-                    str(namespace_id),
-                    upload_action,
-                    group_id,
-                    source.model_dump(mode="json"),
-                    s3.model_dump(mode="json"),
-                    task_id,
+                    namespace_id=str(namespace_id),
+                    upload_action=operation,
+                    group_id=group_id,
+                    source=source.model_dump(mode="json"),
+                    s3=s3.model_dump(mode="json"),
+                    task_id=task_id,
                 ),
             ).apply_async()
             return {"chain_id": str(result.id)}
@@ -159,6 +238,7 @@ def ingest(
                     "source": source.model_dump(),
                     "namespace_id": str(namespace_id),
                     "task_id": task_id,
+                    "operation": operation,
                 }
             )
             return {"task_id": str(result.id)}
@@ -171,6 +251,7 @@ def ingest(
 
 @app.task(
     name="tasks.fetch_and_parse",
+    base=FailureRecordingTask,
     bind=True,
     pydantic=True,
     backend=_db_backend,
@@ -187,6 +268,7 @@ def fetch_and_parse(
     namespace_id: uuid.UUID,
     group_id: str | None = None,
     task_id: str | None = None,
+    operation: str | None = None,
 ) -> dict:
     """Ask the parsing service to parse the input and return the artifact ref.
 
@@ -230,6 +312,7 @@ def fetch_and_parse(
 
 @app.task(
     name="tasks.index",
+    base=FailureRecordingTask,
     pydantic=True,
     backend=_db_backend,
     result_serializer="json",
@@ -308,6 +391,7 @@ def index(
 
 @app.task(
     name="tasks.delete_document",
+    base=FailureRecordingTask,
     pydantic=True,
     backend=_db_backend,
     result_serializer="json",
@@ -320,6 +404,7 @@ def delete_document(
     source: SourceDetails,
     namespace_id: uuid.UUID,
     task_id: str | None = None,
+    operation: str | None = None,
 ) -> dict:
     """Remove a single document from the indexing service.
 

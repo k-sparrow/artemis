@@ -26,7 +26,10 @@ from src.backend.controller.lib.schemas import (
 from src.backend.controller.worker.exceptions import EmptyObjectError
 
 # ----- module under test (imported after conftest patches the app) ----------
+from celery import states
+
 from src.backend.controller.worker.tasks import (
+    FailureRecordingTask,
     delete_document,
     delete_namespace,
     fetch_and_parse,
@@ -95,28 +98,33 @@ class TestIngest:
 
         assert "chain_id" in result
         mock_chain.assert_called_once()
-        # First task: fetch_and_parse must receive serialisable args, with the
-        # contract task_id propagated as the trailing arg.
+        # First task: fetch_and_parse must receive serialisable args. Identity is
+        # passed by KEYWORD so FailureRecordingTask.on_failure can recover it from
+        # kwargs; the contract task_id is propagated alongside.
         first_sig = mock_chain.call_args[0][0]
-        assert first_sig.args[:4] == (
-            _S3.model_dump(),
-            _SOURCE.model_dump(),
-            str(_NAMESPACE_ID),
-            None,  # group_id — None when not set on IngestionInfo
-        )
-        propagated_task_id = first_sig.args[4]
+        assert first_sig.args == (_S3.model_dump(),)
+        propagated_task_id = first_sig.kwargs["task_id"]
         assert isinstance(propagated_task_id, str) and propagated_task_id
+        assert first_sig.kwargs == {
+            "source": _SOURCE.model_dump(),
+            "namespace_id": str(_NAMESPACE_ID),
+            "group_id": None,  # None when not set on IngestionInfo
+            "task_id": propagated_task_id,
+            "operation": "CREATE",
+        }
         # Second task: index must receive upload_action + source + s3 dicts for the
-        # JDBC sink result, plus the SAME contract task_id propagated to fetch_and_parse.
+        # JDBC sink result, plus the SAME contract task_id (artifact_ref is piped in
+        # by the chain as the leading positional arg).
         second_sig = mock_chain.call_args[0][1]
-        assert second_sig.args == (
-            str(_NAMESPACE_ID),
-            "CREATE",  # upload_action
-            None,  # group_id
-            _SOURCE.model_dump(mode="json"),
-            _S3.model_dump(mode="json"),
-            propagated_task_id,  # contract id is the same across both subtasks
-        )
+        assert second_sig.args == ()
+        assert second_sig.kwargs == {
+            "namespace_id": str(_NAMESPACE_ID),
+            "upload_action": "CREATE",
+            "group_id": None,
+            "source": _SOURCE.model_dump(mode="json"),
+            "s3": _S3.model_dump(mode="json"),
+            "task_id": propagated_task_id,  # same contract id across both subtasks
+        }
 
     def test_update_dispatches_chain(self) -> None:
         """UPDATE action must follow the same chain path as CREATE."""
@@ -164,6 +172,7 @@ class TestIngest:
                     "source": _SOURCE.model_dump(),
                     "namespace_id": str(_NAMESPACE_ID),
                     "task_id": ANY,
+                    "operation": "DELETE",
                 }
             )
 
@@ -188,8 +197,93 @@ class TestIngest:
                     "source": _SOURCE.model_dump(),
                     "namespace_id": str(_NAMESPACE_ID),
                     "task_id": ANY,
+                    "operation": "AUTO_DELETE",
                 }
             )
+
+
+# ---------------------------------------------------------------------------
+# FailureRecordingTask.on_failure
+# ---------------------------------------------------------------------------
+
+
+class TestFailureRecordingTask:
+    """``on_failure`` overwrites the failing task's own result row with a
+    CDC-readable ``FailureRecord`` (identity recovered from the task kwargs),
+    keyed by the contract ``task_id``, with the traceback column nulled."""
+
+    def _invoke(self, exc: Exception, kwargs: dict) -> MagicMock:
+        """Call ``on_failure`` with a mock task; return the ``store_result`` mock."""
+        task = MagicMock()
+        task.name = "tasks.index"
+        task.request.id = "subtask-C-id"
+        FailureRecordingTask.on_failure(
+            task, exc, "subtask-C-id", (), kwargs, einfo=None
+        )
+        return task.backend.store_result
+
+    def test_writes_failure_record_keyed_by_subtask_row(self) -> None:
+        store = self._invoke(
+            ValueError("boom"),
+            {
+                "task_id": "contract-A",
+                "namespace_id": str(_NAMESPACE_ID),
+                "source": {"obj_id": str(_OBJ_ID)},
+                "operation": "CREATE",
+            },
+        )
+        store.assert_called_once()
+        # Overwrites THIS subtask's own row (its id), carrying the contract id <A>.
+        assert store.call_args.args[0] == "subtask-C-id"
+        payload = store.call_args.args[1]
+        assert payload["task_id"] == "contract-A"
+        assert payload["object"]["id"] == str(_OBJ_ID)
+        assert payload["object"]["scope"]["namespace_id"] == str(_NAMESPACE_ID)
+        assert payload["operation"] == "CREATE"
+        assert payload["failure_reason"] == "ValueError: boom"
+        assert store.call_args.kwargs["state"] == states.FAILURE
+        assert store.call_args.kwargs["traceback"] is None
+
+    def test_operation_falls_back_to_upload_action(self) -> None:
+        """``index`` carries ``upload_action`` (not ``operation``) — read either."""
+        store = self._invoke(
+            RuntimeError("x"),
+            {
+                "task_id": "contract-A",
+                "namespace_id": str(_NAMESPACE_ID),
+                "source": {"obj_id": str(_OBJ_ID)},
+                "upload_action": "MODIFY",
+            },
+        )
+        assert store.call_args.args[1]["operation"] == "MODIFY"
+
+    def test_obj_id_nullable_when_source_absent(self) -> None:
+        store = self._invoke(
+            KeyError("k"),
+            {
+                "task_id": "contract-A",
+                "namespace_id": str(_NAMESPACE_ID),
+                "operation": "DELETE",
+            },
+        )
+        assert store.call_args.args[1]["object"]["id"] is None
+
+    def test_skips_when_contract_identity_missing(self) -> None:
+        """Without contract task_id + NOT-NULL namespace_id, leave the native row."""
+        task = MagicMock()
+        task.request.id = "subtask-C-id"
+        FailureRecordingTask.on_failure(
+            task, ValueError("x"), "subtask-C-id", (), {"task_id": "A"}, einfo=None
+        )
+        task.backend.store_result.assert_not_called()
+
+    def test_failing_tasks_use_the_base(self) -> None:
+        assert isinstance(fetch_and_parse, FailureRecordingTask)
+        assert isinstance(index, FailureRecordingTask)
+        assert isinstance(delete_document, FailureRecordingTask)
+        # ingest (fire-and-forget dispatcher) and delete_namespace do NOT.
+        assert not isinstance(ingest, FailureRecordingTask)
+        assert not isinstance(delete_namespace, FailureRecordingTask)
 
 
 # ---------------------------------------------------------------------------

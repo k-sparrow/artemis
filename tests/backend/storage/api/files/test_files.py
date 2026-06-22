@@ -55,7 +55,9 @@ def _ingested_file_row(group_id: uuid.UUID | None = None) -> dict:
 
 
 def _ingestion_task_row(
-    status: str = "SUCCESS", failure_reason: str | None = None
+    status: str = "SUCCESS",
+    failure_reason: str | None = None,
+    operation: str = "CREATE",
 ) -> dict:
     """Minimal dict that satisfies IngestionTaskResponse.model_validate."""
     return {
@@ -63,6 +65,7 @@ def _ingestion_task_row(
         "obj_id": FILE_ID,
         "namespace_id": NAMESPACE_ID,
         "status": status,
+        "operation": operation,
         "failure_reason": failure_reason,
         "completed_at": datetime.now(timezone.utc),
     }

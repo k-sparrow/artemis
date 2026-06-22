@@ -280,13 +280,19 @@ def _dispatch_ingest(
     namespace_id: uuid.UUID,
     *,
     task_id: uuid.UUID | None = None,
+    size: int = 1,
 ) -> None:
     """Dispatch ``tasks.ingest`` the way the storage service does (optionally with
-    an explicit contract ``task_id``)."""
+    an explicit contract ``task_id``).
+
+    ``size=0`` makes ``fetch_and_parse`` raise ``EmptyObjectError`` (non-retryable)
+    — the lowest-friction real terminal failure, exercising the FAILURE path with
+    no extra infra.
+    """
     dispatch_app.send_task(
         "tasks.ingest",
         kwargs={
-            "s3": {"bucket": _SOURCE_BUCKET, "object": _FILENAME, "size": 1},
+            "s3": {"bucket": _SOURCE_BUCKET, "object": _FILENAME, "size": size},
             "source": {
                 "source": _FILENAME,
                 "content_type": "text/markdown",
@@ -388,3 +394,46 @@ def test_contract_task_id_resolves_in_ingestion_tasks(
             "that storage returned to the caller — the upload's status is unresolvable."
         )
     assert row.status == "SUCCESS", f"expected SUCCESS, got {row.status!r}"
+
+
+@pytest.mark.integration
+def test_failure_resolves_in_ingestion_tasks(
+    dispatch_app: Celery,
+    worker_container: DockerContainer,
+    minio_client,
+    postgres_engine: sa.Engine,
+    namespace_row: uuid.UUID,
+) -> None:
+    """A FAILED ingestion lands a FAILURE row resolvable by the contract task_id.
+
+    End-to-end exercise of the FAILURE-visibility path through the REAL worker +
+    Debezium + the ``task_id IS NOT NULL`` guard: dispatch with ``size=0`` so
+    ``fetch_and_parse`` raises ``EmptyObjectError`` (non-retryable, terminal) →
+    ``FailureRecordingTask.on_failure`` overwrites the result row with a
+    FailureRecord carrying the contract id → ksqlDB Fan-out D → ``ingestion_tasks``.
+    Without this, a failed upload is indistinguishable from "still running"/"unknown".
+    """
+    _seed_minio(minio_client)
+
+    contract_task_id = uuid.uuid4()  # <A> — the id storage returns to the caller
+    _dispatch_ingest(dispatch_app, namespace_row, task_id=contract_task_id, size=0)
+
+    try:
+        row = poll_until(
+            lambda: _fetch_one(
+                postgres_engine,
+                "SELECT status, failure_reason FROM ingestion_tasks "
+                "WHERE task_id = :tid",
+                {"tid": contract_task_id},
+            ),
+            timeout=_CDC_POLL_TIMEOUT_S,
+            interval=_CDC_POLL_INTERVAL_S,
+        )
+    except TimeoutError:
+        pytest.fail(
+            f"ingestion_tasks has no FAILURE row for the contract task_id "
+            f"{contract_task_id} — a failed upload is unresolvable by the caller."
+        )
+    assert row.status == "FAILURE", f"expected FAILURE, got {row.status!r}"
+    assert row.failure_reason is not None
+    assert "EmptyObjectError" in row.failure_reason
