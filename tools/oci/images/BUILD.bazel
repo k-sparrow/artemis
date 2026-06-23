@@ -876,7 +876,7 @@ kafka_connect_init_image(
 oci_load(
     name = "kafka-connect-init.tarball",
     image = ":kafka-connect-init",
-    repo_tags = ["apollo/cp-kafka-connect-init:latest"],
+    repo_tags = ["artemis/cp-kafka-connect-init:latest"],
 )
 
 command(

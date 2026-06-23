@@ -32,6 +32,16 @@ app.conf.result_serializer = "json"
 app.conf.database_create_tables_at_setup = True
 app.conf.result_extended = True
 
+# Stabilisation stopgap for heavy-PDF workloads until docling async API is adopted.
+# One worker slot per process ensures Docling/TEI calls don't queue behind each other
+# and prefetch=1 prevents a single worker from hoarding multiple long-running tasks.
+app.conf.worker_concurrency = 1
+app.conf.worker_prefetch_multiplier = 1
+# Global default: tasks ack on receipt so failed workers don't leave ghosts in the queue.
+# fetch_and_parse overrides this to acks_late=True (see tasks.py) so a crashed GPU worker
+# causes the broker to redeliver rather than silently drop the task.
+app.conf.task_acks_late = False
+
 # Two queues with different scaling profiles:
 #   fetch-and-parse  — GPU-bound (Docling); scale with GPU workers
 #   index            — I/O-bound (TEI + Qdrant + Postgres); scale independently

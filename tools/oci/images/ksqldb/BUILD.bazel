@@ -96,7 +96,7 @@ oci_load(
     name = "tarball",
     image = ":image",
     # use this tag as image name for KSQLDB in docker-compose.yaml
-    repo_tags = ["apollo/ksqldb-cli:latest"],
+    repo_tags = ["artemis/ksqldb-cli:latest"],
     visibility = ["//tools/oci/images:__pkg__"],
 )
 

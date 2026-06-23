@@ -126,6 +126,9 @@ services:
       interval: 10s
       timeout: 15s
       retries: 5
+    configs:
+      - source: rabbitmq-conf
+        target: /etc/rabbitmq/rabbitmq.conf
     networks:
       - default
   broker:
@@ -634,6 +637,11 @@ services:
     profiles: [dev-tools]
     image: artemis/ksqldb-cli:latest
     container_name: ksqldb-cli
+    # Interactive debug shell only. Override the image entrypoint so it does NOT
+    # re-apply the baked (stale) init.ksql against the live server — the init
+    # containers own the real topology. Exec in to poke at streams:
+    #   docker exec -it ksqldb-cli ksql http://ksqldb-server:8088
+    entrypoint: ["sleep", "infinity"]
     environment:
       KSQLDB_SERVER_URL: http://ksqldb-server:8088
     depends_on:
@@ -740,6 +748,12 @@ volumes:
   db-storage:
   s3-storage:
 configs:
+  rabbitmq-conf:
+    content: |
+      # 24-hour consumer timeout — required for heavy-PDF Docling tasks that run
+      # longer than RabbitMQ's default 30-minute delivery acknowledgement window.
+      # Remove once the worker migrates to docling's async task API.
+      consumer_timeout = 86400000
   jaeger-config:
     content: |
       service:

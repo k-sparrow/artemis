@@ -256,6 +256,7 @@ def ingest(
     pydantic=True,
     backend=_db_backend,
     result_serializer="json",
+    acks_late=True,
     autoretry_for=(pybreaker.CircuitBreakerError,),
     retry_kwargs={"max_retries": 5},
     retry_backoff=True,
