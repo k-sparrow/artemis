@@ -100,7 +100,7 @@ services:
       - default
   artemis-db-migrations:
     profiles: [infra]
-    image: artemis/db-migrations:dev
+    image: artemis/db-migrations:{ARTEMIS_TAG_DEV}
     restart: "no"
     depends_on:
       postgres:
@@ -184,7 +184,7 @@ services:
   # ---------------------------------------------------------------------------
   backend-storage:
     profiles: [backend, enterprise]
-    image: artemis/backend-storage:dev
+    image: artemis/backend-storage:{ARTEMIS_TAG_DEV}
     restart: unless-stopped
     depends_on:
       minio:
@@ -215,7 +215,7 @@ services:
       - default
   backend-indexing-controller-celery-worker:
     profiles: [backend, enterprise]
-    image: artemis/backend-controller-worker:latest
+    image: artemis/backend-controller-worker:{ARTEMIS_TAG_LATEST}
     restart: unless-stopped
     depends_on:
       rabbitmq:
@@ -250,7 +250,7 @@ services:
       - default
   backend-parsing:
     profiles: [backend, enterprise]
-    image: artemis/backend-parsing:dev
+    image: artemis/backend-parsing:{ARTEMIS_TAG_DEV}
     depends_on:
       docling-serve:
         condition: service_healthy
@@ -277,7 +277,7 @@ services:
       - default
   backend-indexing-ingestion:
     profiles: [backend, enterprise]
-    image: artemis/backend-indexing:dev
+    image: artemis/backend-indexing:{ARTEMIS_TAG_DEV}
     restart: on-failure
     depends_on:
       vectorstore:
@@ -332,7 +332,7 @@ services:
   # ---------------------------------------------------------------------------
   backend-enterprise-data-sources:
     profiles: [enterprise]
-    image: artemis/backend-data-sources:dev
+    image: artemis/backend-data-sources:{ARTEMIS_TAG_DEV}
     depends_on:
       postgres:
         condition: service_healthy
@@ -361,7 +361,7 @@ services:
       - default
   artemis-ksqldb-init:
     profiles: [backend, enterprise]
-    image: artemis/ksqldb-init:latest
+    image: artemis/ksqldb-init:{ARTEMIS_TAG_LATEST}
     container_name: artemis-ksqldb-init
     depends_on:
       ksqldb-server:
@@ -373,7 +373,7 @@ services:
       - default
   ksqldb-enterprise-init:
     profiles: [enterprise]
-    image: artemis/ksqldb-enterprise-init:latest
+    image: artemis/ksqldb-enterprise-init:{ARTEMIS_TAG_LATEST}
     container_name: ksqldb-enterprise-init
     depends_on:
       ksqldb-server:
@@ -387,7 +387,7 @@ services:
       - default
   artemis-kafka-connect-init:
     profiles: [enterprise]
-    image: artemis/cp-kafka-connect-init:latest
+    image: artemis/cp-kafka-connect-init:{ARTEMIS_TAG_LATEST}
     container_name: artemis-kafka-connect-init
     depends_on:
       kafka-connect:
@@ -401,7 +401,7 @@ services:
       - default
   backend-enterprise-intake:
     profiles: [enterprise]
-    image: artemis/backend-enterprise-intake:dev
+    image: artemis/backend-enterprise-intake:{ARTEMIS_TAG_DEV}
     depends_on:
       backend-storage:
         condition: service_healthy
@@ -426,7 +426,7 @@ services:
       - default
   kafka-connect:
     profiles: [enterprise]
-    image: artemis/cp-kafka-connect:latest
+    image: artemis/cp-kafka-connect:{ARTEMIS_TAG_LATEST}
     container_name: kafka-connect
     depends_on:
       - broker
@@ -567,7 +567,7 @@ services:
       - default
   backend-mcp:
     profiles: [mcp]
-    image: artemis/backend-mcp:dev
+    image: artemis/backend-mcp:{ARTEMIS_TAG_DEV}
     depends_on:
       backend-storage:
         condition: service_healthy
@@ -589,6 +589,7 @@ services:
       - "11000:11000"
     networks:
       - default
+  # >>> dev-only
   # ---------------------------------------------------------------------------
   # Dev-tools (development and testing only)
   # ---------------------------------------------------------------------------
@@ -635,7 +636,7 @@ services:
       - default
   ksqldb-cli:
     profiles: [dev-tools]
-    image: artemis/ksqldb-cli:latest
+    image: artemis/ksqldb-cli:{ARTEMIS_TAG_LATEST}
     container_name: ksqldb-cli
     # Interactive debug shell only. Override the image entrypoint so it does NOT
     # re-apply the baked (stale) init.ksql against the live server — the init
@@ -651,6 +652,7 @@ services:
     tty: true
     networks:
       - default
+  # <<< dev-only
   # ---------------------------------------------------------------------------
   # Observability
   # ---------------------------------------------------------------------------
@@ -730,7 +732,7 @@ services:
       - default
   artemis-apisix-init:
     profiles: [gateway]
-    image: artemis/apisix-init:latest
+    image: artemis/apisix-init:{ARTEMIS_TAG_LATEST}
     container_name: artemis-apisix-init
     depends_on:
       apisix:

@@ -30,3 +30,14 @@ genrule(
     tools = [":compose_generator"],
     visibility = ["//tests:__subpackages__"],
 )
+
+# Release/staging artifact — tagged artemis images (${ARTEMIS_VERSION}), dev-tools
+# dropped, gateway-only ingress. Consumed by //deployment/docker:docker_compose.update.
+genrule(
+    name = "docker_compose_release",
+    srcs = ["docker-compose.tmpl.yaml"],
+    outs = ["docker-compose.release.yaml"],
+    cmd = "$(location :compose_generator) --mode release --template $(location :docker-compose.tmpl.yaml) --output $@",
+    tools = [":compose_generator"],
+    visibility = ["//deployment/docker:__pkg__"],
+)

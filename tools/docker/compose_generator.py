@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Generate docker-compose YAML for dev or test modes from a template file.
+"""Generate docker-compose YAML for dev, test or release modes from a template.
 
 Usage:
-    compose_generator --mode dev|test --template PATH [--output PATH]
+    compose_generator --mode dev|test|release --template PATH [--output PATH]
 
 The template file uses {PLACEHOLDER} markers:
 
@@ -15,11 +15,27 @@ The template file uses {PLACEHOLDER} markers:
                        empty string in test mode (CPU-only TEI image)
   {COLBERT_COMMAND_BLOCK}  Full YAML list-form command block for the ColBERT vLLM service
   {COLBERT_GPU_BLOCK}      Multi-line YAML block for nvidia runtime + deploy section
+  {ARTEMIS_TAG_DEV}    Tag for artemis app images that ship a :dev variant
+  {ARTEMIS_TAG_LATEST} Tag for artemis images that ship a :latest variant
+
+Modes
+-----
+  dev      Local development. Artemis images at :dev/:latest; everything published.
+  test     e2e via testcontainers. CPU Docling/TEI, no GPU mounts.
+  release  Single-host staging/release of TAGGED images. Differs from dev by:
+             - artemis images pinned to ${ARTEMIS_VERSION} (must be set)
+             - dev-tools services dropped (the `# >>> dev-only` … `# <<< dev-only`
+               block is removed)
+             - gateway-only ingress: published host `ports:` stripped from every
+               service except the apisix gateway (internal `expose:` kept)
+           NOTE: still carries the dev secrets/passwords from the template — this
+           is a staging surface, not hardened prod. Override secrets before real use.
 
 Bazel integration
 -----------------
-  bazel run  //tools/docker:docker_compose.update   # writes deployment/docker/docker-compose.dev.yaml
-  bazel build //tools/docker:docker_compose_test    # produces bazel-bin artefact
+  bazel run  //tools/docker:docker_compose.update    # writes deployment/docker/docker-compose.dev.yaml
+  bazel build //tools/docker:docker_compose_test     # produces bazel-bin artefact
+  bazel build //tools/docker:docker_compose_release  # produces bazel-bin artefact
 """
 
 from __future__ import annotations
@@ -38,6 +54,31 @@ _GPU_DEPLOY_BLOCK = (
     "              count: all\n"
     "              capabilities: [gpu]\n"
     "    runtime: nvidia"
+)
+
+# Pinned to ${ARTEMIS_VERSION}; the `:?` form makes the release compose refuse to
+# start unless the operator pins a release tag (no accidental :latest/:dev).
+_ARTEMIS_TAG_RELEASE = "${ARTEMIS_VERSION:?set ARTEMIS_VERSION to a release tag}"
+
+# Markers in the template that bound the dev-tools section.
+_DEV_ONLY_OPEN = "# >>> dev-only"
+_DEV_ONLY_CLOSE = "# <<< dev-only"
+
+# Services whose published host ports survive in release mode (gateway ingress).
+_RELEASE_PORT_ALLOWLIST = frozenset({"apisix"})
+
+_RELEASE_BANNER = (
+    "# ============================================================================\n"
+    "# GENERATED — do not edit. Source: tools/docker/docker-compose.tmpl.yaml\n"
+    "# Release/staging variant: artemis images pinned to ${ARTEMIS_VERSION},\n"
+    "# dev-tools removed, gateway-only ingress.\n"
+    "#\n"
+    "#   ARTEMIS_VERSION=v1.0.0-alpha.2 docker compose \\\n"
+    "#     -f deployment/docker/docker-compose.release.yaml --profile <p> up -d\n"
+    "#\n"
+    "# WARNING: still carries the template's DEV secrets/passwords — override them\n"
+    "# (JWT_SECRET, MinIO/Postgres creds) before any non-staging use.\n"
+    "# ============================================================================\n"
 )
 
 _DEV_SUBS: dict[str, str] = {
@@ -63,6 +104,8 @@ _DEV_SUBS: dict[str, str] = {
         "      - '0.10'"
     ),
     "COLBERT_GPU_BLOCK": _GPU_DEPLOY_BLOCK,
+    "ARTEMIS_TAG_DEV": "dev",
+    "ARTEMIS_TAG_LATEST": "latest",
 }
 
 _TEST_SUBS: dict[str, str] = {
@@ -80,14 +123,99 @@ _TEST_SUBS: dict[str, str] = {
         "      - token_embed"
     ),
     "COLBERT_GPU_BLOCK": _GPU_DEPLOY_BLOCK,
+    "ARTEMIS_TAG_DEV": "dev",
+    "ARTEMIS_TAG_LATEST": "latest",
 }
+
+# Release reuses the dev (GPU, prod-image) substitutions, only the artemis tags
+# differ — both collapse to the pinned ${ARTEMIS_VERSION}.
+_RELEASE_SUBS: dict[str, str] = {
+    **_DEV_SUBS,
+    "ARTEMIS_TAG_DEV": _ARTEMIS_TAG_RELEASE,
+    "ARTEMIS_TAG_LATEST": _ARTEMIS_TAG_RELEASE,
+}
+
+_SUBS_BY_MODE = {"dev": _DEV_SUBS, "test": _TEST_SUBS, "release": _RELEASE_SUBS}
+
+
+def _leading_spaces(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _strip_dev_only(lines: list[str], *, keep_content: bool) -> list[str]:
+    """Drop the `# >>> dev-only` … `# <<< dev-only` markers.
+
+    keep_content=True  → remove only the marker lines (dev/test: section stays).
+    keep_content=False → remove the markers AND everything between them (release).
+    """
+    out: list[str] = []
+    inside = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == _DEV_ONLY_OPEN:
+            inside = True
+            continue
+        if stripped == _DEV_ONLY_CLOSE:
+            inside = False
+            continue
+        if inside and not keep_content:
+            continue
+        out.append(line)
+    return out
+
+
+def _strip_unpublished_ports(lines: list[str]) -> list[str]:
+    """Remove published `ports:` blocks for every service not in the allowlist.
+
+    Tracks the current top-level block (anchor at col 0 or service at 2-space
+    indent). A `ports:` key plus its deeper-indented list items is dropped unless
+    the owning service is allow-listed (the gateway). `expose:` is untouched.
+    """
+    out: list[str] = []
+    current_block: str | None = None
+    skipping_ports = False
+    ports_indent = 0
+
+    for line in lines:
+        indent = _leading_spaces(line)
+        stripped = line.strip()
+
+        if skipping_ports:
+            # Consume list items / mapping under the ports: key.
+            if stripped == "" or indent > ports_indent:
+                continue
+            skipping_ports = False  # fall through; re-classify this line
+
+        # Track the owning block: anchors (`x-foo: &foo`, col 0) and services
+        # (2-space indent, e.g. `  apisix:`).
+        if indent == 0 and (stripped.endswith(":") or " &" in stripped):
+            current_block = stripped.split(":", 1)[0]
+        elif indent == 2 and stripped.endswith(":"):
+            current_block = stripped[:-1]
+
+        if stripped == "ports:" and current_block not in _RELEASE_PORT_ALLOWLIST:
+            skipping_ports = True
+            ports_indent = indent
+            continue
+
+        out.append(line)
+    return out
 
 
 def generate(template: str, mode: str) -> str:
-    subs = _DEV_SUBS if mode == "dev" else _TEST_SUBS
+    subs = _SUBS_BY_MODE[mode]
     result = template
     for key, value in subs.items():
         result = result.replace("{" + key + "}", value)
+
+    lines = result.split("\n")
+    lines = _strip_dev_only(lines, keep_content=(mode != "release"))
+    if mode == "release":
+        lines = _strip_unpublished_ports(lines)
+    result = "\n".join(lines)
+
+    if mode == "release":
+        result = _RELEASE_BANNER + result
     return result
 
 
@@ -95,7 +223,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--mode",
-        choices=["dev", "test"],
+        choices=["dev", "test", "release"],
         required=True,
         help="Target environment.",
     )
@@ -127,7 +255,7 @@ def main() -> None:
             workspace, "deployment", "docker", "docker-compose.dev.yaml"
         )
     else:
-        print("--output is required for --mode test", file=sys.stderr)
+        print(f"--output is required for --mode {args.mode}", file=sys.stderr)
         sys.exit(1)
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
