@@ -13,6 +13,7 @@ load(
 )
 load("@rules_multirun//:defs.bzl", "command", "multirun")
 load("@rules_oci//oci:defs.bzl", oci_load = "oci_tarball")
+load("//tools/oci:stamped_tags.bzl", "stamped_tags")
 
 # srcs of the custom connects
 _CP_KAFKA_CONNECT_CONNECTORS_SRCS = {
@@ -41,11 +42,17 @@ kafka_connect_image(
     exposed_ports = ["8083"],
 )
 
+stamped_tags(
+    name = "kafka-connect.tarball.tags",
+    dev_tags = ["latest"],
+    repository = "artemis/cp-kafka-connect",
+)
+
 oci_load(
     name = "kafka-connect.tarball",
     image = ":kafka-connect",
     # use this tag as image name for Kafka Connect worker in docker-compose.yaml
-    repo_tags = ["artemis/cp-kafka-connect:latest"],
+    repo_tags = ":kafka-connect.tarball.tags",
 )
 
 command(
@@ -810,10 +817,16 @@ kafka_connect_init_image(
     exec_dir = "etc/bin",
 )
 
+stamped_tags(
+    name = "artemis-kafka-connect-init.tarball.tags",
+    dev_tags = ["latest"],
+    repository = "artemis/cp-kafka-connect-init",
+)
+
 oci_load(
     name = "artemis-kafka-connect-init.tarball",
     image = ":artemis-kafka-connect-init",
-    repo_tags = ["artemis/cp-kafka-connect-init:latest"],
+    repo_tags = ":artemis-kafka-connect-init.tarball.tags",
 )
 
 command(
@@ -873,10 +886,16 @@ kafka_connect_init_image(
     exec_dir = "etc/bin",  # nit: does this actually have to be exposed to the user?
 )
 
+stamped_tags(
+    name = "kafka-connect-init.tarball.tags",
+    dev_tags = ["latest"],
+    repository = "artemis/cp-kafka-connect-init",
+)
+
 oci_load(
     name = "kafka-connect-init.tarball",
     image = ":kafka-connect-init",
-    repo_tags = ["artemis/cp-kafka-connect-init:latest"],
+    repo_tags = ":kafka-connect-init.tarball.tags",
 )
 
 command(

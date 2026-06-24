@@ -1,3 +1,8 @@
 common --enable_bzlmod
 
 test --test_output=errors
+
+# Release version stamping (opt-in via --stamp). The status command always runs,
+# but STABLE_VERSION is only baked into outputs when --stamp is passed, so normal
+# dev builds are unaffected. Used by //tools/oci:stamped_tags for image versions.
+build --workspace_status_command=tools/workspace_status.sh

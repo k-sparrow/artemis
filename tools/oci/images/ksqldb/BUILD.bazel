@@ -7,6 +7,7 @@ Creates a custom KSQLDB image with the necessary initialization scripts and conf
 load("@aspect_bazel_lib//lib:tar.bzl", "mtree_mutate", "mtree_spec", "tar")  # @unused
 load("@rules_multirun//:defs.bzl", "multirun")
 load("@rules_oci//oci:defs.bzl", "oci_image", oci_load = "oci_tarball")  #@unused
+load("//tools/oci:stamped_tags.bzl", "stamped_tags")
 
 # This script contains the KSQL code that creates and manipulates Kafka streams
 # using KSQL language
@@ -92,11 +93,17 @@ oci_image(
     visibility = ["//tools/oci/images:__pkg__"],
 )
 
+stamped_tags(
+    name = "tarball.tags",
+    dev_tags = ["latest"],
+    repository = "artemis/ksqldb-cli",
+)
+
 oci_load(
     name = "tarball",
     image = ":image",
     # use this tag as image name for KSQLDB in docker-compose.yaml
-    repo_tags = ["artemis/ksqldb-cli:latest"],
+    repo_tags = ":tarball.tags",
     visibility = ["//tools/oci/images:__pkg__"],
 )
 
@@ -163,10 +170,16 @@ oci_image(
     visibility = ["//tools/oci/images:__pkg__"],
 )
 
+stamped_tags(
+    name = "artemis_init_tarball.tags",
+    dev_tags = ["latest"],
+    repository = "artemis/ksqldb-init",
+)
+
 oci_load(
     name = "artemis_init_tarball",
     image = ":artemis_init_image",
-    repo_tags = ["artemis/ksqldb-init:latest"],
+    repo_tags = ":artemis_init_tarball.tags",
     visibility = ["//tools/oci/images:__pkg__"],
 )
 
@@ -233,10 +246,16 @@ oci_image(
     visibility = ["//tools/oci/images:__pkg__"],
 )
 
+stamped_tags(
+    name = "enterprise_init_tarball.tags",
+    dev_tags = ["latest"],
+    repository = "artemis/ksqldb-enterprise-init",
+)
+
 oci_load(
     name = "enterprise_init_tarball",
     image = ":enterprise_init_image",
-    repo_tags = ["artemis/ksqldb-enterprise-init:latest"],
+    repo_tags = ":enterprise_init_tarball.tags",
     visibility = ["//tools/oci/images:__pkg__"],
 )
 

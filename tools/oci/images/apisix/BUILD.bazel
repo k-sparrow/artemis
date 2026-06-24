@@ -1,5 +1,6 @@
 load("@aspect_bazel_lib//lib:tar.bzl", "mtree_mutate", "mtree_spec", "tar")
 load("@rules_oci//oci:defs.bzl", "oci_image", oci_load = "oci_tarball")
+load("//tools/oci:stamped_tags.bzl", "stamped_tags")
 
 _INIT_DIR = "home/appuser"
 
@@ -40,9 +41,15 @@ oci_image(
     visibility = ["//tools/oci/images:__pkg__"],
 )
 
+stamped_tags(
+    name = "init_tarball.tags",
+    dev_tags = ["latest"],
+    repository = "artemis/apisix-init",
+)
+
 oci_load(
     name = "init_tarball",
     image = ":init_image",
-    repo_tags = ["artemis/apisix-init:latest"],
+    repo_tags = ":init_tarball.tags",
     visibility = ["//tools/oci/images:__pkg__"],
 )

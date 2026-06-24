@@ -15,6 +15,7 @@ load("//tools/backend:uvicorn.bzl", "uvicorn_server")
 # load("//tools/server:celery.bzl", "celery_worker")
 
 load("//tools/oci:py_layer.bzl", "py_oci_image")
+load("//tools/oci:stamped_tags.bzl", "stamped_tags")
 
 package(
     default_visibility = [
@@ -183,10 +184,17 @@ py_oci_image(
 )
 
 # $ bazel run //src/backend/storage/api:tarball.dev
+# Release: $ bazel run //src/backend/storage/api:tarball.dev --stamp
+stamped_tags(
+    name = "tarball.dev.tags",
+    dev_tags = ["dev"],
+    repository = "artemis/backend-storage",
+)
+
 oci_load(
     name = "tarball.dev",
     image = ":image",
-    repo_tags = ["artemis/backend-storage:dev"],
+    repo_tags = ":tarball.dev.tags",
     visibility = [
         "//src:__pkg__",
     ],

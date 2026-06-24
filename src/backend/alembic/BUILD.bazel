@@ -6,6 +6,7 @@ load("@aspect_rules_py//py:defs.bzl", "py_binary")
 load("@pip//:requirements.bzl", "requirement")
 load("@rules_oci//oci:defs.bzl", oci_load = "oci_tarball")
 load("//tools/oci:py_layer.bzl", "py_oci_image")
+load("//tools/oci:stamped_tags.bzl", "stamped_tags")
 
 py_binary(
     name = "run_migrations",
@@ -34,10 +35,16 @@ py_oci_image(
     visibility = ["//src/backend:__pkg__"],
 )
 
+stamped_tags(
+    name = "tarball.dev.tags",
+    dev_tags = ["dev"],
+    repository = "artemis/db-migrations",
+)
+
 oci_load(
     name = "tarball.dev",
     image = ":image",
-    repo_tags = ["artemis/db-migrations:dev"],
+    repo_tags = ":tarball.dev.tags",
     visibility = [
         "//src:__pkg__",
         "//tests:__subpackages__",

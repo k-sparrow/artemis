@@ -9,6 +9,7 @@ load("@pip//:requirements.bzl", "requirement")
 load("@rules_oci//oci:defs.bzl", oci_load = "oci_tarball")
 load("//tools/backend:uvicorn.bzl", "uvicorn_server")
 load("//tools/oci:py_layer.bzl", "py_oci_image")
+load("//tools/oci:stamped_tags.bzl", "stamped_tags")
 
 package(
     default_visibility = [
@@ -99,9 +100,15 @@ py_oci_image(
     visibility = ["//src/backend:__pkg__"],
 )
 
+stamped_tags(
+    name = "tarball.dev.tags",
+    dev_tags = ["dev"],
+    repository = "artemis/backend-enterprise-intake",
+)
+
 oci_load(
     name = "tarball.dev",
     image = ":image",
-    repo_tags = ["artemis/backend-enterprise-intake:dev"],
+    repo_tags = ":tarball.dev.tags",
     visibility = ["//src:__pkg__"],
 )

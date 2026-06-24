@@ -9,6 +9,7 @@ load("@pip//:requirements.bzl", "requirement")
 load("@rules_oci//oci:defs.bzl", "oci_push", oci_load = "oci_tarball")
 load("//tools/backend:uvicorn.bzl", "uvicorn_server")
 load("//tools/oci:py_layer.bzl", "py_oci_image")
+load("//tools/oci:stamped_tags.bzl", "stamped_tags")
 
 package(default_visibility = [
     "//src/backend:__subpackages__",
@@ -149,10 +150,16 @@ py_oci_image(
 )
 
 # $ bazel run //src/backend/indexing/api:tarball.dev
+stamped_tags(
+    name = "tarball.dev.tags",
+    dev_tags = ["dev"],
+    repository = "artemis/backend-indexing",
+)
+
 oci_load(
     name = "tarball.dev",
     image = ":image.dev",
-    repo_tags = ["artemis/backend-indexing:dev"],
+    repo_tags = ":tarball.dev.tags",
     visibility = ["//src:__pkg__"],
 )
 
