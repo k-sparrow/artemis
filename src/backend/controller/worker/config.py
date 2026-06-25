@@ -49,7 +49,7 @@ class WorkerSettings(BaseSettings):
     PARSED_CHUNKS_BUCKET: str = "parsed-chunks"
 
     # httpx timeout (seconds) for calls to parsing and indexing services
-    HTTPX_TIMEOUT: float = 300.0
+    HTTPX_TIMEOUT: float = 86400.0
 
     # Celery exchange name
     EXCHANGE_NAME: str
