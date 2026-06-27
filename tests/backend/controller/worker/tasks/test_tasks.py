@@ -14,7 +14,11 @@ from __future__ import annotations
 import uuid
 from unittest.mock import ANY, MagicMock, patch
 
+import httpx
+import pybreaker
 import pytest
+from celery import states
+from celery.exceptions import Retry
 
 from src.backend.controller.lib.schemas import (
     BlobRef,
@@ -24,9 +28,6 @@ from src.backend.controller.lib.schemas import (
     UploadAction,
 )
 from src.backend.controller.worker.exceptions import EmptyObjectError
-
-# ----- module under test (imported after conftest patches the app) ----------
-from celery import states
 
 from src.backend.controller.worker.tasks import (
     FailureRecordingTask,
@@ -484,3 +485,171 @@ class TestIndex:
                 )
 
         mock_store.return_value.delete.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Retry strategy
+# ---------------------------------------------------------------------------
+
+
+def _make_http_error(status_code: int) -> httpx.HTTPStatusError:
+    response = MagicMock(spec=httpx.Response)
+    response.status_code = status_code
+    return httpx.HTTPStatusError(
+        str(status_code), request=MagicMock(), response=response
+    )
+
+
+class TestFetchAndParseRetry:
+    """Retry strategy for fetch_and_parse.
+
+    503 → Celery first line of defence: exponential backoff, max_retries=20.
+    CircuitBreakerError → wait one full reset window before probing:
+        countdown = reset_timeout(120) + 5 margin + jitter([0, 30]) → [125, 155].
+    4xx → permanent failure, no retry.
+    """
+
+    def _run_expecting_retry(self, exc: Exception) -> MagicMock:
+        mock_retry = MagicMock(side_effect=Retry())
+        with (
+            patch(
+                "src.backend.controller.worker.tasks.call_parsing_service",
+                side_effect=exc,
+            ),
+            patch.object(fetch_and_parse, "retry", mock_retry),
+        ):
+            with pytest.raises(Retry):
+                fetch_and_parse.run(_S3, _SOURCE, _NAMESPACE_ID)
+        return mock_retry
+
+    def test_5xx_retried_with_exponential_backoff(self) -> None:
+        mock_retry = self._run_expecting_retry(_make_http_error(503))
+        mock_retry.assert_called_once()
+        kw = mock_retry.call_args.kwargs
+        assert kw["max_retries"] == 20
+        # First attempt: backoff = min(120, 2^0) = 1s, jitter in [0, 1] → [1, 2]
+        assert 1 <= kw["countdown"] <= 2
+
+    def test_circuit_breaker_retried_after_reset_window(self) -> None:
+        mock_retry = self._run_expecting_retry(
+            pybreaker.CircuitBreakerError("Timeout not elapsed yet")
+        )
+        mock_retry.assert_called_once()
+        kw = mock_retry.call_args.kwargs
+        assert kw["max_retries"] == 20
+        # countdown = 120 + 5 + jitter([0, 30]) → [125, 155]
+        assert 125 <= kw["countdown"] <= 155
+
+    def test_4xx_propagates_without_retry(self) -> None:
+        mock_retry = MagicMock()
+        with (
+            patch(
+                "src.backend.controller.worker.tasks.call_parsing_service",
+                side_effect=_make_http_error(400),
+            ),
+            patch.object(fetch_and_parse, "retry", mock_retry),
+        ):
+            with pytest.raises(httpx.HTTPStatusError):
+                fetch_and_parse.run(_S3, _SOURCE, _NAMESPACE_ID)
+        mock_retry.assert_not_called()
+
+
+class TestIndexRetry:
+    """Retry strategy for index — mirrors fetch_and_parse but via indexing_breaker."""
+
+    def _run_expecting_retry(self, exc: Exception) -> MagicMock:
+        mock_retry = MagicMock(side_effect=Retry())
+        with (
+            patch(
+                "src.backend.controller.worker.tasks.call_indexing_service",
+                side_effect=exc,
+            ),
+            patch.object(index, "retry", mock_retry),
+        ):
+            with pytest.raises(Retry):
+                index.run(
+                    _ARTIFACT_REF, _NAMESPACE_ID, "CREATE", source=_SOURCE, s3=_S3
+                )
+        return mock_retry
+
+    def test_5xx_retried_with_exponential_backoff(self) -> None:
+        mock_retry = self._run_expecting_retry(_make_http_error(503))
+        mock_retry.assert_called_once()
+        kw = mock_retry.call_args.kwargs
+        assert kw["max_retries"] == 20
+        assert 1 <= kw["countdown"] <= 2
+
+    def test_circuit_breaker_retried_after_reset_window(self) -> None:
+        mock_retry = self._run_expecting_retry(
+            pybreaker.CircuitBreakerError("Timeout not elapsed yet")
+        )
+        mock_retry.assert_called_once()
+        kw = mock_retry.call_args.kwargs
+        assert kw["max_retries"] == 20
+        assert 125 <= kw["countdown"] <= 155
+
+
+class TestDeleteDocumentRetry:
+    """Retry strategy for delete_document."""
+
+    def _run_expecting_retry(self, exc: Exception) -> MagicMock:
+        mock_retry = MagicMock(side_effect=Retry())
+        with (
+            patch(
+                "src.backend.controller.worker.tasks.call_delete_service",
+                side_effect=exc,
+            ),
+            patch.object(delete_document, "retry", mock_retry),
+        ):
+            with pytest.raises(Retry):
+                delete_document.run(source=_SOURCE, namespace_id=_NAMESPACE_ID)
+        return mock_retry
+
+    def test_5xx_retried_with_exponential_backoff(self) -> None:
+        mock_retry = self._run_expecting_retry(_make_http_error(503))
+        mock_retry.assert_called_once()
+        kw = mock_retry.call_args.kwargs
+        assert kw["max_retries"] == 20
+        assert 1 <= kw["countdown"] <= 2
+
+    def test_circuit_breaker_retried_after_reset_window(self) -> None:
+        mock_retry = self._run_expecting_retry(
+            pybreaker.CircuitBreakerError("Timeout not elapsed yet")
+        )
+        mock_retry.assert_called_once()
+        kw = mock_retry.call_args.kwargs
+        assert kw["max_retries"] == 20
+        assert 125 <= kw["countdown"] <= 155
+
+
+class TestDeleteNamespaceRetry:
+    """Retry strategy for delete_namespace."""
+
+    def _run_expecting_retry(self, exc: Exception) -> MagicMock:
+        mock_retry = MagicMock(side_effect=Retry())
+        with (
+            patch(
+                "src.backend.controller.worker.tasks.call_delete_service",
+                side_effect=exc,
+            ),
+            patch.object(delete_namespace, "retry", mock_retry),
+        ):
+            with pytest.raises(Retry):
+                delete_namespace.run(namespace_id=_NAMESPACE_ID)
+        return mock_retry
+
+    def test_5xx_retried_with_exponential_backoff(self) -> None:
+        mock_retry = self._run_expecting_retry(_make_http_error(503))
+        mock_retry.assert_called_once()
+        kw = mock_retry.call_args.kwargs
+        assert kw["max_retries"] == 20
+        assert 1 <= kw["countdown"] <= 2
+
+    def test_circuit_breaker_retried_after_reset_window(self) -> None:
+        mock_retry = self._run_expecting_retry(
+            pybreaker.CircuitBreakerError("Timeout not elapsed yet")
+        )
+        mock_retry.assert_called_once()
+        kw = mock_retry.call_args.kwargs
+        assert kw["max_retries"] == 20
+        assert 125 <= kw["countdown"] <= 155

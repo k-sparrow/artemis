@@ -70,14 +70,14 @@ class _LoggingListener(pybreaker.CircuitBreakerListener):
 
 parsing_breaker = pybreaker.CircuitBreaker(
     fail_max=3,
-    reset_timeout=60,
+    reset_timeout=120,
     name="parsing",
     listeners=[_LoggingListener()],
 )
 
 indexing_breaker = pybreaker.CircuitBreaker(
     fail_max=3,
-    reset_timeout=60,
+    reset_timeout=120,
     name="indexing",
     listeners=[_LoggingListener()],
 )

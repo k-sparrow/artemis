@@ -27,7 +27,10 @@ wire and the Postgres result backend lean.
 from __future__ import annotations
 
 import logging
+import random
 import uuid
+
+import httpx
 
 from celery import Task, chain, states
 from celery.signals import worker_ready
@@ -60,6 +63,8 @@ from src.backend.controller.worker.utils import (
     call_delete_service,
     call_indexing_service,
     call_parsing_service,
+    indexing_breaker,
+    parsing_breaker,
 )
 from src.lib.core.adapters.stores.minio.blob import MinioBlobStore
 
@@ -257,10 +262,6 @@ def ingest(
     backend=_db_backend,
     result_serializer="json",
     acks_late=True,
-    autoretry_for=(pybreaker.CircuitBreakerError,),
-    retry_kwargs={"max_retries": 5},
-    retry_backoff=True,
-    retry_backoff_max=120,
 )
 def fetch_and_parse(
     self,
@@ -280,6 +281,12 @@ def fetch_and_parse(
 
     Failure modes (non-retryable):
         EmptyObjectError — contract reports size=0; empty file, nothing to index.
+
+    Retry strategy:
+        CircuitBreakerError — parsing service known-down; wait one full reset
+        window (reset_timeout + jitter) before probing again, up to max_retries.
+        HTTPStatusError 5xx — transient upstream failure; exponential backoff
+        with jitter, up to max_retries. 4xx errors are permanent and not retried.
     """
     with _tracer.start_as_current_span("tasks.fetch_and_parse") as span:
         # The contract task_id propagated from `ingest`; fall back to this
@@ -295,13 +302,30 @@ def fetch_and_parse(
             raise EmptyObjectError(str(source.obj_id))
 
         source_ref = BlobRef(bucket=s3.bucket, key=s3.object)
-        artifact = call_parsing_service(
-            source_ref=source_ref,
-            source=source,
-            parsing_url=settings.PARSING_SERVICE_URL,
-            timeout=settings.HTTPX_TIMEOUT,
-            logger=logger,
-        )
+        try:
+            artifact = call_parsing_service(
+                source_ref=source_ref,
+                source=source,
+                parsing_url=settings.PARSING_SERVICE_URL,
+                timeout=settings.HTTPX_TIMEOUT,
+                logger=logger,
+            )
+        except pybreaker.CircuitBreakerError as exc:
+            jitter = random.uniform(0, parsing_breaker.reset_timeout * 0.25)
+            raise self.retry(
+                exc=exc,
+                countdown=parsing_breaker.reset_timeout + 5 + jitter,
+                max_retries=20,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code >= 500:
+                backoff = min(120, 2**self.request.retries)
+                raise self.retry(
+                    exc=exc,
+                    countdown=backoff + random.uniform(0, backoff),
+                    max_retries=20,
+                )
+            raise
         logger.info("fetch_and_parse=artifact key=%s", artifact.key)
         return artifact.model_dump(mode="json")
 
@@ -314,15 +338,13 @@ def fetch_and_parse(
 @app.task(
     name="tasks.index",
     base=FailureRecordingTask,
+    bind=True,
     pydantic=True,
     backend=_db_backend,
     result_serializer="json",
-    autoretry_for=(Exception,),
-    retry_kwargs={"max_retries": 5},
-    retry_backoff=True,
-    retry_backoff_max=120,
 )
 def index(
+    self,
     artifact_ref: BlobRef,
     namespace_id: uuid.UUID,
     upload_action: str,
@@ -346,14 +368,31 @@ def index(
         obj_id = str(source.obj_id) if source is not None else ""
         span.set_attribute("artemis.obj_id", obj_id)
 
-        result = call_indexing_service(
-            artifact_ref=artifact_ref,
-            namespace_id=namespace_id,
-            ingestion_url=settings.INGESTION_SERVICE_URL,
-            timeout=settings.HTTPX_TIMEOUT,
-            logger=logger,
-            group_id=group_id,
-        )
+        try:
+            result = call_indexing_service(
+                artifact_ref=artifact_ref,
+                namespace_id=namespace_id,
+                ingestion_url=settings.INGESTION_SERVICE_URL,
+                timeout=settings.HTTPX_TIMEOUT,
+                logger=logger,
+                group_id=group_id,
+            )
+        except pybreaker.CircuitBreakerError as exc:
+            jitter = random.uniform(0, indexing_breaker.reset_timeout * 0.25)
+            raise self.retry(
+                exc=exc,
+                countdown=indexing_breaker.reset_timeout + 5 + jitter,
+                max_retries=20,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code >= 500:
+                backoff = min(120, 2**self.request.retries)
+                raise self.retry(
+                    exc=exc,
+                    countdown=backoff + random.uniform(0, backoff),
+                    max_retries=20,
+                )
+            raise
 
         # Cleanup: delete the artifact after a successful index (orchestrator owns
         # the artifact lifecycle). Left in place on failure for replay.
@@ -393,15 +432,13 @@ def index(
 @app.task(
     name="tasks.delete_document",
     base=FailureRecordingTask,
+    bind=True,
     pydantic=True,
     backend=_db_backend,
     result_serializer="json",
-    autoretry_for=(Exception,),
-    retry_kwargs={"max_retries": 5},
-    retry_backoff=True,
-    retry_backoff_max=120,
 )
 def delete_document(
+    self,
     source: SourceDetails,
     namespace_id: uuid.UUID,
     task_id: str | None = None,
@@ -414,13 +451,30 @@ def delete_document(
     entries for the object. ``task_id`` is the contract id propagated from
     ``ingest`` so the deletion's ``ingestion_tasks`` row is keyed by it.
     """
-    call_delete_service(
-        namespace_id=namespace_id,
-        obj_id=str(source.obj_id),
-        ingestion_url=settings.INGESTION_SERVICE_URL,
-        timeout=settings.HTTPX_TIMEOUT,
-        logger=logger,
-    )
+    try:
+        call_delete_service(
+            namespace_id=namespace_id,
+            obj_id=str(source.obj_id),
+            ingestion_url=settings.INGESTION_SERVICE_URL,
+            timeout=settings.HTTPX_TIMEOUT,
+            logger=logger,
+        )
+    except pybreaker.CircuitBreakerError as exc:
+        jitter = random.uniform(0, indexing_breaker.reset_timeout * 0.25)
+        raise self.retry(
+            exc=exc,
+            countdown=indexing_breaker.reset_timeout + jitter,
+            max_retries=20,
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code >= 500:
+            backoff = min(120, 2**self.request.retries)
+            raise self.retry(
+                exc=exc,
+                countdown=backoff + random.uniform(0, backoff),
+                max_retries=20,
+            )
+        raise
     logger.info(
         "delete_document=done namespace=%s obj_id=%s", namespace_id, source.obj_id
     )
@@ -448,25 +502,39 @@ def delete_document(
 
 @app.task(
     name="tasks.delete_namespace",
+    bind=True,
     pydantic=True,
     backend=_db_backend,
     result_serializer="json",
-    autoretry_for=(Exception,),
-    retry_kwargs={"max_retries": 5},
-    retry_backoff=True,
-    retry_backoff_max=120,
 )
-def delete_namespace(namespace_id: uuid.UUID) -> dict:
+def delete_namespace(self, namespace_id: uuid.UUID) -> dict:
     """Remove all documents for *namespace_id* from the indexing service.
 
     Calls ``DELETE /ingest?namespace=<namespace_id>`` (no ``source`` param),
     which triggers a full namespace wipe via ``pipeline.aprocess([])``.
     """
-    call_delete_service(
-        namespace_id=namespace_id,
-        ingestion_url=settings.INGESTION_SERVICE_URL,
-        timeout=settings.HTTPX_TIMEOUT,
-        logger=logger,
-    )
+    try:
+        call_delete_service(
+            namespace_id=namespace_id,
+            ingestion_url=settings.INGESTION_SERVICE_URL,
+            timeout=settings.HTTPX_TIMEOUT,
+            logger=logger,
+        )
+    except pybreaker.CircuitBreakerError as exc:
+        jitter = random.uniform(0, indexing_breaker.reset_timeout * 0.25)
+        raise self.retry(
+            exc=exc,
+            countdown=indexing_breaker.reset_timeout + jitter,
+            max_retries=20,
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code >= 500:
+            backoff = min(120, 2**self.request.retries)
+            raise self.retry(
+                exc=exc,
+                countdown=backoff + random.uniform(0, backoff),
+                max_retries=20,
+            )
+        raise
     logger.info("delete_namespace=done namespace=%s", namespace_id)
     return {"status": "deleted_namespace", "namespace_id": str(namespace_id)}
