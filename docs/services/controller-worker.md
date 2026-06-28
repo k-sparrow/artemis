@@ -80,38 +80,69 @@ polling via `self.retry`) is planned in Epic 18.
 
 ---
 
-## Retry Policy
+## Resiliency Layers
 
-Both `fetch_and_parse` and `index` use:
-```python
-autoretry_for=(Exception,)
-max_retries=5
-retry_backoff=True          # exponential backoff
-retry_backoff_max=120       # seconds
-retry_jitter=True
+The worker uses two co-operating layers to handle downstream service failures. Each layer
+has a distinct responsibility and they must not be conflated.
+
+### Layer 1 — Celery retry (first line of defence)
+
+All four tasks (`fetch_and_parse`, `index`, `delete_document`, `delete_namespace`) use
+manual `try/except` blocks instead of `autoretry_for`. This is intentional: the two
+retryable exception types require different backoff strategies, and `autoretry_for` applies
+one configuration to all listed exceptions.
+
+| Exception | Behaviour | Countdown | Max retries |
+|-----------|-----------|-----------|-------------|
+| `httpx.HTTPStatusError` 5xx | Transient upstream failure — retry | `min(120, 2^n) + jitter([0, backoff])` | 20 |
+| `pybreaker.CircuitBreakerError` | Breaker open — wait for reset window | `reset_timeout + 5s + jitter([0, 30s])` = 125–155s | 20 |
+| `httpx.HTTPStatusError` 4xx | Permanent failure (bad input, bad format) — propagate | — | — |
+
+`n` is `self.request.retries` (0-indexed), giving delays of ~1 s, ~2 s, ~4 s … up to 120 s
+for transient HTTP errors. Jitter on both paths prevents thundering-herd when multiple
+tasks are rescheduled simultaneously after a service recovery.
+
+With `max_retries=20` on `CircuitBreakerError` and a 125–155 s window per attempt, the
+worker tolerates up to ~43 minutes of parsing or indexing service downtime before marking
+a task as terminal `FAILURE`.
+
+### Layer 2 — Circuit breakers (second line of defence)
+
+Two `pybreaker.CircuitBreaker` module-level singletons guard outbound HTTP calls:
+
+| Breaker | Wraps | Opens after | Probes after |
+|---------|-------|-------------|--------------|
+| `parsing_breaker` | `call_parsing_service` | 3 consecutive failures | 120 s (HALF-OPEN) |
+| `indexing_breaker` | `call_indexing_service`, `call_delete_service` | 3 consecutive failures | 120 s (HALF-OPEN) |
+
+**Role:** once a downstream is known to be failing, the circuit breaker fast-fails
+subsequent calls without making a network request. This protects the downstream service
+from being hammered by the worker draining its queue during an outage.
+
+**Interaction with Layer 1:**
+
+```
+t=0      Task A → real HTTP call → 503   → HTTPStatusError → Celery retry in ~1s   (breaker counter=1)
+t=1      Task A → real HTTP call → 503   → HTTPStatusError → Celery retry in ~2s   (breaker counter=2)
+t=3      Task A → real HTTP call → 503   → CircuitBreakerError ("Failures threshold reached")
+                                          → Celery retry in 125–155s               (breaker OPEN)
+
+t=0      Task B → CircuitBreakerError ("Timeout not elapsed yet")
+                → Celery retry in 125–155s  (no HTTP call made)
+...
+
+t=120    Breaker auto-transitions OPEN → HALF-OPEN
+t=125+   Task A retry fires → real HTTP probe:
+           ✓ 200 → breaker CLOSES → task succeeds, all subsequent tasks flow normally
+           ✗ 503 → breaker reopens → Celery reschedules in 125–155s
 ```
 
-`tasks.ingest` and `tasks.delete_document` autoretry only on `CircuitBreakerError`
-(which is thrown when downstream services are overwhelmed). Other failures propagate
-immediately to the `on_failure` handler.
+The 5-second margin and jitter on the `CircuitBreakerError` countdown ensure Celery
+retries always land after the HALF-OPEN window opens, never racing with a probe that has
+not yet fired.
 
----
-
-## Circuit Breakers
-
-Two `pybreaker.CircuitBreaker` instances are module-level singletons:
-
-| Breaker | Downstream | Opens after | Resets after |
-|---------|-----------|-------------|-------------|
-| `parsing_breaker` | Parsing service | 3 failures | 60 seconds |
-| `indexing_breaker` | Indexing service | 3 failures | 60 seconds |
-
-When a breaker opens, all tasks that call through it raise `CircuitBreakerError`. The
-autoretry policy catches this and schedules a retry with exponential backoff. Once the
-reset timeout elapses, the next retry attempt closes the breaker.
-
-A `_LoggingListener` logs state transitions (CLOSED → OPEN → HALF_OPEN) as WARNING
-messages; monitor these for downstream service health signals.
+State transitions are logged at WARNING level by `_LoggingListener`; monitor
+`circuit_breaker=<name> state=<old>-><new>` log lines for downstream health signals.
 
 ---
 
