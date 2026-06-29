@@ -10,6 +10,8 @@ Celery task chain that handles parsing and indexing independently.
 
 ## System Overview
 
+### Indexing
+
 ```mermaid
 flowchart LR
     FS[("File System")]
@@ -43,102 +45,48 @@ flowchart LR
     queue --> ingestion
     ingestion --> PG[("PostgreSQL")]
     ingestion --> Qdrant[("Qdrant")]
+    ingestion --> S3[("MinIO S3")]
+
+    click enterprise href "./enterprise-subsystem.md"
+    click dispatch href "./dispatch-subsystem.md"
+    click queue href "./task-queue.md"
+    click ingestion href "./ingestion-subsystem.md"
 ```
 
----
+A file upload enters the system through one of two paths: private clients POST directly to
+the storage service, while enterprise sources are watched by Kafka Connect FileSource
+connectors managed by the data sources service. Both paths converge at the dispatch
+subsystem, which writes the file to MinIO and emits a notification event. The event flows
+through the task queue to the ingestion subsystem, where a Celery worker orchestrates a
+parse → embed → store chain: the parsing service drives Docling to extract structured
+chunks, the indexing service embeds them via TEI and writes vectors to Qdrant, page-level
+text to MinIO S3, and task metadata to PostgreSQL.
 
-## Private Ingestion
+### Retrieval
 
 ```mermaid
 flowchart LR
-    Client -->|"POST /namespaces/id/objects"| Storage["Storage\n(7000)"]
+    QueryClient(["Query\nClient"])
 
-    subgraph streaming["Stream Processing"]
-        MinIO --> Kafka --> ksqlDB --> RabbitMQ
+    subgraph retrieval[ ]
+        r["&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;\nRetrieval Subsystem\n&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"]
     end
 
-    Storage --> MinIO
+    style r fill:none,stroke:none
 
-    subgraph worker["Controller Worker"]
-        Worker --> Parsing["Parsing\n(10001)"]
-        Parsing -->|"artifact BlobRef"| Worker
-        Worker --> Indexing["Indexing\n(10000)"]
-    end
+    Qdrant[("Qdrant")] -->|"chunks"| retrieval
+    PG[("PostgreSQL")] --> retrieval
+    S3[("MinIO S3")] -->|"parent pages"| retrieval
+    retrieval --> QueryClient
 
-    RabbitMQ --> Worker
-
-    subgraph ai["AI Services"]
-        Docling["Docling\n(5001)"]
-        TEI["TEI\n(11435)"]
-        ColBERT["ColBERT/vLLM\n(11436)"]
-    end
-
-    Parsing --> Docling
-    Indexing --> TEI
-    Indexing --> Qdrant[("Qdrant\n(6333)")]
-    Indexing --> Postgres[("Postgres\n(5432)")]
-    Indexing -->|"parent pages"| MinIO2[("MinIO")]
+    click retrieval href "./retrieval-subsystem.md"
 ```
 
-The storage service writes the uploaded file to MinIO and records metadata in Postgres.
-MinIO emits a Kafka notification. ksqlDB reshapes it into a Celery task message and routes
-it to RabbitMQ. The controller worker calls the parsing service (which drives Docling),
-receives a `BlobRef` to the parse artifact, then calls the indexing service which embeds
-chunks via TEI and writes vectors to Qdrant. The CDC pipeline propagates the final task
-result back to `ingested_objects` and `ingestion_tasks`.
-
-See [Ingestion Walkthrough](../guides/ingestion-walkthrough.md) for a step-by-step trace.
-
----
-
-## Enterprise Ingestion
-
-```mermaid
-flowchart LR
-    FS["File System"] -->|watch| FileSource["Camel\nFileSource"]
-
-    subgraph streaming["Stream Processing"]
-        Kafka2["Kafka"] --> ksqlDB2["ksqlDB"] --> HTTPSink["Aiven\nHTTP Sink"]
-    end
-
-    FileSource --> Kafka2
-    HTTPSink --> Intake["Enterprise Intake\n(9000)"]
-    Intake -->|"proxy upload"| Storage["Storage\n(7000)"]
-    Storage -->|"same as private ingestion"| Pipeline["..."]
-```
-
-A Kafka Connect source connector (e.g. Camel FileWatch) monitors a directory. When a new
-file appears, it emits an event carrying file path and ownership headers. ksqlDB reshapes
-this into an `IntakeRequest` and the Aiven HTTP sink delivers it to the enterprise intake
-service. The intake service reads the file bytes from disk and proxies the upload to the
-storage service, joining the private ingestion pipeline from there.
-
----
-
-## Retrieval
-
-```mermaid
-flowchart LR
-    Client -->|"POST /retrieve/invoke"| Indexing["Indexing\n(10000)"]
-
-    subgraph modes["Retrieval Modes"]
-        Dense["Dense\n(TEI + Qdrant)"]
-        Hybrid["Hybrid\n(BM25 + Dense)"]
-        Rerank["Multi-stage\n(+ ColBERT rerank)"]
-    end
-
-    Indexing --> Dense & Hybrid & Rerank
-    Dense & Hybrid & Rerank -->|chunks| Indexing
-    Indexing -->|"optional: parent pages"| MinIO[("MinIO")]
-    Indexing --> Client
-```
-
-A client sends a query to `/retrieve/invoke`. The indexing service embeds the query with
-TEI, queries Qdrant (dense, hybrid BM25+dense, or multi-stage with ColBERT reranking
-depending on `RETRIEVAL_MODE`), and optionally dereferences chunk `parent_id` keys to
-return full page text from the MinIO doc store.
-
-See [Retrieval Modes](../guides/retrieval-modes.md) for configuration and trade-offs.
+A query client sends a natural-language query to the retrieval subsystem. The indexing
+service embeds the query and searches Qdrant for the most relevant chunks. Retrieved chunks are reordered using a reranker model.
+Optionally, chunk `parent_id` references are resolved against the MinIO S3 doc store to
+return full page-level context rather than just the matched chunk. PostgreSQL is consulted
+for task and namespace metadata.
 
 ---
 
