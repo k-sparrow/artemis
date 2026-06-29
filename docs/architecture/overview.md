@@ -8,65 +8,137 @@ Celery task chain that handles parsing and indexing independently.
 
 ---
 
-## System Diagram
+## System Overview
 
+```mermaid
+flowchart LR
+    FS[("File System")]
+    PrivateClient(["Private\nClient"])
+
+    subgraph enterprise[ ]
+        e["&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;\nEnterprise Subsystem\n&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"]
+    end
+
+    subgraph dispatch[ ]
+        d["&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;\nDispatch Subsystem\n&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"]
+    end
+
+    subgraph queue[ ]
+        q["Task Queue"]
+    end
+
+    subgraph ingestion[ ]
+        i["&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;\nIngestion Subsystem\n&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"]
+    end
+
+    style e fill:none,stroke:none
+    style d fill:none,stroke:none
+    style q fill:none,stroke:none,font-size:13px
+    style i fill:none,stroke:none
+
+    FS --> enterprise
+    PrivateClient --> dispatch
+    enterprise --> dispatch
+    dispatch --> queue
+    queue --> ingestion
+    ingestion --> PG[("PostgreSQL")]
+    ingestion --> Qdrant[("Qdrant")]
 ```
-                                    ┌─────────────────────────────────────────┐
-                                    │  PRIVATE INGESTION (user uploads)       │
-                                    │                                         │
-  Client ──► POST /namespaces/{id}/objects ──► Storage Service (7000)         │
-                                    │              │                           │
-                                    │              ▼                           │
-                                    │           MinIO ────► Kafka ────► ksqlDB │
-                                    │                                    │     │
-                                    │                                    ▼     │
-                                    │                               RabbitMQ   │
-                                    │                                    │     │
-                                    │                                    ▼     │
-                                    │                           Controller Worker
-                                    │                            │         │   │
-                                    │                            ▼         ▼   │
-                                    │                     Parsing (10001)  │   │
-                                    │                    (Docling + MinIO) │   │
-                                    │                            │         │   │
-                                    │                            └────►────┘   │
-                                    │                                    │     │
-                                    │                                    ▼     │
-                                    │                         Indexing (10000) │
-                                    │                        (TEI + Qdrant +   │
-                                    │                         Postgres + MinIO)│
-                                    └─────────────────────────────────────────┘
 
-                                    ┌─────────────────────────────────────────┐
-                                    │  ENTERPRISE INGESTION (connectors)      │
-                                    │                                         │
-  File System ──► Camel FileSource ──► Kafka ──► ksqlDB ──► Aiven HTTP Sink  │
-                                    │                             │            │
-                                    │                             ▼            │
-                                    │                    Intake Svc (9000)     │
-                                    │                             │            │
-                                    │                             ▼            │
-                                    │                    Storage Service ──► (same as above)
-                                    └─────────────────────────────────────────┘
+---
 
-                                    ┌─────────────────────────────────────────┐
-                                    │  RETRIEVAL                              │
-                                    │                                         │
-  Client ──► POST /retrieve/invoke ──► Indexing Service (10000)               │
-                                    │        │          │                      │
-                                    │        ▼          ▼                      │
-                                    │       TEI      Qdrant                    │
-                                    │      (dense)  (vector search)            │
-                                    │        │          │                      │
-                                    │        └────►─────┘                      │
-                                    │                    │                     │
-                                    │          (optional) ▼                    │
-                                    │              vLLM/ColBERT (rerank)       │
-                                    │                    │                     │
-                                    │          (optional) ▼                    │
-                                    │           MinIO (parent pages)           │
-                                    └─────────────────────────────────────────┘
+## Private Ingestion
+
+```mermaid
+flowchart LR
+    Client -->|"POST /namespaces/id/objects"| Storage["Storage\n(7000)"]
+
+    subgraph streaming["Stream Processing"]
+        MinIO --> Kafka --> ksqlDB --> RabbitMQ
+    end
+
+    Storage --> MinIO
+
+    subgraph worker["Controller Worker"]
+        Worker --> Parsing["Parsing\n(10001)"]
+        Parsing -->|"artifact BlobRef"| Worker
+        Worker --> Indexing["Indexing\n(10000)"]
+    end
+
+    RabbitMQ --> Worker
+
+    subgraph ai["AI Services"]
+        Docling["Docling\n(5001)"]
+        TEI["TEI\n(11435)"]
+        ColBERT["ColBERT/vLLM\n(11436)"]
+    end
+
+    Parsing --> Docling
+    Indexing --> TEI
+    Indexing --> Qdrant[("Qdrant\n(6333)")]
+    Indexing --> Postgres[("Postgres\n(5432)")]
+    Indexing -->|"parent pages"| MinIO2[("MinIO")]
 ```
+
+The storage service writes the uploaded file to MinIO and records metadata in Postgres.
+MinIO emits a Kafka notification. ksqlDB reshapes it into a Celery task message and routes
+it to RabbitMQ. The controller worker calls the parsing service (which drives Docling),
+receives a `BlobRef` to the parse artifact, then calls the indexing service which embeds
+chunks via TEI and writes vectors to Qdrant. The CDC pipeline propagates the final task
+result back to `ingested_objects` and `ingestion_tasks`.
+
+See [Ingestion Walkthrough](../guides/ingestion-walkthrough.md) for a step-by-step trace.
+
+---
+
+## Enterprise Ingestion
+
+```mermaid
+flowchart LR
+    FS["File System"] -->|watch| FileSource["Camel\nFileSource"]
+
+    subgraph streaming["Stream Processing"]
+        Kafka2["Kafka"] --> ksqlDB2["ksqlDB"] --> HTTPSink["Aiven\nHTTP Sink"]
+    end
+
+    FileSource --> Kafka2
+    HTTPSink --> Intake["Enterprise Intake\n(9000)"]
+    Intake -->|"proxy upload"| Storage["Storage\n(7000)"]
+    Storage -->|"same as private ingestion"| Pipeline["..."]
+```
+
+A Kafka Connect source connector (e.g. Camel FileWatch) monitors a directory. When a new
+file appears, it emits an event carrying file path and ownership headers. ksqlDB reshapes
+this into an `IntakeRequest` and the Aiven HTTP sink delivers it to the enterprise intake
+service. The intake service reads the file bytes from disk and proxies the upload to the
+storage service, joining the private ingestion pipeline from there.
+
+---
+
+## Retrieval
+
+```mermaid
+flowchart LR
+    Client -->|"POST /retrieve/invoke"| Indexing["Indexing\n(10000)"]
+
+    subgraph modes["Retrieval Modes"]
+        Dense["Dense\n(TEI + Qdrant)"]
+        Hybrid["Hybrid\n(BM25 + Dense)"]
+        Rerank["Multi-stage\n(+ ColBERT rerank)"]
+    end
+
+    Indexing --> Dense & Hybrid & Rerank
+    Dense & Hybrid & Rerank -->|chunks| Indexing
+    Indexing -->|"optional: parent pages"| MinIO[("MinIO")]
+    Indexing --> Client
+```
+
+A client sends a query to `/retrieve/invoke`. The indexing service embeds the query with
+TEI, queries Qdrant (dense, hybrid BM25+dense, or multi-stage with ColBERT reranking
+depending on `RETRIEVAL_MODE`), and optionally dereferences chunk `parent_id` keys to
+return full page text from the MinIO doc store.
+
+See [Retrieval Modes](../guides/retrieval-modes.md) for configuration and trade-offs.
 
 ---
 
@@ -104,8 +176,6 @@ Celery task chain that handles parsing and indexing independently.
 
 ## Docker Compose Profiles
 
-The system is split into named profiles so you only start what you need.
-
 | Profile | Contents | When to use |
 |---------|----------|-------------|
 | `infra` | PostgreSQL, MinIO, Qdrant, RabbitMQ, Kafka, Schema Registry, `artemis-db-migrations` | Always — foundational data layer |
@@ -134,51 +204,6 @@ docker compose --profile infra --profile backend --profile ai --profile ai-tei \
 ```
 
 See [Deployment Guide](../guides/deployment.md) for startup order and env vars.
-
----
-
-## Data Flows
-
-### Private ingestion
-
-A user uploads a file through the REST API. The storage service writes it to MinIO and
-records metadata. MinIO emits a Kafka event. ksqlDB reshapes the event into a Celery task
-message and routes it through RabbitMQ. The Celery worker fetches the file reference,
-calls the parsing service (which calls Docling), then calls the indexing service (which
-embeds chunks and writes to Qdrant). The CDC pipeline propagates the final task result
-from PostgreSQL back to the `ingested_objects` and `ingestion_tasks` tables.
-
-See [Ingestion Walkthrough](../guides/ingestion-walkthrough.md) for a step-by-step trace.
-
-### Enterprise ingestion
-
-A Kafka Connect source connector (e.g. Camel FileWatch) monitors a directory. When a new
-file appears, it emits an event to a Kafka topic with file path and ownership headers.
-ksqlDB reshapes this into an `IntakeRequest` and the Aiven HTTP sink delivers it to the
-enterprise intake service. The intake service reads the file bytes from disk and proxies
-the upload to the storage service, joining the same pipeline as private uploads from there.
-
-### Retrieval
-
-A client sends a query to the indexing service's `/retrieve/invoke` endpoint. The service
-embeds the query with TEI, queries Qdrant (dense, hybrid BM25+dense, or multi-stage with
-ColBERT reranking depending on `RETRIEVAL_MODE`), and optionally dereferences chunk
-`parent_id` keys to return full page text from the MinIO doc store.
-
-See [Retrieval Modes](../guides/retrieval-modes.md) for configuration and trade-offs.
-
----
-
-## Deployment Modes
-
-**Minimal (open-source):** Run `infra + backend + ai + ai-tei`. No gateway, no enterprise
-connectors. Namespaces are created and files uploaded directly through the storage service
-REST API. The MCP server can be added to expose the same operations to AI clients.
-
-**Enterprise:** Add `enterprise + gateway`. Enterprise connectors (Camel FileWatch, GitHub
-PR) ingest files automatically. The API gateway (APISIX) provides routing and will add
-authentication once the Hydra auth epic is complete. The CLI/TUI connects through the
-gateway to manage data sources.
 
 ---
 
