@@ -4,7 +4,7 @@
 
 - **Bazel** — build system; install via [Bazelisk](https://github.com/bazelbuild/bazelisk)
 - **Docker** (with Compose v2) — for running infrastructure and services
-- **Python 3.11+** — for running services locally outside Docker
+- **Python 3.12+** — for running services locally outside Docker
 - **NVIDIA GPU + CUDA 12.8** — required only if running Docling Serve locally
 
 ---
@@ -90,41 +90,43 @@ uvicorn src.backend.mcp.api.main:app --host 0.0.0.0 --port 11000
 
 # Controller worker (both queues)
 celery -A src.backend.controller.worker.celery worker \
-  --queues gpu_bound,io_bound --loglevel=info
+  --queues artemis.ingestion.fetch-and-parse,artemis.ingestion.index --loglevel=info
 ```
 
 ---
 
 ## Running the Test Suite
 
-Tests are organised into layers (see `CLAUDE.md` for the full strategy):
+All tests are run via Bazel:
 
 ```bash
-# Unit tests only (fast, no infra — runs in CI on every PR)
-pytest -m "unit"
+# Run all tests
+bazel test --test_timeout=300 --test_output=all //tests/...
 
-# Unit + integration (testcontainers — ~2 min)
-pytest -m "unit or integration"
+# Increase timeout for integration/E2E suites
+bazel test --test_timeout=600 --test_output=all //tests/...
 
-# Kafka topology tests (slow, separate suite)
-pytest -m "kafka"
-
-# E2E tests (full compose stack — nightly or pre-release)
-pytest -m "e2e"
+# Limit parallelism (useful when testcontainers compete for Docker resources)
+bazel test --test_timeout=600 --test_output=all --local_test_jobs=2 //tests/...
 ```
 
-Integration and E2E tests use [testcontainers-python](https://testcontainers-python.readthedocs.io/)
-to spin up real Docker containers. They require Docker to be running.
+Tests are organised into layers by tag:
 
-Tests tagged `local` require Docker volume mounts to host paths — they cannot run under the
-Bazel Linux sandbox. Run them with `pytest` directly (not via `bazel test`).
+| Tag | Content | Speed |
+|-----|---------|-------|
+| `unit` | Pure logic, no I/O | < 5 ms/test |
+| `integration` | Testcontainers (real infra) | < 5 min/suite |
+| `e2e` | Full compose stack | minutes |
+
+Tests tagged `local` require Docker volume mounts to host paths and must be run without
+the Bazel Linux sandbox — pass `--spawn_strategy=local` or run those targets explicitly.
 
 ---
 
 ## Important Bazel Gotcha: `__init__.py` Wiping
 
-Broad `bazel test` runs (not `//:format`) can silently empty `__init__.py` files under the
-Linux sandbox. Always run `git diff` before committing after any wide test run:
+Running `bazel test //tests/...` can silently empty `__init__.py` files under the Linux
+sandbox. Always run `git diff` before committing after any test run:
 
 ```bash
 git diff --stat
@@ -147,6 +149,18 @@ git restore src/  # or the specific files
 5. Add the service to `tools/docker/docker-compose.tmpl.yaml` under the appropriate profile
 6. Run `bazel run //deployment/docker:docker_compose.update` to regenerate compose files
 7. Add health check and unit tests
+
+---
+
+## Building and Loading Docker Images
+
+```bash
+# Build and load all dev images into the local Docker daemon (unstamped, :dev tag)
+bazel run //:load.images.dev
+
+# Build and load all dev images with version stamp
+bazel run //:load.images.dev --stamp
+```
 
 ---
 
