@@ -83,6 +83,24 @@ the `ingestion_tasks` table.
 
 ---
 
+## Task Routing
+
+The controller worker declares two durable RabbitMQ queues with different scaling profiles:
+
+| Queue | Routing key | Tasks | Scale driver |
+|-------|-------------|-------|--------------|
+| `artemis.ingestion.fetch-and-parse` | `fetch-and-parse` | `tasks.ingest`, `tasks.fetch_and_parse` | GPU (Docling) |
+| `artemis.ingestion.index` | `index` | `tasks.index`, `tasks.delete_document`, `tasks.delete_namespace` | I/O (TEI + Qdrant + Postgres) |
+
+`tasks.ingest` (the entry point dispatched by the RabbitMQ sink) lands on the
+`fetch-and-parse` queue so it executes on the same worker pool that owns the GPU
+budget, keeping the chain dispatch co-located with the first heavy task. The `index`
+queue can scale independently on CPU/I/O workers without GPU resources.
+
+Both queues share the same RabbitMQ exchange (`artemis.ingestion`, direct type).
+
+---
+
 ## Task Chain
 
 ### High-Level Chain
