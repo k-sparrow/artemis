@@ -63,8 +63,8 @@ artemis.ingestion.celery.tasks.routed   (key={task_id: "<uuid>"} JSON struct)
   ▼
 RabbitMQ exchange: artemis.ingestion
   │
-  ├──► queue: gpu_bound   (fetch_and_parse tasks)
-  └──► queue: io_bound    (index tasks)
+  ├──► queue: artemis.ingestion.fetch-and-parse   (fetch_and_parse tasks)
+  └──► queue: artemis.ingestion.index             (index tasks)
 ```
 
 **Why two CSAS hops?**
