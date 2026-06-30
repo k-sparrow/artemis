@@ -132,8 +132,11 @@ deferred until after Artemis v1.0.0.
 
 ## Accessing Qdrant
 
+Port 6333 is exposed to the host in **dev mode only**. In the release compose the port
+is internal — only services within the Docker network can reach it.
+
 ```bash
-# REST API (from host)
+# REST API (dev mode, from host)
 curl http://localhost:6333/collections
 
 # List collection info
