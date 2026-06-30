@@ -13,21 +13,20 @@ dev compose: `ingestion_test0`)
 
 | Queue | Celery task(s) | Worker concurrency | Notes |
 |-------|---------------|-------------------|-------|
-| `gpu_bound` | `tasks.fetch_and_parse` | 1 | `acks_late=True`; heavy-PDF stability requires serial execution |
-| `io_bound` | `tasks.index` | Scalable (I/O-bound) | TEI + Qdrant + Postgres are network I/O |
+| `artemis.ingestion.fetch-and-parse` | `tasks.ingest`, `tasks.fetch_and_parse` | 1 | `acks_late=True`; heavy-PDF stability requires serial execution |
+| `artemis.ingestion.index` | `tasks.index`, `tasks.delete_document`, `tasks.delete_namespace` | Scalable (I/O-bound) | TEI + Qdrant + Postgres are network I/O |
 
 **Task routing** (from `src/backend/controller/worker/celery.py`):
 
 ```python
 task_routes = {
-    "tasks.fetch_and_parse": {"queue": "gpu_bound"},
-    "tasks.index":           {"queue": "io_bound"},
+    "tasks.ingest":           {"queue": "artemis.ingestion.fetch-and-parse"},
+    "tasks.fetch_and_parse":  {"queue": "artemis.ingestion.fetch-and-parse"},
+    "tasks.index":            {"queue": "artemis.ingestion.index"},
+    "tasks.delete_document":  {"queue": "artemis.ingestion.index"},
+    "tasks.delete_namespace": {"queue": "artemis.ingestion.index"},
 }
 ```
-
-Entry tasks (`tasks.ingest`) and deletion tasks (`tasks.delete_document`,
-`tasks.delete_namespace`) run on whichever queue the broker assigns (typically `gpu_bound`
-as the first declared queue).
 
 ---
 
@@ -71,8 +70,8 @@ The Celery broker URL is constructed as:
 ## `acks_late=True` on fetch_and_parse
 
 `tasks.fetch_and_parse` is decorated with `acks_late=True`. This means the message is
-NOT acknowledged until the task completes. Combined with `concurrency=1` on the `gpu_bound`
-queue, this ensures:
+NOT acknowledged until the task completes. Combined with `concurrency=1` on the
+`artemis.ingestion.fetch-and-parse` queue, this ensures:
 
 1. At most one Docling job runs at a time (GPU exclusivity)
 2. If the worker crashes mid-parse, RabbitMQ redelivers the message to another worker

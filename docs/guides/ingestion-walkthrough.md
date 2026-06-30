@@ -121,7 +121,7 @@ The Celery worker picks up the message. `tasks.ingest` runs:
 
 ---
 
-## Step 6 — `tasks.fetch_and_parse` (gpu_bound queue)
+## Step 6 — `tasks.fetch_and_parse` (artemis.ingestion.fetch-and-parse queue)
 
 1. Builds `BlobRef(bucket="artemis", key="550e8400.../3e4a5b6c...")`
 2. Calls `POST http://backend-parsing:10001/v1/parse` with body:
@@ -139,7 +139,7 @@ The Celery worker picks up the message. `tasks.ingest` runs:
 
 ---
 
-## Step 7 — `tasks.index` (io_bound queue)
+## Step 7 — `tasks.index` (artemis.ingestion.index queue)
 
 Receives `{ "bucket": "parsed-chunks", "key": "parse/3e4a5b6c....json" }` from previous task.
 

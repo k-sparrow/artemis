@@ -15,12 +15,12 @@ It does not serve HTTP requests.
 
 | Queue | Concurrency | Tasks |
 |-------|-------------|-------|
-| `gpu_bound` | 1 | `tasks.fetch_and_parse`, `tasks.ingest`, `tasks.delete_document`, `tasks.delete_namespace` |
-| `io_bound` | scalable | `tasks.index` |
+| `artemis.ingestion.fetch-and-parse` | 1 | `tasks.ingest`, `tasks.fetch_and_parse` |
+| `artemis.ingestion.index` | scalable | `tasks.index`, `tasks.delete_document`, `tasks.delete_namespace` |
 
-`gpu_bound` is serial (concurrency=1) to prevent concurrent Docling jobs from competing
-for the GPU. `io_bound` scales horizontally — the indexing service calls TEI and Qdrant
-which are both network-bound.
+`artemis.ingestion.fetch-and-parse` is serial (concurrency=1) to prevent concurrent
+Docling jobs from competing for the GPU. `artemis.ingestion.index` scales horizontally —
+the indexing service calls TEI and Qdrant which are both network-bound.
 
 ---
 

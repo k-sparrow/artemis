@@ -117,11 +117,11 @@ sequenceDiagram
     Q->>CW: tasks.ingest {BlobRef, source, upload_action}
     CW->>CW: dispatch chain(fetch_and_parse → index)
 
-    note over CW,PS: Task 1 — fetch_and_parse (gpu_bound queue)
+    note over CW,PS: Task 1 — fetch_and_parse (artemis.ingestion.fetch-and-parse queue)
     CW->>PS: POST /v1/parse {source_ref: BlobRef}
     PS-->>CW: artifact BlobRef
 
-    note over CW,IS: Task 2 — index (io_bound queue)
+    note over CW,IS: Task 2 — index (artemis.ingestion.index queue)
     CW->>IS: POST /ingest {artifact_ref: BlobRef, namespace, group_id}
     IS-->>CW: UpsertResult {num_added, num_skipped}
 
