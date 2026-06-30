@@ -99,7 +99,7 @@ The sink connector applies three SMTs:
 - `InsertHeader` — `CamelHeader.task = "tasks.ingest"`
 - `InsertHeader` — `CamelSpringRabbitmqContentType = "application/json"`
 
-The message arrives in the `gpu_bound` queue of RabbitMQ exchange `artemis.ingestion`.
+The message arrives in the `artemis.ingestion.fetch-and-parse` queue of RabbitMQ exchange `artemis.ingestion`.
 
 ---
 
@@ -130,18 +130,18 @@ The Celery worker picks up the message. `tasks.ingest` runs:
    ```
 3. The parsing service:
    - Reads `report.pdf` from MinIO by BlobRef
-   - Calls Docling Serve: `POST http://docling-serve:5001/v1/convert/file`
+   - Calls Docling Serve: `POST http://docling-serve:5001/v1/chunk/hybrid/file`
    - Receives `DoclingDocument` with pages and structured chunks
    - Builds `ParseArtifact` with `pages[]` + `chunks[]`
    - Writes `ParseArtifact` JSON to MinIO at `parsed-chunks/<uuid>.json`
-   - Returns `{ "out_key": "abc123.json" }`
-4. `fetch_and_parse` returns `{ "bucket": "parsed-chunks", "key": "abc123.json" }`
+   - Returns `BlobRef { "bucket": "parsed-chunks", "key": "parse/3e4a5b6c....json" }`
+4. `fetch_and_parse` returns `{ "bucket": "parsed-chunks", "key": "parse/3e4a5b6c....json" }`
 
 ---
 
 ## Step 7 — `tasks.index` (io_bound queue)
 
-Receives `{ "bucket": "parsed-chunks", "key": "abc123.json" }` from previous task.
+Receives `{ "bucket": "parsed-chunks", "key": "parse/3e4a5b6c....json" }` from previous task.
 
 1. Calls `POST http://backend-indexing-ingestion:10000/ingest?namespace=550e8400...`
    with body:
