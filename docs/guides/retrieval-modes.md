@@ -111,6 +111,12 @@ COLBERT_HOST_URL      http://colbert:8000
 COLBERT_MODEL_NAME    jinaai/jina-colbert-v2
 ```
 
+**Storage overhead:** Late interaction models store an N×128 token-level matrix per
+chunk, where N is the number of tokens in the chunk. Per-chunk storage grows linearly
+with token count — significantly larger than a single dense vector (768 floats) or a
+sparse BM25 vector. At scale this makes `multi_stage` impractical; it is **not
+currently used** for this reason.
+
 **Use when:** Precision matters more than latency. Legal, medical, or technical corpora
 where subtle semantic differences determine relevance.
 
