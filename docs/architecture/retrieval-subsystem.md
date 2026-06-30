@@ -49,6 +49,9 @@ block
 **[Qdrant](https://qdrant.tech)** — vector database. Executes the search (cosine similarity for dense, RRF fusion for hybrid) and returns the top candidates. Scoped per-request by `namespace_id` filter.
 
 **[vLLM](https://github.com/vllm-project/vllm) (late interaction reranker)** — Hosts the reranking model. Receives the oversized candidate set (`k×p`) and returns only the top `k`.
+The reason vLLM is used instead of TEI (which also supports reranking) is the reranker type -
+TEI strictly supports cross-encoder only models, which can be quite expensive when number of
+reranking candidates are large. Instead, we opted for a ColBERT-based reranker, which TEI [does not support](https://github.com/huggingface/text-embeddings-inference/issues/127), and vLLM [does](https://docs.vllm.ai/en/latest/models/pooling_models/specific_models/#colbert-late-interaction-models).
 
 **MinIO S3** — object store holding full page-level markdown. Consulted only when `return_parents=true` to dereference chunk `parent_id` pointers to their source page.
 
