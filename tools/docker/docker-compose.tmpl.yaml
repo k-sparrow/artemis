@@ -505,7 +505,7 @@ services:
       start_period: 30s
     environment:
       DOCLING_SERVE_ENABLE_UI: "true"
-      DOCLING_SERVE_MAX_SYNC_WAIT: 12000
+      DOCLING_SERVE_MAX_SYNC_WAIT: 86400
       NVIDIA_VISIBLE_DEVICES: "all" # https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/docker-specialized.html{DOCLING_GPU_BLOCK}
     restart: always
     networks:
