@@ -27,6 +27,7 @@ the Kafka pipeline.
 | Method | Path | Description | Response |
 |--------|------|-------------|----------|
 | `POST` | `/namespaces/{id}/objects` | Upload file to MinIO; dispatch ingest task | `202 UploadResponse` |
+| `PUT` | `/namespaces/{id}/objects/{obj_id}` | Re-upload / replace a specific object; dispatches ingest with the same `obj_id` | `202 UploadResponse` |
 | `GET` | `/namespaces/{id}/objects` | Paginated list from `ingested_objects` | `200 [ObjectResponse]` |
 | `DELETE` | `/namespaces/{id}/objects/{obj_id}` | Dispatch delete task (404 if not in `ingested_objects` yet) | `202` |
 | `DELETE` | `/namespaces/{id}/objects` | Batch delete by `?group_id={id}` | `202` |

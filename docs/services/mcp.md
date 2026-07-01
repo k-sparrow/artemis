@@ -101,8 +101,8 @@ this means all MCP tool calls operate as the same owner.
 
 **Deferred:** The gateway (APISIX) will eventually extract the user's identity from the
 auth token and forward `X-User-Id` / `X-Org-Id` headers to the MCP server. The MCP server
-will then derive `X-Owner-Id` from these headers. This is blocked on the Hydra auth epic
-(Epic 12.2).
+will then derive `X-Owner-Id` from these headers. The remaining blockers are APISIX
+sub-claim → header extraction and `TRUSTED_PROXIES` enforcement (Hydra auth epic).
 
 ---
 

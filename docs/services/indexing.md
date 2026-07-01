@@ -69,7 +69,7 @@ Clears the entire namespace from Qdrant and RecordManager (used for namespace de
   "config": {
     "configurable": {
       "namespace_id": "<uuid>",
-      "top_k": 5,
+      "k": 5,
       "return_parents": false
     }
   }
@@ -173,19 +173,23 @@ This makes the indexing endpoint idempotent for the same document content.
 | `QDRANT_COLLECTION_NAME` | `artemis` | |
 | `TEI_HOST_URL` | `http://tei:80` | |
 | `RETRIEVAL_MODE` | `dense` | `dense`, `hybrid`, `multi_stage` |
-| `COLBERT_HOST_URL` | — | Required for `multi_stage` |
-| `COLBERT_MODEL_NAME` | `jinaai/jina-colbert-v2` | |
+| `COLBERT_RERANKER_URL` | — | If set, activates mode-agnostic ColBERT reranking on `/retrieve` |
+| `COLBERT_HOST_URL` | — | Required for `multi_stage` (late-interaction multi-vector, not currently used) |
+| `COLBERT_MODEL_NAME` | `colbert-ir/colbertv2.0` | |
+| `COLBERT_MAX_TOKENS_PER_DOC` | `511` | Max tokens sent to reranker per document |
+| `RETRIEVE_CANDIDATES_MULTIPLIER` | `10` | Fetch `k × multiplier` candidates before reranking |
 | `DEFAULT_PIPELINE_TYPE` | `simple` | `simple`, `semi_structured` |
-| `CHUNK_SIZE` | `1000` | Tokens per chunk (SIMPLE mode) |
-| `CHUNK_OVERLAP` | `200` | Token overlap between chunks |
+| `DEFAULT_CHUNK_SIZE` | `1024` | Tokens per chunk (simple mode) |
+| `DEFAULT_CHUNK_OVERLAP` | `100` | Token overlap between chunks |
 | `SQL_DB_HOST` | `postgres` | RecordManager + docstore backend |
 | `SQL_DB_PORT` | `5432` | |
 | `SQL_DB_USER` | `postgres` | |
 | `SQL_DB_PASSWORD` | `testpass` | |
 | `SQL_DB_DATABASE` | `documents` | |
-| `S3_ENDPOINT_URL` | `http://minio:9000` | |
+| `S3_ENDPOINT` | `http://minio:9000` | |
 | `S3_ACCESS_KEY` | `minioadmin` | |
 | `S3_SECRET_KEY` | `minioadmin` | |
+| `S3_SECURE` | `false` | Set to `true` when `S3_ENDPOINT` uses HTTPS |
 | `PAGE_BUCKET` | `parent-pages` | Parent-page doc store bucket |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | |
 | `OTEL_SERVICE_NAME` | `backend-indexing` | |

@@ -84,7 +84,7 @@ would drop the job silently.
 
 ## Dead Letter Exchange (Planned)
 
-DLQ support is not yet configured. After a task exhausts its retries (`max_retries=5`),
+DLQ support is not yet configured. After a task exhausts its retries (`max_retries=20`),
 Celery marks it as FAILURE and the CDC pipeline captures the failure reason. The failed
 message is not rerouted anywhere — it remains visible in `ingestion_tasks` with
 `status='FAILURE'`.

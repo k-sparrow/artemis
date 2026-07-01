@@ -140,6 +140,7 @@ Current migrations:
 - `0002` — Initial application schema (namespace, owner, ingested_objects, ingestion_tasks)
 - `0003` — (subsequent schema changes)
 - `0004` — Drop FK from `ingested_objects.namespace_id` to `namespace.id` (passive deletes)
+- `0005` — Add `ingested_at` column to `ingested_objects`
 
 ---
 

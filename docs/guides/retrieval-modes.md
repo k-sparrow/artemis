@@ -29,7 +29,7 @@ TEI (embed query → dense vector)
   │
   ▼
 Qdrant cosine similarity search
-  (filter: namespace_id = ?, top_k = N)
+  (filter: namespace_id = ?, k = N)
   │
   ▼
 Top-k chunks ranked by cosine similarity
@@ -196,7 +196,7 @@ Content-Type: application/json
   "config": {
     "configurable": {
       "namespace_id": "<uuid>",
-      "top_k": 5,
+      "k": 5,
       "return_parents": false
     }
   }

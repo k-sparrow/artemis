@@ -18,9 +18,10 @@ It does not serve HTTP requests.
 | `artemis.ingestion.fetch-and-parse` | 1 | `tasks.ingest`, `tasks.fetch_and_parse` |
 | `artemis.ingestion.index` | scalable | `tasks.index`, `tasks.delete_document`, `tasks.delete_namespace` |
 
-`artemis.ingestion.fetch-and-parse` is serial (concurrency=1) to prevent concurrent
-Docling jobs from competing for the GPU. `artemis.ingestion.index` scales horizontally —
-the indexing service calls TEI and Qdrant which are both network-bound.
+`artemis.ingestion.fetch-and-parse` is serial (`concurrency=1`, `prefetch_multiplier=1`)
+to prevent concurrent Docling jobs from competing for the GPU and to avoid pre-fetching
+a second message before the first parse finishes. `artemis.ingestion.index` scales
+horizontally — the indexing service calls TEI and Qdrant which are both network-bound.
 
 ---
 
@@ -215,9 +216,10 @@ raising one without the other still causes timeout failures on heavy PDFs.
 | `SQL_DB_PASSWORD` | `testpass` | |
 | `SQL_DB_DATABASE` | `documents` | |
 | `SQL_DRIVER` | `postgresql+psycopg` | Synchronous driver for result backend |
-| `S3_ENDPOINT_URL` | `http://minio:9000` | |
+| `S3_ENDPOINT` | `http://minio:9000` | |
 | `S3_ACCESS_KEY` | `minioadmin` | |
 | `S3_SECRET_KEY` | `minioadmin` | |
+| `S3_SECURE` | `false` | Set to `true` when `S3_ENDPOINT` uses HTTPS |
 | `PARSED_CHUNKS_BUCKET` | `parsed-chunks` | Passed in BlobRef to indexing |
 | `PARSING_SERVICE_URL` | `http://backend-parsing:10001` | |
 | `INGESTION_SERVICE_URL` | `http://backend-indexing:10000` | |

@@ -13,6 +13,10 @@ exposes semantic search and an MCP server for AI client integration.
 - [Multi-Tenancy & Isolation](architecture/tenancy.md) — namespace_id, owner_id, group_id, access control
 - [Data Contracts](architecture/data-contracts.md) — message schemas between services
 - [Event Topology](architecture/event-topology.md) — Kafka topics, ksqlDB streams, CDC pipeline
+- [Dispatch Subsystem](architecture/dispatch-subsystem.md) — storage → MinIO → Kafka → ksqlDB → RabbitMQ
+- [Ingestion Subsystem](architecture/ingestion-subsystem.md) — controller worker, parsing service, indexing service
+- [Enterprise Subsystem](architecture/enterprise-subsystem.md) — data sources, intake, connector lifecycle
+- [Retrieval Subsystem](architecture/retrieval-subsystem.md) — dense / hybrid / multi-stage / reranker / parent-page
 
 ## Services
 
@@ -48,6 +52,7 @@ How Artemis configures and uses each OSS component:
 - [Development](guides/development.md) — Bazel commands, running services locally, testing
 - [Ingestion Walkthrough](guides/ingestion-walkthrough.md) — end-to-end trace of a single upload
 - [Retrieval Modes](guides/retrieval-modes.md) — dense / hybrid / multi-stage / parent-page
+- [Observability](guides/observability.md) — OTel tracing, Jaeger, Prometheus, custom span attributes
 
 ---
 

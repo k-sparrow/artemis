@@ -49,7 +49,7 @@ flowchart LR
 
     click enterprise href "./enterprise-subsystem.md"
     click dispatch href "./dispatch-subsystem.md"
-    click queue href "./task-queue.md"
+    click queue href "./ingestion-subsystem.md"
     click ingestion href "./ingestion-subsystem.md"
 ```
 
@@ -95,13 +95,13 @@ for task and namespace metadata.
 | Service | Port | Type |
 |---------|------|------|
 | Storage service | 7000 | FastAPI HTTP |
-| Enterprise intake | 9000 | FastAPI HTTP |
+| Enterprise intake | 9000 (internal) | FastAPI HTTP |
 | Indexing service | 10000 | FastAPI HTTP (LangServe) |
 | Parsing service | 10001 | FastAPI HTTP |
 | Enterprise data sources | 9500 | FastAPI HTTP |
 | MCP server | 11000 | FastAPI + MCP streamable HTTP |
 | Controller worker | — | Celery (no HTTP surface) |
-| MinIO API | 9000 | S3-compatible |
+| MinIO API | 9000 (host) | S3-compatible |
 | MinIO console | 9090 | Web UI |
 | PostgreSQL | 5432 | Postgres wire protocol |
 | Qdrant | 6333 | HTTP + gRPC |

@@ -129,15 +129,18 @@ REPLAY_CACHE_BUCKET        docling-replay    # default
 QDRANT_HOST_URL            http://vectorstore:6333
 QDRANT_COLLECTION_NAME     artemis
 TEI_HOST_URL               http://tei:80
-RETRIEVAL_MODE             dense   # dense | hybrid | multi_stage
-COLBERT_HOST_URL           http://colbert:8000          # multi_stage only
-COLBERT_MODEL_NAME         jinaai/jina-colbert-v2       # multi_stage only
+RETRIEVAL_MODE             dense                         # dense | hybrid | multi_stage
+COLBERT_RERANKER_URL       http://colbert:8000            # enables mode-agnostic reranking
+COLBERT_HOST_URL           http://colbert:8000            # multi_stage only (not currently used)
+COLBERT_MODEL_NAME         colbert-ir/colbertv2.0
+COLBERT_MAX_TOKENS_PER_DOC 511
+RETRIEVE_CANDIDATES_MULTIPLIER 10                         # k × multiplier candidates before rerank
 SQL_DB_USER / SQL_DB_PASSWORD / SQL_DB_HOST / SQL_DB_PORT / SQL_DB_DATABASE / SQL_DRIVER
 S3_ENDPOINT / S3_ACCESS_KEY / S3_SECRET_KEY / S3_SECURE
-PAGE_BUCKET                parent-pages      # parent-page doc store
-DEFAULT_PIPELINE_TYPE      simple            # simple | semi_structured
-CHUNK_SIZE                 1000
-CHUNK_OVERLAP              200
+PAGE_BUCKET                parent-pages                   # parent-page doc store
+DEFAULT_PIPELINE_TYPE      simple                         # simple | semi_structured
+DEFAULT_CHUNK_SIZE         1024
+DEFAULT_CHUNK_OVERLAP      100
 ```
 
 ### Controller worker

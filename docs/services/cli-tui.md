@@ -139,7 +139,6 @@ No virtualenv or Python dependency installation is required — the PEX is self-
 ## Running the TUI
 
 ```bash
-# From the project root (with venv active)
 artemis
 
 # Using the PEX binary (no venv required)

@@ -55,7 +55,7 @@ The following are designed but not yet implemented (blocked on the Hydra auth ep
 |---------|-------|
 | Token validation | Hydra opaque token introspection plugin |
 | `X-User-Id` / `X-Org-Id` injection | APISIX extracts claims from Hydra introspection response; forwards to upstream as headers |
-| `X-Owner-Id` forwarding | Storage service currently reads this from request header; gateway will set it from JWT |
+| `X-Owner-Id` sub-claim extraction | `X-Owner-Id` forwarding from client header is implemented (Epic 12.3); remaining work: APISIX extracts `owner_id` from JWT sub-claim automatically and injects it, removing the need for callers to supply the header |
 | Rate limiting | Per-user request throttling via `limit-req` plugin |
 | `X-Request-Id` injection | Trace correlation; will be included in OTel spans |
 | Remove direct port exposure | Services (7000, 10000, 11000, 9500) exposed on host only for dev; production routes all external traffic through 9080 |
