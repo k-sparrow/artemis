@@ -85,7 +85,7 @@ For development without GPU, TEI on CPU is acceptable for small corpora
 ## Relationship to ColBERT
 
 TEI handles **dense** embeddings only. ColBERT late-interaction embeddings are served by
-vLLM — see [vLLM / ColBERT](vllm-colbert.md). In `multi_stage` mode, both TEI and vLLM
+vLLM — see [vLLM](vllm.md). In `multi_stage` mode, both TEI and vLLM
 are required.
 
 In `dense` and `hybrid` modes, only TEI is needed. ColBERT/vLLM is not started.

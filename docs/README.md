@@ -43,7 +43,7 @@ How Artemis configures and uses each OSS component:
 - [Qdrant](infrastructure/qdrant.md) — vector database, collection schema, multi-tenancy
 - [TEI](infrastructure/tei.md) — text embedding inference
 - [Docling](infrastructure/docling.md) — document parsing service
-- [vLLM / ColBERT](infrastructure/vllm-colbert.md) — late-interaction reranking
+- [vLLM](infrastructure/vllm.md) — ColBERT reranking and late-interaction embeddings
 - [APISIX](infrastructure/apisix.md) — API gateway, routing
 
 ## Guides
