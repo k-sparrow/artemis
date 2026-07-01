@@ -97,11 +97,8 @@ Or via env var:
 ARTEMIS_GATEWAY_URL=http://localhost:9080
 ```
 
-When the `gateway` compose profile is running, the TUI connects to port 9080. Without the
-gateway, connect directly:
-```
-ARTEMIS_GATEWAY_URL=http://localhost:9500   # data-sources API
-```
+The gateway runs on port 9080 (the default). The TUI connects to it automatically when
+`ARTEMIS_GATEWAY_URL` is set or defaults are in `config.toml`.
 
 ---
 
@@ -117,15 +114,40 @@ This is blocked on the Hydra auth epic. Until auth is wired:
 
 ---
 
+## Building a Standalone Binary
+
+The CLI is packaged as a self-contained PEX (Python EXecutable) that bundles all
+dependencies into a single portable file:
+
+```bash
+bazel build //src/cli:artemis.pex
+```
+
+The artifact is written to `bazel-bin/src/cli/artemis.pex`. Run it directly as a binary:
+
+```bash
+./bazel-bin/src/cli/artemis.pex
+# or copy it to a location on $PATH
+cp bazel-bin/src/cli/artemis.pex /usr/local/bin/artemis
+artemis
+```
+
+No virtualenv or Python dependency installation is required — the PEX is self-contained.
+
+---
+
 ## Running the TUI
 
 ```bash
 # From the project root (with venv active)
 artemis
 
+# Using the PEX binary (no venv required)
+./bazel-bin/src/cli/artemis.pex
+
 # Or if the CLI package is not installed
 python -m src.cli.main
 
 # Against a non-default gateway
-ARTEMIS_GATEWAY_URL=http://localhost:9500 artemis sources list
+ARTEMIS_GATEWAY_URL=http://localhost:9080 artemis sources list
 ```
