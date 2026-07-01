@@ -122,7 +122,7 @@ persisted — it is fetched live on every list request.
 | Env var | Default | Notes |
 |---------|---------|-------|
 | `SQL_DB_URL` | `postgresql+asyncpg://...` | Full DSN string |
-| `KAFKA_CONNECT_URL` | `http://kafka-connect:8083` | |
-| `STORAGE_SERVICE_URL` | `http://backend-storage:7000` | Used for group delete enumeration |
+| `KAFKA_CONNECT_URL` | `http://localhost:8083` | |
+| `STORAGE_SERVICE_URL` | `http://localhost:7000` | Used for group delete enumeration |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | |
 | `OTEL_SERVICE_NAME` | `backend-enterprise-data-sources` | |

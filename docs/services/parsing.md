@@ -14,46 +14,50 @@ It accepts a file reference (claim-check), calls Docling Serve, and writes a str
 
 | Method | Path | Description | Response |
 |--------|------|-------------|----------|
-| `POST` | `/v1/parse` | Parse a document; returns artifact key | `202 ParseResponse` |
+| `POST` | `/v1/parse` | Parse a document; returns artifact `BlobRef` | `200 BlobRef` |
 | `GET` | `/health` | Readiness probe (checks Docling reachability) | `200` or `503` |
 
 ---
 
 ## Parse Request
 
-```json
-{
-  "source_ref": {
-    "bucket": "artemis",
-    "key": "<namespace_id>/<obj_id>"
-  },
-  "pipeline_type": "simple",
-  "namespace_id": "<uuid>",
-  "obj_id": "<uuid>"
-}
-```
+`POST /v1/parse` is a `multipart/form-data` request. Supply exactly one of `file` or
+`source_ref`:
 
-`source_ref` is a `BlobRef` (claim-check). The parsing service reads the file bytes from
-MinIO using this reference — no file bytes come in the HTTP request body.
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `file` | `UploadFile` | one of | Inline file bytes — used for direct uploads |
+| `source_ref` | string (JSON) | one of | JSON-encoded `BlobRef {"bucket", "key"}` — used by the controller worker (claim-check) |
+| `filename` | string | no | Display filename; inferred from `file.filename` if omitted |
+| `content_type` | string | no | MIME type; inferred if omitted |
+| `metadata` | string (JSON dict) | no | Extra key/value pairs; must include `"obj_id"` (the deterministic object UUID) |
+
+Example form fields sent by the controller worker:
+```
+source_ref  = {"bucket": "artemis", "key": "550e8400.../3e4a5b6c..."}
+filename    = "report.pdf"
+content_type = "application/pdf"
+metadata    = {"obj_id": "3e4a5b6c-..."}
+```
 
 ---
 
 ## Parse Flow
 
-1. Read file bytes from MinIO at `source_ref.bucket/source_ref.key`
-2. Write bytes to a temporary path on disk
-3. Call `POST http://docling-serve:5001/v1/convert/file` (multipart/form-data)
-4. Receive `DoclingDocument` JSON from Docling Serve
-5. Write raw `DoclingDocument` to `docling-replay/{namespace_id}/{obj_id}.json` (replay cache)
-6. Extract from `DoclingDocument`:
+1. Materialise document bytes in memory:
+   - From `source_ref`: read from MinIO at `source_ref.bucket/source_ref.key`
+   - From `file`: read from the multipart upload
+2. Call `POST http://docling-serve:5001/v1/convert/file` (multipart/form-data)
+3. Receive `DoclingDocument` JSON from Docling Serve
+4. Extract from `DoclingDocument`:
    - `pages[]`: page-numbered Markdown blocks
    - `chunks[]`: semantic chunks with `DocItemLabel` type annotation
-7. Write `ParseArtifact` JSON to `parsed-chunks/{uuid4}.json`
-8. Delete temp file on disk
-9. Return `{out_key: "<uuid4>.json"}`
+5. Write raw `DoclingDocument` JSON to the `docling-replay` bucket at key `replay/{obj_id}.json` (private replay cache)
+6. Write `ParseArtifact` JSON to the `parsed-chunks` bucket at key `parse/{obj_id}.json`
+7. Return `BlobRef {bucket: "parsed-chunks", key: "parse/{obj_id}.json"}`
 
-The caller (controller worker's `fetch_and_parse` task) receives `out_key` and passes it
-to the indexing service as `BlobRef {bucket: "parsed-chunks", key: "<uuid4>.json"}`.
+The controller worker's `fetch_and_parse` task receives this `BlobRef` and passes it
+directly to the indexing service as `artifact_ref`.
 
 ---
 
@@ -120,9 +124,9 @@ without `DocItemLabel` types (all become `UNKNOWN`). The indexing pipeline handl
 
 ## Replay Cache
 
-The raw `DoclingDocument` JSON is written to `docling-replay/` bucket:
+The raw `DoclingDocument` JSON is written to the `docling-replay` bucket:
 ```
-docling-replay/{namespace_id}/{obj_id}.json
+replay/{obj_id}.json
 ```
 
 This is private to the parsing service — no other service reads from this bucket.
@@ -133,23 +137,15 @@ of re-parsing, saving Docling compute time. This feature is not yet exposed via 
 
 ---
 
-## Circuit Breaker
-
-If Docling Serve returns errors, the parsing service's internal `DoclingBreaker` opens
-after 3 consecutive failures. Subsequent calls fail immediately with
-`HTTP_503_SERVICE_UNAVAILABLE` until the breaker resets (60 seconds). The controller
-worker's `CircuitBreakerError` autoretry handles this case.
-
----
-
 ## Configuration
 
 | Env var | Default | Notes |
 |---------|---------|-------|
-| `DOCLING_SERVE_URI` | `http://docling-serve:5001` | |
-| `S3_ENDPOINT_URL` | `http://minio:9000` | |
-| `S3_ACCESS_KEY` | `minioadmin` | |
-| `S3_SECRET_KEY` | `minioadmin` | |
+| `DOCLING_SERVE_URI` | *(required)* | |
+| `S3_ENDPOINT` | *(required)* | |
+| `S3_SECURE` | *(required)* | Set to `true` when `S3_ENDPOINT` uses HTTPS |
+| `S3_ACCESS_KEY` | *(required)* | |
+| `S3_SECRET_KEY` | *(required)* | |
 | `PARSED_ARTIFACTS_BUCKET` | `parsed-chunks` | |
 | `REPLAY_CACHE_BUCKET` | `docling-replay` | |
 | `LOADER_TYPE` | `DOCLING` | `DOCLING` or `PYMUPDF4LLM` |

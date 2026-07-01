@@ -207,9 +207,9 @@ raising one without the other still causes timeout failures on heavy PDFs.
 | `RABBITMQ_HOST` | `rabbitmq` | |
 | `RABBITMQ_PORT` | `5672` | |
 | `RABBITMQ_USER` | `artemis` | |
-| `RABBITMQ_PASS` | `artemis` | |
+| `RABBITMQ_PASSWORD` | `artemis` | |
 | `RABBITMQ_VHOST` | `artemis` | |
-| `EXCHANGE_NAME` | `ingestion_test0` | Must match the RabbitMQ Sink connector |
+| `EXCHANGE_NAME` | *(required, no default)* | Must match the RabbitMQ Sink connector; compose sets `ingestion_test0` in dev |
 | `SQL_DB_HOST` | `postgres` | Result backend |
 | `SQL_DB_PORT` | `5432` | |
 | `SQL_DB_USER` | `postgres` | |

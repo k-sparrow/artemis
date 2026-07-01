@@ -70,12 +70,13 @@ The HTTP sink does not use the response body — it only checks for 2xx status.
 
 | Type | Status | Implementation |
 |------|--------|----------------|
-| `filesystem` | Implemented | Reads from mounted FS path; MIME from extension |
-| `inline` | Skeleton | Would encode text body as bytes (for GitHub PR body, comments) |
-| `url` | Skeleton | Would fetch bytes over HTTP (for web content ingestion) |
+| `filesystem` | Implemented end-to-end | Reads from mounted FS path; MIME from extension; Camel FileWatch connector produces these messages |
+| `inline` | Intake implemented; no connector | Intake service encodes the text body as bytes and uploads to storage; no Kafka Connect source connector exists yet to produce `InlineSource` messages (e.g. GitHub PR body) |
+| `url` | Intake implemented; no connector | Intake service fetches bytes over HTTP from `source.url`; no Kafka Connect source connector exists yet to produce `UrlSource` messages |
 
-`InlineSource` and `UrlSource` are defined in the contract module but their intake handlers
-return `HTTP_501_NOT_IMPLEMENTED` currently.
+The intake service's `_resolve_bytes` handles all three source types. The gap for `inline`
+and `url` is on the producer side — there are no Kafka Connect connectors (e.g. GitHub PR,
+GitHub PR Comment) deployed yet to route content through these paths.
 
 ---
 
@@ -95,6 +96,6 @@ further derivation.
 
 | Env var | Default | Notes |
 |---------|---------|-------|
-| `STORAGE_SERVICE_URL` | `http://backend-storage:7000` | |
+| `STORAGE_SERVICE_URL` | `http://localhost:7000` | |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | |
 | `OTEL_SERVICE_NAME` | `backend-enterprise-intake` | |

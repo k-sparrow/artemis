@@ -9,13 +9,13 @@ Circuit breakers
 their state persists across task invocations within the same worker process.
 Both are configured with:
 
-  fail_max=3      — open after 3 consecutive failures
-  reset_timeout=60 — attempt recovery (HALF-OPEN) after 60 s
+  fail_max=3       — open after 3 consecutive failures
+  reset_timeout=120 — attempt recovery (HALF-OPEN) after 120 s
 
 When a breaker is OPEN, ``pybreaker.CircuitBreakerError`` is raised immediately
-without making a network call.  Celery's ``autoretry_for=(Exception,)`` on the
-calling tasks will catch this and retry with exponential backoff, keeping worker
-threads available instead of blocking on dead HTTP connections.
+without making a network call.  The calling tasks catch this and retry with a
+125–155 s countdown (reset_timeout + 5 s + jitter), keeping worker threads
+available instead of blocking on dead HTTP connections.
 """
 
 from __future__ import annotations
