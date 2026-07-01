@@ -175,11 +175,16 @@ dereference to original chunks, then optionally dereference to parent pages.
 **Setting the pipeline type:**
 ```
 DEFAULT_PIPELINE_TYPE=simple        # or semi_structured
-CHUNK_SIZE=1000
-CHUNK_OVERLAP=200
+DEFAULT_CHUNK_SIZE=1024
+DEFAULT_CHUNK_OVERLAP=100
 ```
 
-Pipeline type can also be set per-request in the `/ingest` call (not per-query).
+Pipeline type can also be set per-request via the `pipeline_type` query param on the
+indexing service's `POST /ingest` endpoint — but only when calling the indexing service
+directly. It is **not yet wired into the storage upload endpoint** (`POST
+/namespaces/{id}/objects`) or the `IngestionTaskDetails` contract, so end-to-end
+callers cannot select a pipeline type per-upload. `DEFAULT_PIPELINE_TYPE` applies
+uniformly to all tasks dispatched through the normal ingestion flow.
 
 ---
 

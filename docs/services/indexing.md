@@ -37,7 +37,7 @@ Query parameters:
 - `namespace` (required): UUID — the target namespace
 - `group_id` (optional): UUID — connector group for enterprise indexing
 - `obj_id` (optional): UUID — if provided, used as the deduplication key instead of deriving from source
-- `pipeline_type` (optional): `simple` or `semi_structured`
+- `pipeline_type` (optional): `simple` or `semi_structured` — **indexing service only**; not yet wired into the storage upload endpoint or `IngestionTaskDetails` contract, so callers cannot select it per-upload; `DEFAULT_PIPELINE_TYPE` applies to all tasks
 
 The service reads the `ParseArtifact` from MinIO using `artifact_ref`, embeds the chunks,
 writes vectors to Qdrant, and deletes the artifact file from MinIO after successful indexing.

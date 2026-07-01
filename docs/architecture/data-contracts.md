@@ -38,6 +38,13 @@ ksqlDB.
 }
 ```
 
+> **`pipeline_type` not in contract:** The indexing service accepts `pipeline_type`
+> as a per-request query param on `POST /ingest`, but it is not carried in
+> `IngestionTaskDetails`. The controller worker always omits it, so
+> `DEFAULT_PIPELINE_TYPE` applies to every task. Wiring `pipeline_type` end-to-end
+> (upload endpoint → contract → worker dispatch) is a planned but not yet implemented
+> enhancement.
+
 **Storage:** as a single JSON string in the MinIO PUT metadata header
 `X-Amz-Meta-Contract`. The `task_id` travels separately as `X-Amz-Meta-Task_id` (a plain
 string, not inside the contract), because the Kafka Connect `HeaderFrom$Key` SMT that
