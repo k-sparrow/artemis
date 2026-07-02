@@ -177,7 +177,14 @@ def call_indexing_service(
 
     with _tracer.start_as_current_span("http.indexing_service"):
         result = indexing_breaker.call(_request)
-    logger.info("indexing=done result=%s", result)
+    ids = result.get("ids", [])
+    ids_preview = ids[:3] + (["..."] if len(ids) > 3 else [])
+    logger.info(
+        "indexing=done num_added=%s num_skipped=%s ids=%s",
+        result.get("num_added"),
+        result.get("num_skipped"),
+        ids_preview,
+    )
     return result
 
 
