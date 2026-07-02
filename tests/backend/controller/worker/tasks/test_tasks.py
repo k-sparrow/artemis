@@ -442,7 +442,6 @@ class TestIndex:
         assert result["object"]["properties"]["content_type"] == _SOURCE.content_type
         assert result["object"]["properties"]["size_bytes"] == _S3.size
         assert result["indexing"]["num_added"] == _UPSERT_RESULT["num_added"]
-        assert result["indexing"]["ids"] == _UPSERT_RESULT["ids"]
         assert result["operation"] == "CREATE"
 
     def test_returns_group_id_when_provided(self) -> None:

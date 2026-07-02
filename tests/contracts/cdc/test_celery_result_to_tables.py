@@ -158,7 +158,7 @@ def _make_ingestion_result(
                 "size_bytes": 2048 if operation != "DELETE" else None,
             },
         },
-        "indexing": {"num_added": 0, "num_skipped": 0, "ids": []},
+        "indexing": {"num_added": 0, "num_skipped": 0},
         "operation": operation,
         # Contract task_id <A> — ksqlDB keys ingestion_tasks off
         # EXTRACTJSONFIELD(result, '$.task_id'), not the taskmeta task_id

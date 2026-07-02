@@ -122,7 +122,6 @@ class IndexingOutcome(BaseModel):
 
     num_added: int
     num_skipped: int
-    ids: list[str]
 
 
 class IngestionResult(BaseModel):

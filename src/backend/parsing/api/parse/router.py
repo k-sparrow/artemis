@@ -57,7 +57,13 @@ async def parse_endpoint(
         ref = BlobRef.model_validate_json(source_ref)
         content = await blob_store(ref.bucket).aget(ref.key)
         in_name, in_type = filename, content_type
-        logger.info("parse_started", source="ref", filename=in_name, bucket=ref.bucket, key=ref.key)
+        logger.info(
+            "parse_started",
+            source="ref",
+            filename=in_name,
+            bucket=ref.bucket,
+            key=ref.key,
+        )
 
     try:
         artifact, replay = await service.a_parse(

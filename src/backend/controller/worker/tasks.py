@@ -416,7 +416,6 @@ def index(
             indexing=IndexingOutcome(
                 num_added=result["num_added"],
                 num_skipped=result["num_skipped"],
-                ids=result["ids"],
             ),
             operation=upload_action,
             # Contract task_id (the id the caller holds) → keys ingestion_tasks.
@@ -489,7 +488,7 @@ def delete_document(
                 size_bytes=None,
             ),
         ),
-        indexing=IndexingOutcome(num_added=0, num_skipped=0, ids=[]),
+        indexing=IndexingOutcome(num_added=0, num_skipped=0),
         operation=UploadAction.DELETE.value,
         task_id=task_id,
     ).model_dump(mode="json")

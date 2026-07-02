@@ -69,7 +69,7 @@ def _make_result_json(
                     "size_bytes": 2048 if operation != "DELETE" else None,
                 },
             },
-            "indexing": {"num_added": 0, "num_skipped": 0, "ids": []},
+            "indexing": {"num_added": 0, "num_skipped": 0},
             "operation": operation,
             # The ingestion_tasks fan-out keys the row by result.task_id (the
             # contract id), so a synthetic row must carry it here. The synthetic
