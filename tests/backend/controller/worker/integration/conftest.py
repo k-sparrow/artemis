@@ -6,8 +6,11 @@ Infrastructure (session-scoped):
   - MinIO testcontainer      — S3 source + parse-artifact (claim-check) intermediate
 
 HTTP service stubs — one WireMock container, two path-scoped views (session-scoped):
-  - parsing_stub   — returns a BlobRef on POST /v1/parse (claim-check; the
-                     artifact itself is pre-seeded into MinIO by seed_artifact)
+  - parsing_stub   — stubs the 4-step async chain under /v1/parse/*:
+                     POST /v1/parse/submit → SubmitResult
+                     GET  /v1/parse/status/* → ParseStatus "success"
+                     POST /v1/parse/resolve → ResolveResult
+                     POST /v1/parse/finalize → BlobRef (pre-seeded artifact in MinIO)
   - indexing_stub  — returns UpsertResult on POST /ingest, 204 on DELETE /ingest
   Each ``WireMockStub`` filters the shared WireMock request journal by its path,
   keeping the old StubServer surface (``requests``/``push_response``/``clear``).
@@ -54,6 +57,8 @@ _IMAGE_TAG = "artemis/backend-controller-worker:latest"
 # ---------------------------------------------------------------------------
 
 _STUB_OBJ_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+_STUB_CONV_TASK_ID = "stub-conv-task-id"
+_STUB_CHUNK_TASK_ID = "stub-chunk-task-id"
 
 _SAMPLE_ARTIFACT = {
     "pages": [
@@ -87,6 +92,25 @@ _SAMPLE_ARTIFACT = {
 _ARTIFACT_BUCKET = "parsed-chunks"
 _ARTIFACT_KEY = f"parse/{_STUB_OBJ_ID}.json"
 _PARSE_RESPONSE = {"bucket": _ARTIFACT_BUCKET, "key": _ARTIFACT_KEY}
+
+# Async-parse chain stubs: submit → status (success) → resolve → status (success) → finalize
+_SUBMIT_RESULT = {
+    "parsing_task_id": _STUB_CONV_TASK_ID,
+    "mode": "single",
+    "obj_id": _STUB_OBJ_ID,
+    "scratch_prefix": None,
+    "shard_count": None,
+}
+_PARSE_STATUS_SUCCESS = {
+    "status": "success",
+    "num_processed": 1,
+    "num_total": 1,
+    "error_message": None,
+}
+_RESOLVE_RESULT = {
+    "chunking_task_id": _STUB_CHUNK_TASK_ID,
+    "obj_id": _STUB_OBJ_ID,
+}
 
 _UPSERT_RESULT = {
     "num_added": 2,
@@ -229,14 +253,56 @@ def minio_container(request: pytest.FixtureRequest) -> MinioContainer:
 
 @pytest.fixture(scope="session")
 def wiremock(request: pytest.FixtureRequest) -> WireMockContainer:
-    """One WireMock stubbing both HTTP deps of the chain, matched by path:
-    parsing (``POST /v1/parse`` → claim-check BlobRef) and indexing
-    (``POST /ingest`` → UpsertResult, ``DELETE /ingest`` → 204)."""
+    """One WireMock stubbing both HTTP deps of the chain, matched by path.
+
+    Parsing (async 4-step chain):
+      POST /v1/parse/submit   → SubmitResult
+      GET  /v1/parse/status/* → ParseStatus "success"
+      POST /v1/parse/resolve  → ResolveResult
+      POST /v1/parse/finalize → BlobRef (same as old /v1/parse claim-check)
+
+    Indexing:
+      POST   /ingest → UpsertResult
+      DELETE /ingest → 204
+    """
     wm = WireMockContainer(secure=False)
     wm.with_mapping(
-        "parsing-parse.json",
+        "parsing-submit.json",
         {
-            "request": {"method": "POST", "urlPath": "/v1/parse"},
+            "request": {"method": "POST", "urlPath": "/v1/parse/submit"},
+            "response": {
+                "status": 200,
+                "headers": {"Content-Type": "application/json"},
+                "jsonBody": _SUBMIT_RESULT,
+            },
+        },
+    )
+    wm.with_mapping(
+        "parsing-status.json",
+        {
+            "request": {"method": "GET", "urlPattern": "/v1/parse/status/.*"},
+            "response": {
+                "status": 200,
+                "headers": {"Content-Type": "application/json"},
+                "jsonBody": _PARSE_STATUS_SUCCESS,
+            },
+        },
+    )
+    wm.with_mapping(
+        "parsing-resolve.json",
+        {
+            "request": {"method": "POST", "urlPath": "/v1/parse/resolve"},
+            "response": {
+                "status": 200,
+                "headers": {"Content-Type": "application/json"},
+                "jsonBody": _RESOLVE_RESULT,
+            },
+        },
+    )
+    wm.with_mapping(
+        "parsing-finalize.json",
+        {
+            "request": {"method": "POST", "urlPath": "/v1/parse/finalize"},
             "response": {
                 "status": 200,
                 "headers": {"Content-Type": "application/json"},

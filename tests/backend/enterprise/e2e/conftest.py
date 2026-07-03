@@ -20,7 +20,7 @@ The docker-compose.test.yaml artefact is produced by:
 and passed to this conftest via the --compose-file pytest argument, set in
 BUILD.bazel using $(location //tools/docker:docker_compose_test).
 
-Profiles started: infra, enterprise, ai, ai-tei, mcp
+Profiles started: infra, backend, enterprise, ai, ai-tei, mcp
 """
 
 from __future__ import annotations
@@ -34,7 +34,12 @@ import pytest
 import sqlalchemy as sa
 from qdrant_client import QdrantClient
 from testcontainers.compose import DockerCompose
-from tests.lib.polling import poll_until, wait_for_http, wait_for_kc_connector
+from tests.lib.polling import (
+    poll_until,
+    wait_for_celery_workers,
+    wait_for_http,
+    wait_for_kc_connector,
+)
 from tests.lib.testcontainers.vllm import VLLMContainer
 
 
@@ -176,7 +181,8 @@ _DIAGNOSTIC_SERVICES = [
     "backend-enterprise-data-sources",
     "backend-enterprise-intake",
     "backend-indexing-ingestion",
-    "backend-indexing-controller-celery-worker",
+    "backend-controller-parse-worker",
+    "backend-controller-index-worker",
     "backend-parsing",
     "backend-mcp",
     "kafka-connect",
@@ -211,7 +217,7 @@ def compose(
     dc = DockerCompose(
         context=str(compose_file.parent),
         compose_file_name=[compose_file.name],
-        profiles=["infra", "enterprise", "ai", "ai-tei", "mcp"],
+        profiles=["infra", "backend", "enterprise", "ai", "ai-tei", "mcp"],
         pull=False,
         build=False,
     )
@@ -271,6 +277,17 @@ def compose(
         )
         wait_for_kc_connector(
             kc_url, "DebeziumJdbcSinkConnector__CeleryResultToIngestionTasks"
+        )
+        # Both Celery workers must be consuming before any file is dropped.
+        # Workers connect to RabbitMQ asynchronously after compose starts;
+        # tasks dispatched before they're ready would queue up but not be lost,
+        # however a failed worker start (e.g. bad env) would cause a silent hang.
+        rabbit_host, rabbit_port = dc.get_service_host_and_port("rabbitmq", 5672)
+        broker_url = f"amqp://artemis:artemis@{rabbit_host}:{rabbit_port}/artemis"
+        wait_for_celery_workers(
+            broker_url,
+            required_queues=["artemis.ingestion.parse", "artemis.ingestion.index"],
+            timeout=120,
         )
     except Exception:
         _dump_service_logs(dc)

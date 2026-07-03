@@ -51,7 +51,10 @@ from tests.backend.controller.worker.integration.conftest import (  # noqa: PLC2
     _ARTIFACT_KEY,
     _IMAGE_TAG,
     _PARSE_RESPONSE,
+    _PARSE_STATUS_SUCCESS,
+    _RESOLVE_RESULT,
     _SAMPLE_ARTIFACT,
+    _SUBMIT_RESULT,
     _UPSERT_RESULT,
     _wait_for_worker,
     upload_file,
@@ -101,15 +104,57 @@ def minio_client(minio_container):
 
 @pytest.fixture(scope="session")
 def wiremock(request: pytest.FixtureRequest) -> WireMockContainer:
-    """One WireMock stubbing BOTH HTTP deps of the chain — the parsing service
-    (``POST /v1/parse`` → claim-check BlobRef) and the indexing service
-    (``POST /ingest`` → UpsertResult). Matched by path, so a single instance
-    backs both PARSING_SERVICE_URL and INGESTION_SERVICE_URL."""
+    """One WireMock stubbing BOTH HTTP deps of the chain.
+
+    Parsing (async 4-step chain under /v1/parse/*):
+      POST /v1/parse/submit   → SubmitResult
+      GET  /v1/parse/status/* → ParseStatus "success"
+      POST /v1/parse/resolve  → ResolveResult
+      POST /v1/parse/finalize → BlobRef claim-check
+
+    Indexing:
+      POST /ingest → UpsertResult
+
+    A single WireMock instance backs both PARSING_SERVICE_URL and
+    INGESTION_SERVICE_URL (matched by path prefix)."""
     wm = WireMockContainer(secure=False)
     wm.with_mapping(
-        "parsing-parse.json",
+        "parsing-submit.json",
         {
-            "request": {"method": "POST", "urlPath": "/v1/parse"},
+            "request": {"method": "POST", "urlPath": "/v1/parse/submit"},
+            "response": {
+                "status": 200,
+                "headers": {"Content-Type": "application/json"},
+                "jsonBody": _SUBMIT_RESULT,
+            },
+        },
+    )
+    wm.with_mapping(
+        "parsing-status.json",
+        {
+            "request": {"method": "GET", "urlPattern": "/v1/parse/status/.*"},
+            "response": {
+                "status": 200,
+                "headers": {"Content-Type": "application/json"},
+                "jsonBody": _PARSE_STATUS_SUCCESS,
+            },
+        },
+    )
+    wm.with_mapping(
+        "parsing-resolve.json",
+        {
+            "request": {"method": "POST", "urlPath": "/v1/parse/resolve"},
+            "response": {
+                "status": 200,
+                "headers": {"Content-Type": "application/json"},
+                "jsonBody": _RESOLVE_RESULT,
+            },
+        },
+    )
+    wm.with_mapping(
+        "parsing-finalize.json",
+        {
+            "request": {"method": "POST", "urlPath": "/v1/parse/finalize"},
             "response": {
                 "status": 200,
                 "headers": {"Content-Type": "application/json"},
@@ -285,7 +330,7 @@ def _dispatch_ingest(
     """Dispatch ``tasks.ingest`` the way the storage service does (optionally with
     an explicit contract ``task_id``).
 
-    ``size=0`` makes ``fetch_and_parse`` raise ``EmptyObjectError`` (non-retryable)
+    ``size=0`` makes ``submit_parse`` raise ``EmptyObjectError`` (non-retryable)
     — the lowest-friction real terminal failure, exercising the FAILURE path with
     no extra infra.
     """
@@ -408,7 +453,7 @@ def test_failure_resolves_in_ingestion_tasks(
 
     End-to-end exercise of the FAILURE-visibility path through the REAL worker +
     Debezium + the ``task_id IS NOT NULL`` guard: dispatch with ``size=0`` so
-    ``fetch_and_parse`` raises ``EmptyObjectError`` (non-retryable, terminal) →
+    ``submit_parse`` raises ``EmptyObjectError`` (non-retryable, terminal) →
     ``FailureRecordingTask.on_failure`` overwrites the result row with a
     FailureRecord carrying the contract id → ksqlDB Fan-out D → ``ingestion_tasks``.
     Without this, a failed upload is indistinguishable from "still running"/"unknown".

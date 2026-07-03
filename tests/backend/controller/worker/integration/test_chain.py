@@ -112,7 +112,8 @@ class TestFetchAndParseIndexChain:
         _dispatch_ingest(dispatch_app, s3_source_bucket, namespace_id)
         wait_until_stub_called(indexing_stub, timeout=60)
 
-        assert len(parsing_stub.requests) == 1
+        # Async chain calls 5 parsing endpoints: submit + status×2 + resolve + finalize
+        assert len(parsing_stub.requests) == 5
         assert len(indexing_stub.requests) == 1
 
     def test_parsing_stub_receives_correct_filename(
@@ -130,7 +131,10 @@ class TestFetchAndParseIndexChain:
         _dispatch_ingest(dispatch_app, s3_source_bucket, namespace_id)
         wait_until_stub_called(indexing_stub, timeout=60)
 
-        assert b"test.md" in parsing_stub.requests[0]["body"]
+        submit_req = next(
+            r for r in parsing_stub.requests if r["path"].endswith("/submit")
+        )
+        assert b"test.md" in submit_req["body"]
 
     def test_indexing_stub_receives_correct_namespace(
         self,
@@ -350,7 +354,8 @@ class TestRetryBehavior:
         # retry_backoff=True means the first retry fires after ~2s.
         wait_until_stub_called_n_times(indexing_stub, n=2, timeout=60)
 
-        assert sum(1 for r in parsing_stub.requests if r["method"] == "POST") == 1
+        # Parsing chain: submit + resolve + finalize = 3 POST calls (status uses GET)
+        assert sum(1 for r in parsing_stub.requests if r["method"] == "POST") == 3
         assert sum(1 for r in indexing_stub.requests if r["method"] == "POST") == 2
 
         # Successful retry means the index task completed — cleanup must follow.

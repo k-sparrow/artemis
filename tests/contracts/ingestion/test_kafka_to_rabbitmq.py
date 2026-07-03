@@ -15,7 +15,7 @@ SMT chain (mirrors production):
   InsertHeader    — adds CamelHeader.task = "tasks.ingest"
   InsertHeader    — adds CamelHeader.CamelSpringRabbitmqContentType = "application/json"
 
-Output: RabbitMQ queue artemis.ingestion.fetch-and-parse
+Output: RabbitMQ queue artemis.ingestion.parse
   - body     : original Celery v2 JSON bytes, unchanged
   - headers  : CamelHeader.id == task_id (str)
                CamelHeader.task == "tasks.ingest"
@@ -58,9 +58,9 @@ from tests.lib.testcontainers.kafka.kafka import KafkaContainer
 
 _KC_IMAGE = "artemis/cp-kafka-connect:latest"
 _ROUTED_TOPIC = "artemis.ingestion.celery.tasks.routed"
-_QUEUE = "artemis.ingestion.fetch-and-parse"
+_QUEUE = "artemis.ingestion.parse"
 _EXCHANGE = "amq.direct"
-_ROUTING_KEY = "fetch-and-parse"
+_ROUTING_KEY = "parse"
 _CONNECTOR_NAME = "CamelRabbitMQSinkConnector__CeleryTasksIngestion__ContractTest"
 
 _RABBITMQ_USER = "guest"

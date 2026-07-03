@@ -183,7 +183,7 @@ services:
   # Backend
   # ---------------------------------------------------------------------------
   backend-storage:
-    profiles: [backend, enterprise]
+    profiles: [backend]
     image: artemis/backend-storage:{ARTEMIS_TAG_DEV}
     restart: unless-stopped
     depends_on:
@@ -214,7 +214,7 @@ services:
     networks:
       - default
   backend-controller-parse-worker:
-    profiles: [backend, enterprise]
+    profiles: [backend]
     image: artemis/backend-controller-worker:{ARTEMIS_TAG_LATEST}
     command: ["--queues", "artemis.ingestion.parse", "--concurrency", "3", "--prefetch-multiplier", "1"]
     restart: unless-stopped
@@ -250,7 +250,7 @@ services:
     networks:
       - default
   backend-controller-index-worker:
-    profiles: [backend, enterprise]
+    profiles: [backend]
     image: artemis/backend-controller-worker:{ARTEMIS_TAG_LATEST}
     command: ["--queues", "artemis.ingestion.index", "--concurrency", "1", "--prefetch-multiplier", "1"]
     restart: unless-stopped
@@ -286,7 +286,7 @@ services:
     networks:
       - default
   backend-parsing:
-    profiles: [backend, enterprise]
+    profiles: [backend]
     image: artemis/backend-parsing:{ARTEMIS_TAG_DEV}
     depends_on:
       docling-serve:
@@ -313,7 +313,7 @@ services:
     networks:
       - default
   backend-indexing-ingestion:
-    profiles: [backend, enterprise]
+    profiles: [backend]
     image: artemis/backend-indexing:{ARTEMIS_TAG_DEV}
     restart: on-failure
     depends_on:

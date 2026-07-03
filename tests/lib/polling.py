@@ -1,6 +1,6 @@
 """Tenacity-based polling utilities shared across the test suite.
 
-Three primitives cover every polling pattern in the tests:
+Four primitives cover every polling pattern in the tests:
 
   poll_until(fn, timeout, interval)
       Generic: call fn() until it returns truthy; raise TimeoutError on timeout.
@@ -10,6 +10,9 @@ Three primitives cover every polling pattern in the tests:
 
   wait_for_kc_connector(kc_url, name, timeout, interval)
       Block until a Kafka Connect connector and all its tasks reach RUNNING.
+
+  wait_for_celery_workers(broker_url, required_queues, timeout, interval)
+      Block until every queue in required_queues has at least one live worker.
 """
 
 from __future__ import annotations
@@ -58,6 +61,44 @@ def wait_for_http(url: str, *, timeout: int = 300, interval: float = 3.0) -> Non
                     raise TryAgain
     except RetryError:
         raise TimeoutError(f"{url} did not become ready within {timeout}s")
+
+
+def wait_for_celery_workers(
+    broker_url: str,
+    required_queues: list[str],
+    *,
+    timeout: int = 120,
+    interval: float = 3.0,
+) -> None:
+    """Block until every queue in required_queues has at least one live worker.
+
+    Uses Celery inspect().active_queues() which returns a mapping of
+    {worker_name: [queue_dict, ...]} for every worker that replied.
+    Retries until all required queue names appear in the combined set.
+    """
+    from celery import Celery as _Celery
+
+    check = _Celery(broker=broker_url)
+
+    def _all_queues_covered() -> bool:
+        try:
+            result = check.control.inspect(timeout=2).active_queues()
+        except Exception:
+            return False
+        if not result:
+            return False
+        active: set[str] = {
+            q["name"] for queues in result.values() for q in (queues or [])
+        }
+        return all(q in active for q in required_queues)
+
+    try:
+        poll_until(_all_queues_covered, timeout=timeout, interval=interval)
+    except TimeoutError:
+        raise TimeoutError(
+            f"Celery workers for queues {required_queues} "
+            f"did not become ready within {timeout}s"
+        )
 
 
 def wait_for_kc_connector(

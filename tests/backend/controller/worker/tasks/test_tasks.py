@@ -78,9 +78,9 @@ class TestIngest:
     """
 
     def test_create_dispatches_chain(self) -> None:
-        """CREATE action must dispatch the fetch_and_parse → index chain.
+        """CREATE action must dispatch the parse → index chain.
 
-        Also verifies the serialisation boundary: ``fetch_and_parse`` must
+        Also verifies the serialisation boundary: ``parse`` must
         receive plain dicts/strings, not Pydantic model instances, so that
         kombu can JSON-encode them across the broker.
         """
@@ -99,7 +99,7 @@ class TestIngest:
 
         assert "chain_id" in result
         mock_chain.assert_called_once()
-        # First task: fetch_and_parse must receive serialisable args. Identity is
+        # First task (tasks.parse) must receive serialisable args. Identity is
         # passed by KEYWORD so FailureRecordingTask.on_failure can recover it from
         # kwargs; the contract task_id is propagated alongside.
         first_sig = mock_chain.call_args[0][0]
@@ -107,7 +107,7 @@ class TestIngest:
         propagated_task_id = first_sig.kwargs["task_id"]
         assert isinstance(propagated_task_id, str) and propagated_task_id
         assert first_sig.kwargs == {
-            "source": _SOURCE.model_dump(),
+            "source": _SOURCE.model_dump(mode="json"),
             "namespace_id": str(_NAMESPACE_ID),
             "group_id": None,  # None when not set on IngestionInfo
             "task_id": propagated_task_id,

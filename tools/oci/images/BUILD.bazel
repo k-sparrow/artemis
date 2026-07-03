@@ -763,16 +763,16 @@ kafka_connect_connector_instance(
         "connector.class": "org.apache.camel.kafkaconnector.springrabbitmqsink.CamelSpringrabbitmqsinkSinkConnector",
         "tasks.max": "1",
         "topics": "artemis.ingestion.celery.tasks.routed",
-        # RabbitMQ connection — matches backend-indexing-controller-celery-worker env in compose
+        # RabbitMQ connection — matches backend-controller-parse-worker env in compose
         "camel.kamelet.spring-rabbitmq-sink.host": "rabbitmq",
         "camel.kamelet.spring-rabbitmq-sink.port": "5672",
         "camel.kamelet.spring-rabbitmq-sink.username": "artemis",
         "camel.kamelet.spring-rabbitmq-sink.password": "artemis",
         "camel.kamelet.spring-rabbitmq-sink.vhost": "artemis",
-        # Direct exchange + routing key matching Celery queue artemis.ingestion.fetch-and-parse
+        # Direct exchange + routing key matching Celery queue artemis.ingestion.parse
         "camel.kamelet.spring-rabbitmq-sink.exchangeName": "ingestion_test0",
-        "camel.kamelet.spring-rabbitmq-sink.routingKey": "fetch-and-parse",
-        "camel.kamelet.spring-rabbitmq-sink.queues": "artemis.ingestion.fetch-and-parse",
+        "camel.kamelet.spring-rabbitmq-sink.routingKey": "parse",
+        "camel.kamelet.spring-rabbitmq-sink.queues": "artemis.ingestion.parse",
         # Queue is declared by the Celery worker (durable=true) — connector only publishes
         "camel.kamelet.spring-rabbitmq-sink.autoDeclareProducer": "false",
         # key.converter=JsonConverter deserialises the struct key {"task_id": "<uuid>"}
