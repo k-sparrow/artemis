@@ -25,8 +25,9 @@ from minio import Minio
 
 from src.lib.core.ingestion.types import ChunkType, ParseArtifact
 
-# Bazel runfiles path for cross-package data files (artemis = module name).
-_BAZEL_WORKSPACE = "artemis"
+# Bazel bzlmod uses "_main" as the canonical workspace name for the main module,
+# not the module name declared in MODULE.bazel.
+_BAZEL_WORKSPACE = "_main"
 _FIXTURE_DIR_REL = Path("tools/fixtures/docs")
 
 

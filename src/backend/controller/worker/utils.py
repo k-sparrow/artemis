@@ -35,7 +35,6 @@ from src.backend.controller.lib.schemas import BlobRef, S3Details, SourceDetails
 
 __all__ = [
     "fetch_from_s3",
-    "call_parsing_service",
     "call_parse_submit",
     "call_parse_status",
     "call_parse_resolve",
@@ -103,44 +102,6 @@ def fetch_from_s3(
     data = response.read()
     logger.info("s3=fetched bytes=%d", len(data))
     return data
-
-
-def call_parsing_service(
-    source_ref: BlobRef,
-    source: SourceDetails,
-    parsing_url: str,
-    timeout: float,
-    logger: Logger,
-) -> BlobRef:
-    """Ask the parsing service to parse the input at *source_ref* (claim-check).
-
-    The input bytes are read by parsing directly from object storage; only the
-    artifact's :class:`BlobRef` comes back — no payload crosses the wire.
-
-    Raises ``pybreaker.CircuitBreakerError`` when the parsing circuit is OPEN.
-    """
-    url = f"{parsing_url.rstrip('/')}/v1/parse"
-    logger.info("parsing=request url=%s key=%s", url, source_ref.key)
-
-    def _request() -> dict:
-        with httpx.Client(timeout=timeout) as http:
-            response = http.post(
-                url,
-                data={
-                    "source_ref": source_ref.model_dump_json(),
-                    "filename": source.source,
-                    "content_type": source.content_type,
-                    "metadata": json.dumps({"obj_id": str(source.obj_id)}),
-                },
-            )
-            response.raise_for_status()
-            return response.json()
-
-    with _tracer.start_as_current_span("http.parsing_service"):
-        raw = parsing_breaker.call(_request)
-    artifact = BlobRef.model_validate(raw)
-    logger.info("parsing=done artifact=%s", artifact.key)
-    return artifact
 
 
 def call_parse_submit(

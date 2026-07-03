@@ -53,8 +53,8 @@ def _mock_docling_client() -> MagicMock:
     client.get_status = AsyncMock(
         return_value=ParseStatus(status="success", num_processed=1, num_total=1)
     )
-    # fetch_conversion_result returns a mock DoclingDocument
-    # (model_dump_json used by resolve)
+    # fetch_conversion_result returns a mock DoclingDocument (model_dump_json called
+    # by resolve to build the replay cache bytes).
     mock_dl_doc = MagicMock()
     mock_dl_doc.model_dump_json.return_value = _docling_doc_json().decode()
     client.fetch_conversion_result = AsyncMock(return_value=mock_dl_doc)
@@ -364,19 +364,17 @@ class TestResolveEndpoint:
         docling_client: MagicMock,
         store: InMemoryBlobStore,
     ) -> None:
-        """Batch mode: shard docs read from scratch, DoclingDocument.concatenate called,
-        replay cache written, scratch cleaned."""
-        doc_json = _docling_doc_json()
-        results_prefix = f"{OBJ_ID_STR}/results/"
-        for i in range(2):
-            store.put(f"{results_prefix}shard-{i:04d}.json", doc_json)
+        """Batch mode: shard JSONs read from scratch bucket, replay cache written,
+        chunk job submitted, chunking_task_id returned."""
+        from docling.datamodel.document import DoclingDocument
 
-        # Mock the raw s3 client's list_objects (used to discover scratch keys).
+        shard_key = f"{OBJ_ID_STR}/results/json/shard-0000.json"
+        store.put(shard_key, DoclingDocument(name="shard").model_dump_json().encode())
+
+        mock_obj = MagicMock()
+        mock_obj.object_name = shard_key
         mock_s3 = MagicMock()
-        mock_s3.list_objects.return_value = [
-            MagicMock(object_name=f"{results_prefix}shard-0000.json"),
-            MagicMock(object_name=f"{results_prefix}shard-0001.json"),
-        ]
+        mock_s3.list_objects.return_value = [mock_obj]
         app.dependency_overrides[get_s3_client] = lambda: mock_s3
 
         try:
@@ -385,18 +383,16 @@ class TestResolveEndpoint:
             app.dependency_overrides.pop(get_s3_client, None)
 
         assert resp.status_code == 200
-        assert resp.json()["chunking_task_id"] == CHUNK_TASK_ID
+        assert resp.json() == {"chunking_task_id": CHUNK_TASK_ID, "obj_id": OBJ_ID_STR}
         assert store.exists(f"replay/{OBJ_ID_STR}.json")
-        # Scratch objects under the scratch_prefix must be deleted.
-        assert not store.exists(f"{results_prefix}shard-0000.json")
-        assert not store.exists(f"{results_prefix}shard-0001.json")
+        docling_client.submit_chunk.assert_awaited_once()
 
     def test_batch_mode_returns_502_when_no_shard_results(
         self,
         client: TestClient,
         docling_client: MagicMock,
     ) -> None:
-        """Batch mode with no objects in the results prefix → 502."""
+        """Batch mode with no results in scratch → 502."""
         mock_s3 = MagicMock()
         mock_s3.list_objects.return_value = []
         app.dependency_overrides[get_s3_client] = lambda: mock_s3

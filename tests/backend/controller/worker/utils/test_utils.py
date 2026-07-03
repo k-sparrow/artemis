@@ -1,8 +1,7 @@
 """Unit tests for controller worker utility functions.
 
-The service calls are claim-check: ``call_parsing_service`` sends a ``source_ref``
-and returns the artifact ``BlobRef``; ``call_indexing_service`` sends an
-``artifact_ref``. All HTTP is mocked with respx — no infrastructure required.
+``call_indexing_service`` sends an ``artifact_ref`` and returns the ingestion
+result. All HTTP is mocked with respx — no infrastructure required.
 """
 
 from __future__ import annotations
@@ -11,7 +10,6 @@ import json
 import logging
 import uuid
 from unittest.mock import MagicMock
-from urllib.parse import parse_qs
 
 import pybreaker
 import pytest
@@ -21,7 +19,7 @@ from httpx import Response
 from src.backend.controller.lib.schemas import BlobRef, S3Details, SourceDetails
 from src.backend.controller.worker.utils import (
     call_indexing_service,
-    call_parsing_service,
+    call_parse_status,
     fetch_from_s3,
     parsing_breaker,
 )
@@ -70,71 +68,6 @@ class TestFetchFromS3:
 
         with pytest.raises(Exception, match="connection refused"):
             fetch_from_s3(mock_client, self._s3(), _logger)
-
-
-# ---------------------------------------------------------------------------
-# call_parsing_service (source_ref in → artifact BlobRef out)
-# ---------------------------------------------------------------------------
-
-
-class TestCallParsingService:
-    @respx.mock
-    def test_happy_path_returns_artifact_ref(self) -> None:
-        respx.post(f"{_PARSING_URL}/v1/parse").mock(
-            return_value=Response(
-                200, json={"bucket": "parsed-chunks", "key": "parse/x.json"}
-            )
-        )
-
-        artifact = call_parsing_service(
-            source_ref=_SOURCE_REF,
-            source=_source(),
-            parsing_url=_PARSING_URL,
-            timeout=5.0,
-            logger=_logger,
-        )
-
-        assert isinstance(artifact, BlobRef)
-        assert artifact.bucket == "parsed-chunks"
-        assert artifact.key == "parse/x.json"
-
-    @respx.mock
-    def test_source_ref_filename_content_type_and_obj_id_sent_as_form(self) -> None:
-        route = respx.post(f"{_PARSING_URL}/v1/parse").mock(
-            return_value=Response(200, json={"bucket": "b", "key": "k"})
-        )
-
-        call_parsing_service(
-            source_ref=_SOURCE_REF,
-            source=_source("report.pdf", "application/pdf"),
-            parsing_url=_PARSING_URL,
-            timeout=5.0,
-            logger=_logger,
-        )
-
-        form = parse_qs(route.calls.last.request.content.decode())
-        assert json.loads(form["source_ref"][0]) == {
-            "bucket": _SOURCE_REF.bucket,
-            "key": _SOURCE_REF.key,
-        }
-        assert form["filename"][0] == "report.pdf"
-        assert form["content_type"][0] == "application/pdf"
-        assert json.loads(form["metadata"][0])["obj_id"] == str(_OBJ_ID)
-
-    @respx.mock
-    def test_non_200_raises_http_status_error(self) -> None:
-        respx.post(f"{_PARSING_URL}/v1/parse").mock(
-            return_value=Response(503, json={"detail": "docling down"})
-        )
-
-        with pytest.raises(Exception):
-            call_parsing_service(
-                source_ref=_SOURCE_REF,
-                source=_source(),
-                parsing_url=_PARSING_URL,
-                timeout=5.0,
-                logger=_logger,
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -219,9 +152,8 @@ class TestCallIndexingService:
 
 
 def _parse(url: str = _PARSING_URL) -> None:
-    call_parsing_service(
-        source_ref=_SOURCE_REF,
-        source=_source(),
+    call_parse_status(
+        task_id="stub-task-id",
         parsing_url=url,
         timeout=5.0,
         logger=_logger,
@@ -254,7 +186,7 @@ class TestCircuitBreakers:
 
     def test_parsing_breaker_opens_after_fail_max_failures(self) -> None:
         with respx.mock:
-            route = respx.post(f"{_PARSING_URL}/v1/parse").mock(
+            route = respx.get(f"{_PARSING_URL}/v1/parse/status/stub-task-id").mock(
                 return_value=Response(503)
             )
             for _ in range(3):
@@ -282,11 +214,11 @@ class TestCircuitBreakers:
 
     def test_success_resets_failure_count(self) -> None:
         with respx.mock:
-            respx.post(f"{_PARSING_URL}/v1/parse").mock(
+            respx.get(f"{_PARSING_URL}/v1/parse/status/stub-task-id").mock(
                 side_effect=[
                     Response(503),
                     Response(503),
-                    Response(200, json={"bucket": "b", "key": "k"}),
+                    Response(200, json={"status": "success", "num_processed": 1, "num_total": 1, "error_message": None}),
                     Response(503),
                 ]
             )
@@ -306,7 +238,9 @@ class TestCircuitBreakers:
             logging.WARNING, logger="src.backend.controller.worker.utils"
         ):
             with respx.mock:
-                respx.post(f"{_PARSING_URL}/v1/parse").mock(return_value=Response(503))
+                respx.get(f"{_PARSING_URL}/v1/parse/status/stub-task-id").mock(
+                    return_value=Response(503)
+                )
                 for _ in range(3):
                     with pytest.raises(Exception):
                         _parse()

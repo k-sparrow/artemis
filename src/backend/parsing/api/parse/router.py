@@ -282,25 +282,23 @@ async def resolve_endpoint(
             timeout=settings.DOCLING_RESOLVE_TIMEOUT,
         )
     else:
-        results_prefix = f"{obj_id}/results/"
-        keys = sorted(
+        results_prefix = f"{obj_id}/results/json/"
+        shard_keys = sorted(
             obj.object_name
             for obj in s3.list_objects(
                 settings.DOCLING_SCRATCH_BUCKET, prefix=results_prefix, recursive=True
             )
-            if obj.object_name
+            if obj.object_name and obj.object_name.endswith(".json")
         )
-        if not keys:
+        if not shard_keys:
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"no batch results found at {results_prefix}",
+                detail="no batch results in S3 scratch",
             )
-
-        shard_docs: list[DoclingDocument] = []
-        for key in keys:
-            raw = await scratch_store.aget(key)
-            shard_docs.append(DoclingDocument.model_validate_json(raw))
-
+        shard_docs = [
+            DoclingDocument.model_validate_json(await scratch_store.aget(key))
+            for key in shard_keys
+        ]
         dl_doc = DoclingDocument.concatenate(shard_docs)
         logger.info(
             "batch_shards_concatenated",

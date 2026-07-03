@@ -489,9 +489,9 @@ def dispatch_app(
     app.conf.accept_content = ["json"]
     app.conf.task_queues = [
         Queue(
-            name="artemis.ingestion.fetch-and-parse",
+            name="artemis.ingestion.parse",
             exchange=_exchange,
-            routing_key="fetch-and-parse",
+            routing_key="parse",
             durable=True,
         ),
         Queue(

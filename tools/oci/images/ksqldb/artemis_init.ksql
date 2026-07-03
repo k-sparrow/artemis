@@ -429,8 +429,7 @@ SELECT
 FROM `artemis-celery-taskmeta`
 WHERE status = 'FAILURE'
   AND (
-    name = 'tasks.fetch_and_parse'
-    OR name = 'tasks.submit_parse'
+    name = 'tasks.submit_parse'
     OR name = 'tasks.poll_parse'
     OR name = 'tasks.resolve_parse'
     OR name = 'tasks.poll_resolve'

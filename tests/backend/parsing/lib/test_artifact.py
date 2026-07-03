@@ -20,8 +20,13 @@ _OBJ_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 
 
 class TestChunkItemsToParsed:
-    def _item(self, text="chunk text", filename="doc.json", page_numbers=None):
-        return {"text": text, "filename": filename, "page_numbers": page_numbers or []}
+    def _item(self, text="chunk text", filename="doc.json", page_numbers=None, doc_items=None):
+        return {
+            "text": text,
+            "filename": filename,
+            "page_numbers": page_numbers or [],
+            **({"doc_items": doc_items} if doc_items is not None else {}),
+        }
 
     def test_basic_mapping(self) -> None:
         item = self._item(text="hello", filename="test.pdf", page_numbers=[3])
@@ -30,6 +35,26 @@ class TestChunkItemsToParsed:
         assert chunk.source == "test.pdf"
         assert chunk.page_no == 3
         assert chunk.obj_id == _OBJ_ID
+        assert chunk.type == ChunkType.TEXT
+
+    def test_table_doc_item_ref_sets_table_type(self) -> None:
+        item = self._item(doc_items=["#/tables/0"])
+        (chunk,) = chunk_items_to_parsed([item], _OBJ_ID)
+        assert chunk.type == ChunkType.TABLE
+
+    def test_table_takes_priority_over_text_in_mixed_chunk(self) -> None:
+        item = self._item(doc_items=["#/texts/1", "#/tables/0", "#/texts/2"])
+        (chunk,) = chunk_items_to_parsed([item], _OBJ_ID)
+        assert chunk.type == ChunkType.TABLE
+
+    def test_text_only_doc_items_gives_text_type(self) -> None:
+        item = self._item(doc_items=["#/texts/0", "#/texts/1"])
+        (chunk,) = chunk_items_to_parsed([item], _OBJ_ID)
+        assert chunk.type == ChunkType.TEXT
+
+    def test_missing_doc_items_defaults_to_text(self) -> None:
+        item = {"text": "hello", "filename": "doc.pdf", "page_numbers": [1]}
+        (chunk,) = chunk_items_to_parsed([item], _OBJ_ID)
         assert chunk.type == ChunkType.TEXT
 
     def test_first_page_number_used(self) -> None:

@@ -48,8 +48,8 @@ def _dispatch_delete_document(dispatch_app, s3_bucket: str, namespace_id: uuid.U
             "upload_action": "DELETE",
             "info": {"namespace_id": str(namespace_id)},
         },
-        queue="artemis.ingestion.fetch-and-parse",
-        routing_key="fetch-and-parse",
+        queue="artemis.ingestion.parse",
+        routing_key="parse",
     )
 
 
@@ -71,8 +71,8 @@ def _dispatch_ingest(dispatch_app, s3_bucket: str, namespace_id: uuid.UUID):
             "upload_action": "CREATE",
             "info": {"namespace_id": str(namespace_id)},
         },
-        queue="artemis.ingestion.fetch-and-parse",
-        routing_key="fetch-and-parse",
+        queue="artemis.ingestion.parse",
+        routing_key="parse",
     )
 
 
@@ -322,7 +322,7 @@ class TestRetryBehavior:
 
     The indexing stub's push_response() acts as a scenario: one queued 503
     followed by the default 200.  The worker must retry tasks.index, hit the
-    stub a second time, and succeed.  tasks.fetch_and_parse must not be retried
+    stub a second time, and succeed.  The parse sub-chain must not be retried
     — only tasks.index autoretries on Exception.
     """
 
@@ -341,7 +341,7 @@ class TestRetryBehavior:
         The stub returns 503 on the first call (triggering autoretry) then
         falls back to its default 200.  After the retry succeeds:
           - indexing stub received exactly 2 POST calls (attempt + retry)
-          - parsing stub received exactly 1 POST call (fetch_and_parse not retried)
+          - parsing stub received 3 POST calls (parse sub-chain not retried)
           - the parsed-chunks MinIO object is cleaned up (indexing eventually succeeded)
         """
         indexing_stub.push_response(503, {"detail": "service unavailable"})
@@ -354,7 +354,7 @@ class TestRetryBehavior:
         # retry_backoff=True means the first retry fires after ~2s.
         wait_until_stub_called_n_times(indexing_stub, n=2, timeout=60)
 
-        # Parsing chain: submit + resolve + finalize = 3 POST calls (status uses GET)
+        # Parse sub-chain: submit + resolve + finalize = 3 POSTs; status uses GET.
         assert sum(1 for r in parsing_stub.requests if r["method"] == "POST") == 3
         assert sum(1 for r in indexing_stub.requests if r["method"] == "POST") == 2
 

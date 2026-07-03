@@ -33,7 +33,6 @@ from src.backend.controller.worker.tasks import (
     FailureRecordingTask,
     delete_document,
     delete_namespace,
-    fetch_and_parse,
     index,
     ingest,
 )
@@ -69,7 +68,7 @@ class TestIngest:
     infrastructure itself.
 
     Key design constraints verified here:
-    - CREATE/UPDATE must dispatch a ``fetch_and_parse → index`` chain, with
+    - CREATE/UPDATE must dispatch a ``parse → index`` chain, with
       Pydantic models serialised to plain dicts/strings so they survive the
       JSON round-trip through the broker (regression: EncodeError was raised
       when Pydantic models were passed directly).
@@ -279,7 +278,6 @@ class TestFailureRecordingTask:
         task.backend.store_result.assert_not_called()
 
     def test_failing_tasks_use_the_base(self) -> None:
-        assert isinstance(fetch_and_parse, FailureRecordingTask)
         assert isinstance(index, FailureRecordingTask)
         assert isinstance(delete_document, FailureRecordingTask)
         # ingest (fire-and-forget dispatcher) and delete_namespace do NOT.
@@ -367,42 +365,6 @@ class TestDeleteNamespace:
         mock_delete_svc = MagicMock()
         self._run(mock_delete_svc)
         assert mock_delete_svc.call_args[1]["namespace_id"] == _NAMESPACE_ID
-
-
-# ---------------------------------------------------------------------------
-# fetch_and_parse
-# ---------------------------------------------------------------------------
-
-
-class TestFetchAndParse:
-    """Tests for ``fetch_and_parse`` — hands parsing a source ``BlobRef`` and
-    returns the artifact ``BlobRef`` (claim-check; no download, no chunk store)."""
-
-    def _run(self, mock_parse: MagicMock) -> dict:
-        with patch(
-            "src.backend.controller.worker.tasks.call_parsing_service", mock_parse
-        ):
-            return fetch_and_parse.run(_S3, _SOURCE, _NAMESPACE_ID)
-
-    def test_returns_artifact_ref_dict(self) -> None:
-        """The task returns the artifact BlobRef (serialised) for the chain."""
-        result = self._run(MagicMock(return_value=_ARTIFACT_REF))
-        assert result == {"bucket": _ARTIFACT_REF.bucket, "key": _ARTIFACT_REF.key}
-
-    def test_parsing_called_with_source_ref_from_s3(self) -> None:
-        """The input S3 coordinates are forwarded as a source BlobRef."""
-        mock_parse = MagicMock(return_value=_ARTIFACT_REF)
-        self._run(mock_parse)
-
-        source_ref = mock_parse.call_args[1]["source_ref"]
-        assert source_ref.bucket == _S3.bucket
-        assert source_ref.key == _S3.object
-        assert mock_parse.call_args[1]["source"].source == "test.md"
-
-    def test_empty_object_raises_empty_object_error(self) -> None:
-        """size=0 in the contract must raise EmptyObjectError before calling parsing."""
-        with pytest.raises(EmptyObjectError):
-            fetch_and_parse.run(_S3_EMPTY, _SOURCE, _NAMESPACE_ID)
 
 
 # ---------------------------------------------------------------------------
@@ -499,62 +461,8 @@ def _make_http_error(status_code: int) -> httpx.HTTPStatusError:
     )
 
 
-class TestFetchAndParseRetry:
-    """Retry strategy for fetch_and_parse.
-
-    503 → Celery first line of defence: exponential backoff, max_retries=20.
-    CircuitBreakerError → wait one full reset window before probing:
-        countdown = reset_timeout(120) + 5 margin + jitter([0, 30]) → [125, 155].
-    4xx → permanent failure, no retry.
-    """
-
-    def _run_expecting_retry(self, exc: Exception) -> MagicMock:
-        mock_retry = MagicMock(side_effect=Retry())
-        with (
-            patch(
-                "src.backend.controller.worker.tasks.call_parsing_service",
-                side_effect=exc,
-            ),
-            patch.object(fetch_and_parse, "retry", mock_retry),
-        ):
-            with pytest.raises(Retry):
-                fetch_and_parse.run(_S3, _SOURCE, _NAMESPACE_ID)
-        return mock_retry
-
-    def test_5xx_retried_with_exponential_backoff(self) -> None:
-        mock_retry = self._run_expecting_retry(_make_http_error(503))
-        mock_retry.assert_called_once()
-        kw = mock_retry.call_args.kwargs
-        assert kw["max_retries"] == 20
-        # First attempt: backoff = min(120, 2^0) = 1s, jitter in [0, 1] → [1, 2]
-        assert 1 <= kw["countdown"] <= 2
-
-    def test_circuit_breaker_retried_after_reset_window(self) -> None:
-        mock_retry = self._run_expecting_retry(
-            pybreaker.CircuitBreakerError("Timeout not elapsed yet")
-        )
-        mock_retry.assert_called_once()
-        kw = mock_retry.call_args.kwargs
-        assert kw["max_retries"] == 20
-        # countdown = 120 + 5 + jitter([0, 30]) → [125, 155]
-        assert 125 <= kw["countdown"] <= 155
-
-    def test_4xx_propagates_without_retry(self) -> None:
-        mock_retry = MagicMock()
-        with (
-            patch(
-                "src.backend.controller.worker.tasks.call_parsing_service",
-                side_effect=_make_http_error(400),
-            ),
-            patch.object(fetch_and_parse, "retry", mock_retry),
-        ):
-            with pytest.raises(httpx.HTTPStatusError):
-                fetch_and_parse.run(_S3, _SOURCE, _NAMESPACE_ID)
-        mock_retry.assert_not_called()
-
-
 class TestIndexRetry:
-    """Retry strategy for index — mirrors fetch_and_parse but via indexing_breaker."""
+    """Retry strategy for index."""
 
     def _run_expecting_retry(self, exc: Exception) -> MagicMock:
         mock_retry = MagicMock(side_effect=Retry())

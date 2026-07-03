@@ -539,7 +539,7 @@ class TestRecordFailureContract:
 
     @pytest.mark.parametrize(
         "name",
-        ["tasks.fetch_and_parse", "tasks.index", "tasks.delete_document"],
+        ["tasks.submit_parse", "tasks.index", "tasks.delete_document"],
     )
     def test_failure_row_keyed_by_contract_id(
         self, bootstrap_server: str, streams: None, name: str

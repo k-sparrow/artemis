@@ -3,18 +3,18 @@
 Chain structure
 ---------------
 The Kafka RabbitMQ Sink Connector calls ``tasks.ingest``, which resolves the namespace
-UUID and dispatches the two-task chain:
+UUID and dispatches the two-task outer chain:
 
-    fetch_and_parse  →  index
+    parse  →  index
 
-``fetch_and_parse`` (gpu_bound queue)
-    1. Hands the parsing service a ``BlobRef`` to the input (claim-check — the
-       controller never downloads the file or moves bytes)
-    2. Parsing reads the input from object storage, writes the artifact, and
-       returns the artifact's ``BlobRef``, which this task returns to the chain
+``parse`` replaces itself via ``self.replace`` with the async sub-chain:
 
-``index`` (io_bound queue)
-    1. Receives the artifact ``BlobRef`` from the previous task
+    submit_parse  →  poll_parse  →  resolve_parse  →  poll_resolve
+
+``poll_resolve`` calls finalize on success and returns the artifact ``BlobRef``.
+
+``index`` (index queue)
+    1. Receives the artifact ``BlobRef`` from the parse sub-chain
     2. POSTs it to the indexing service, which reads the artifact from storage
     3. Deletes the artifact on success (leaves it on failure for replay)
     4. Returns the UpsertResult dict
@@ -66,7 +66,6 @@ from src.backend.controller.worker.utils import (
     call_parse_resolve,
     call_parse_status,
     call_parse_submit,
-    call_parsing_service,
     indexing_breaker,
     parsing_breaker,
 )
@@ -205,7 +204,7 @@ def ingest(
     upload_action: UploadAction,
     info: IngestionInfo,
 ) -> dict:
-    """Dispatch the fetch_and_parse → index chain for a single document."""
+    """Dispatch the parse → index chain for a single document."""
     namespace_id = info.namespace_id
 
     # This entry task's Celery id is the contract task_id: the AMQP message id
@@ -264,87 +263,6 @@ def ingest(
                 }
             )
             return {"task_id": str(result.id)}
-
-
-# ---------------------------------------------------------------------------
-# Task 1 — fetch from S3 + call parsing service + save chunks to MinIO
-# ---------------------------------------------------------------------------
-
-
-@app.task(
-    name="tasks.fetch_and_parse",
-    base=FailureRecordingTask,
-    bind=True,
-    pydantic=True,
-    backend=_db_backend,
-    result_serializer="json",
-    acks_late=True,
-)
-def fetch_and_parse(
-    self,
-    s3: S3Details,
-    source: SourceDetails,
-    namespace_id: uuid.UUID,
-    group_id: str | None = None,
-    task_id: str | None = None,
-    operation: str | None = None,
-) -> dict:
-    """Ask the parsing service to parse the input and return the artifact ref.
-
-    Claim-check: the controller no longer downloads the file or moves bytes — it
-    hands parsing a :class:`BlobRef` to the input, and parsing reads the bytes,
-    writes the artifact to object storage, and returns the artifact's BlobRef
-    (serialised here for the chain → :func:`index`).
-
-    Failure modes (non-retryable):
-        EmptyObjectError — contract reports size=0; empty file, nothing to index.
-
-    Retry strategy:
-        CircuitBreakerError — parsing service known-down; wait one full reset
-        window (reset_timeout + jitter) before probing again, up to max_retries.
-        HTTPStatusError 5xx — transient upstream failure; exponential backoff
-        with jitter, up to max_retries. 4xx errors are permanent and not retried.
-    """
-    with _tracer.start_as_current_span("tasks.fetch_and_parse") as span:
-        # The contract task_id propagated from `ingest`; fall back to this
-        # subtask's own id when invoked directly (e.g. in tests).
-        task_id = task_id or self.request.id or str(uuid.uuid4())
-        span.set_attribute("artemis.task_id", task_id)
-        span.set_attribute("artemis.namespace_id", str(namespace_id))
-        span.set_attribute("artemis.obj_id", str(source.obj_id))
-
-        # Empty file — permanent, do not retry. (size comes from the contract;
-        # missing/zero-byte inputs surface as a parsing failure → breaker retry.)
-        if s3.size == 0:
-            raise EmptyObjectError(str(source.obj_id))
-
-        source_ref = BlobRef(bucket=s3.bucket, key=s3.object)
-        try:
-            artifact = call_parsing_service(
-                source_ref=source_ref,
-                source=source,
-                parsing_url=settings.PARSING_SERVICE_URL,
-                timeout=settings.HTTPX_TIMEOUT,
-                logger=logger,
-            )
-        except pybreaker.CircuitBreakerError as exc:
-            jitter = random.uniform(0, parsing_breaker.reset_timeout * 0.25)
-            raise self.retry(
-                exc=exc,
-                countdown=parsing_breaker.reset_timeout + 5 + jitter,
-                max_retries=20,
-            )
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code >= 500:
-                backoff = min(120, 2**self.request.retries)
-                raise self.retry(
-                    exc=exc,
-                    countdown=backoff + random.uniform(0, backoff),
-                    max_retries=20,
-                )
-            raise
-        logger.info("fetch_and_parse=artifact key=%s", artifact.key)
-        return artifact.model_dump(mode="json")
 
 
 # ---------------------------------------------------------------------------

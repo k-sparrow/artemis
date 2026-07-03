@@ -36,6 +36,7 @@ py_test(
         "//src/backend/alembic:tarball.dev",
         "//src/backend/mcp/api:tarball.dev",
         "//tools/docker:docker_compose_test",
+        "//tools/fixtures/docs:all_fixtures",
     ],
     tags = [
         "e2e",

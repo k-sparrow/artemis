@@ -54,14 +54,6 @@ app.conf.task_queues = [
         routing_key="index",
         durable=True,
     ),
-    # Retained so in-flight fetch-and-parse tasks can drain gracefully after
-    # the worker is renamed. Remove once migration is complete.
-    Queue(
-        name="artemis.ingestion.fetch-and-parse",
-        exchange=Exchange(settings.EXCHANGE_NAME, type="direct"),
-        routing_key="fetch-and-parse",
-        durable=True,
-    ),
 ]
 
 _PARSE_ROUTE = {
@@ -87,10 +79,4 @@ app.conf.task_routes = {
     "tasks.index": _INDEX_ROUTE,
     "tasks.delete_document": _INDEX_ROUTE,
     "tasks.delete_namespace": _INDEX_ROUTE,
-    # Legacy — retained for in-flight tasks during migration
-    "tasks.fetch_and_parse": {
-        "queue": "artemis.ingestion.fetch-and-parse",
-        "routing_key": "fetch-and-parse",
-        "serializer": "json",
-    },
 }

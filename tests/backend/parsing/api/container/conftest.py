@@ -17,7 +17,7 @@ from testcontainers.minio import MinioContainer
 _BATCH_SHARD_TRIGGER = 25
 _BATCH_SHARD_LIMIT = 25
 
-_DOCLING_IMAGE = "ghcr.io/docling-project/docling-serve-cu128:v1.15.0"
+_DOCLING_IMAGE = "ghcr.io/docling-project/docling-serve-cu128:v1.24.0"
 _DOCLING_PORT = 5001
 _APP_IMAGE = "artemis/backend-parsing:dev"
 _APP_PORT = 10001

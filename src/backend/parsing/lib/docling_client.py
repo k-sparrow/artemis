@@ -12,7 +12,6 @@ handles.
 from __future__ import annotations
 
 import httpx
-from docling.datamodel.document import DoclingDocument
 
 from src.backend.parsing.lib.artifact import ParseStatus
 
@@ -61,11 +60,11 @@ class DoclingParseClient:
         dst_prefix: str,
         timeout: float = 120.0,
     ) -> str:
-        """POST /v1/convert/source/batch → task_id.
+        """POST /v1/convert/source/batch with S3SourceRequest + S3Target → task_id.
 
-        Results are written to S3 at dst_prefix (PresignedUrlConvertDocumentResponse
-        — counts-only, no inline payload). The caller downloads results from MinIO
-        directly using the resolved prefix.
+        Submits all shard PDFs at src_prefix as a batch S3 conversion.
+        Results are written to dst_bucket/dst_prefix by docling-serve.
+        Each shard produces a JSON file at dst_prefix/json/{shard_name}.json.
         """
         s3_creds = {
             "endpoint": s3_endpoint,
@@ -76,19 +75,9 @@ class DoclingParseClient:
         body = {
             "options": {"to_formats": ["json"]},
             "sources": [
-                {
-                    "kind": "s3",
-                    **s3_creds,
-                    "bucket": src_bucket,
-                    "key_prefix": src_prefix,
-                }
+                {"kind": "s3", **s3_creds, "bucket": src_bucket, "key_prefix": src_prefix}
             ],
-            "target": {
-                "kind": "s3",
-                **s3_creds,
-                "bucket": dst_bucket,
-                "key_prefix": dst_prefix,
-            },
+            "target": {"kind": "s3", **s3_creds, "bucket": dst_bucket, "key_prefix": dst_prefix},
         }
         async with httpx.AsyncClient(
             base_url=self._base_url, timeout=timeout
@@ -127,11 +116,7 @@ class DoclingParseClient:
     async def fetch_conversion_result(
         self, task_id: str, *, timeout: float = 60.0
     ) -> DoclingDocument:
-        """GET /v1/result/{task_id} → DoclingDocument (single-file mode only).
-
-        For batch mode the result is in S3, not inline — call download from
-        the MinIO client instead.
-        """
+        """GET /v1/result/{task_id} → DoclingDocument (single-source mode only)."""
         async with httpx.AsyncClient(
             base_url=self._base_url, timeout=timeout
         ) as client:

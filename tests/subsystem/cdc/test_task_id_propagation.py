@@ -276,9 +276,9 @@ def dispatch_app(rabbitmq_container, worker_container: DockerContainer) -> Celer
     app.conf.accept_content = ["json"]
     app.conf.task_queues = [
         Queue(
-            "artemis.ingestion.fetch-and-parse",
+            "artemis.ingestion.parse",
             exchange=exchange,
-            routing_key="fetch-and-parse",
+            routing_key="parse",
             durable=True,
         ),
         Queue(
@@ -347,8 +347,8 @@ def _dispatch_ingest(
             "upload_action": "CREATE",
             "info": {"namespace_id": str(namespace_id)},
         },
-        queue="artemis.ingestion.fetch-and-parse",
-        routing_key="fetch-and-parse",
+        queue="artemis.ingestion.parse",
+        routing_key="parse",
         task_id=str(task_id) if task_id is not None else None,
     )
 
