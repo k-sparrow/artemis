@@ -52,6 +52,8 @@ _QDRANT_COLLECTION = "artemis"
 _QDRANT_POLL_TIMEOUT_S = 300
 _QDRANT_POLL_INTERVAL_S = 5
 
+_FIXTURES_DIR = Path(__file__).parents[4] / "tools/fixtures/docs"
+
 # Qdrant vectors confirm Celery task completed; CDC just needs Debezium → JDBC sink.
 _CDC_POLL_TIMEOUT_S = 60
 _CDC_POLL_INTERVAL_S = 3
@@ -132,11 +134,8 @@ class TestSingleNamespaceFullPipeline:
         """Drop a file, poll until /retrieve/invoke returns documents, return them."""
         namespace_id: str = data_source["namespace_id"]
 
-        # TODO: switch to .txt once Docling from_formats is extended to include "txt".
-        #       Docling Serve currently rejects plain text (400) — "md" is in the
-        #       default from_formats list and is a safe stand-in for now.
-        (watch_dir / "enterprise" / "doc.md").write_text(
-            "# Artemis E2E Test Document\n\n" + lorem.paragraph()
+        (watch_dir / "enterprise" / "doc.pdf").write_bytes(
+            (_FIXTURES_DIR / "sample-5-page-pdf-a4-size.pdf").read_bytes()
         )
 
         def _retrieve():
@@ -606,10 +605,10 @@ class TestPrivatePathFullPipeline:
         namespace_id: str = str(namespace["id"])
         owner_id: str = namespace["_owner_id"]
 
-        content = "# Artemis Private Path E2E Test\n\n" + lorem.paragraph()
+        pdf_bytes = (_FIXTURES_DIR / "sample-5-page-pdf-a4-size.pdf").read_bytes()
         resp = httpx.post(
             f"{storage_url}/namespaces/{namespace_id}/objects",
-            files={"file": ("private_doc.md", content.encode(), "text/markdown")},
+            files={"file": ("private_doc.pdf", pdf_bytes, "application/pdf")},
             headers={"X-Owner-Id": owner_id},
             timeout=15.0,
         )

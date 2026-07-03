@@ -93,7 +93,8 @@ _ARTIFACT_BUCKET = "parsed-chunks"
 _ARTIFACT_KEY = f"parse/{_STUB_OBJ_ID}.json"
 _PARSE_RESPONSE = {"bucket": _ARTIFACT_BUCKET, "key": _ARTIFACT_KEY}
 
-# Async-parse chain stubs: submit → status (success) → resolve → status (success) → finalize
+# Async-parse chain stubs:
+# submit → status (success) → resolve → status (success) → finalize
 _SUBMIT_RESULT = {
     "parsing_task_id": _STUB_CONV_TASK_ID,
     "mode": "single",

@@ -1,0 +1,5 @@
+filegroup(
+    name = "all_fixtures",
+    srcs = glob(["*.pdf"]),
+    visibility = ["//visibility:public"],
+)

@@ -11,6 +11,12 @@ from testcontainers.core.network import Network
 from testcontainers.core.wait_strategies import HttpWaitStrategy
 from testcontainers.minio import MinioContainer
 
+# Shard trigger/limit for the batch-mode test container.
+# 50-page fixture PDF (sample-50-page-pdf-a4-size.pdf) is split into 2 shards
+# of 25 pages each when DOCLING_SHARD_TRIGGER_PAGES=25.
+_BATCH_SHARD_TRIGGER = 25
+_BATCH_SHARD_LIMIT = 25
+
 _DOCLING_IMAGE = "ghcr.io/docling-project/docling-serve-cu128:v1.15.0"
 _DOCLING_PORT = 5001
 _APP_IMAGE = "artemis/backend-parsing:dev"
@@ -178,4 +184,49 @@ async def client_no_docling(
     app_base_url_no_docling: str,
 ) -> AsyncIterator[httpx.AsyncClient]:
     async with httpx.AsyncClient(base_url=app_base_url_no_docling, timeout=30.0) as c:
+        yield c
+
+
+# ---------------------------------------------------------------------------
+# App container with low shard threshold (for batch-mode integration tests)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def app_container_batch(
+    docker_network: Network,
+    docling_container: DockerContainer,
+    minio_container: MinioContainer,
+    request: pytest.FixtureRequest,
+) -> DockerContainer:
+    """Parsing service with a low shard threshold so that the 50-page fixture
+    PDF triggers the batch S3 conversion path (2 shards of 25 pages each)."""
+    container = _with_s3_env(
+        DockerContainer(_APP_IMAGE)
+        .with_network(docker_network)
+        .with_env("DOCLING_SERVE_URI", f"http://docling-serve:{_DOCLING_PORT}")
+        .with_env("DOCLING_SHARD_TRIGGER_PAGES", str(_BATCH_SHARD_TRIGGER))
+        .with_env("DOCLING_SHARD_PAGE_LIMIT", str(_BATCH_SHARD_LIMIT))
+        .with_env("DEBUG", "true")
+        .with_exposed_ports(_APP_PORT)
+    )
+    container.start()
+    request.addfinalizer(container.stop)
+
+    host = container.get_container_host_ip()
+    port = int(container.get_exposed_port(_APP_PORT))
+    _wait_for_liveness(f"http://{host}:{port}/health/liveness")
+    return container
+
+
+@pytest.fixture(scope="session")
+def app_base_url_batch(app_container_batch: DockerContainer) -> str:
+    host = app_container_batch.get_container_host_ip()
+    port = int(app_container_batch.get_exposed_port(_APP_PORT))
+    return f"http://{host}:{port}"
+
+
+@pytest.fixture
+async def client_batch(app_base_url_batch: str) -> AsyncIterator[httpx.AsyncClient]:
+    async with httpx.AsyncClient(base_url=app_base_url_batch, timeout=600.0) as c:
         yield c

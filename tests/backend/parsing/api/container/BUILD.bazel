@@ -29,3 +29,18 @@ py_test(
         requirement("pytest-asyncio"),
     ],
 )
+
+py_test(
+    name = "test_async_chain",
+    srcs = ["test_async_chain.py"],
+    data = ["//tools/fixtures/docs:all_fixtures"],
+    env = {"TC_MAX_TRIES": "1000000000"},
+    deps = [
+        ":conftest",
+        "//src/lib/core/ingestion:types",
+        requirement("httpx"),
+        requirement("minio"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+    ],
+)
