@@ -3424,6 +3424,10 @@ pymupdf-layout==1.27.2 \
 pymupdf4llm==1.27.2.1 \
     --hash=sha256:3d1e40d34dbe806e6a8cc7f55999cbd4e5ff5dd8629cfc42d885014b4662ec67
     # via -r requirements.in
+pypdf==5.5.0 \
+    --hash=sha256:2f61f2d32dde00471cd70b8977f98960c64e84dd5ba0d070e953fcb4da0b2a73 \
+    --hash=sha256:8ce6a18389f7394fd09a1d4b7a34b097b11c19088a23cfd09e5008f85893e254
+    # via -r requirements.in
 pypdfium2==4.30.0 \
     --hash=sha256:0dfa61421b5eb68e1188b0b2231e7ba35735aef2d867d86e48ee6cab6975195e \
     --hash=sha256:119b2969a6d6b1e8d55e99caaf05290294f2d0fe49c12a3f17102d01c441bd29 \

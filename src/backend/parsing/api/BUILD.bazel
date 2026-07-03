@@ -52,6 +52,7 @@ py_library(
     srcs = ["dependencies.py"],
     deps = [
         ":config",
+        "//src/backend/parsing/lib:docling_client",
         "//src/lib/core/adapters/loaders:pkg",
         "//src/lib/core/adapters/stores/base:blob",
         "//src/lib/core/adapters/stores/minio:blob",

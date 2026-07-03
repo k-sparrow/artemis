@@ -62,6 +62,10 @@ from src.backend.controller.worker.exceptions import EmptyObjectError
 from src.backend.controller.worker.utils import (
     call_delete_service,
     call_indexing_service,
+    call_parse_finalize,
+    call_parse_resolve,
+    call_parse_status,
+    call_parse_submit,
     call_parsing_service,
     indexing_breaker,
     parsing_breaker,
@@ -170,6 +174,19 @@ def _ensure_parsed_chunks_bucket(**kwargs) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Exceptions for permanent parse failures (non-retryable)
+# ---------------------------------------------------------------------------
+
+
+class DocumentConversionError(Exception):
+    """Raised when docling-serve reports a terminal failure for a conversion job."""
+
+
+class DocumentChunkingError(Exception):
+    """Raised when docling-serve reports a terminal failure for a chunk job."""
+
+
+# ---------------------------------------------------------------------------
 # Entry point — called by the Kafka HTTP Sink
 # ---------------------------------------------------------------------------
 
@@ -218,9 +235,9 @@ def ingest(
     match upload_action:
         case UploadAction.CREATE | UploadAction.UPDATE:
             result = chain(
-                fetch_and_parse.s(
+                parse.s(
                     s3.model_dump(),
-                    source=source.model_dump(),
+                    source=source.model_dump(mode="json"),
                     namespace_id=str(namespace_id),
                     group_id=group_id,
                     task_id=task_id,
@@ -328,6 +345,338 @@ def fetch_and_parse(
             raise
         logger.info("fetch_and_parse=artifact key=%s", artifact.key)
         return artifact.model_dump(mode="json")
+
+
+# ---------------------------------------------------------------------------
+# Async parse sub-chain — tasks.parse + four polling subtasks
+# ---------------------------------------------------------------------------
+#
+# Dispatch structure (via tasks.parse → self.replace):
+#
+#   parse.s(s3, source=…, task_id=…, …)
+#     └─ self.replace(chain(
+#           submit_parse.s(…)   → SubmitResult dict
+#           poll_parse.s(…)     → SubmitResult dict (polls until conversion done)
+#           resolve_parse.s(…)  → ResolveResult dict
+#           poll_resolve.s(…)   → BlobRef dict      (polls until chunk done)
+#        ))
+#
+# The BlobRef dict from poll_resolve flows into index as its first positional arg.
+# The contract task_id from ingest is threaded through all five tasks as a kwarg
+# so FailureRecordingTask.on_failure can always key the CDC FAILURE row correctly.
+
+
+@app.task(
+    name="tasks.parse",
+    base=FailureRecordingTask,
+    bind=True,
+    backend=_db_backend,
+    result_serializer="json",
+    acks_late=True,
+)
+def parse(
+    self,
+    s3: dict,
+    *,
+    source: dict,
+    namespace_id: str,
+    group_id: str | None = None,
+    task_id: str | None = None,
+    operation: str | None = None,
+) -> None:
+    """Dispatch point for the async parse sub-chain.
+
+    Uses self.replace() so Celery substitutes the internal sub-chain in place
+    and threads its final BlobRef result directly into index. All sub-tasks
+    receive task_id so FailureRecordingTask.on_failure can recover the contract
+    id for CDC records regardless of which sub-task fails.
+    """
+    return self.replace(
+        chain(
+            submit_parse.s(
+                s3,
+                source=source,
+                namespace_id=namespace_id,
+                group_id=group_id,
+                task_id=task_id,
+                operation=operation,
+            ),
+            poll_parse.s(
+                namespace_id=namespace_id,
+                group_id=group_id,
+                task_id=task_id,
+                operation=operation,
+            ),
+            resolve_parse.s(
+                namespace_id=namespace_id,
+                group_id=group_id,
+                task_id=task_id,
+                operation=operation,
+            ),
+            poll_resolve.s(
+                source=source,
+                namespace_id=namespace_id,
+                group_id=group_id,
+                task_id=task_id,
+                operation=operation,
+            ),
+        )
+    )
+
+
+@app.task(
+    name="tasks.submit_parse",
+    base=FailureRecordingTask,
+    bind=True,
+    pydantic=True,
+    backend=_db_backend,
+    result_serializer="json",
+    acks_late=True,
+)
+def submit_parse(
+    self,
+    s3: S3Details,
+    *,
+    source: SourceDetails,
+    namespace_id: uuid.UUID,
+    group_id: str | None = None,
+    task_id: str | None = None,
+    operation: str | None = None,
+) -> dict:
+    """Fetch source from MinIO via claim-check and queue a conversion job.
+
+    Submits large PDFs as a batch S3 conversion; all other documents as a
+    single async file conversion. Returns SubmitResult dict immediately.
+    """
+    with _tracer.start_as_current_span("tasks.submit_parse") as span:
+        task_id = task_id or self.request.id or str(uuid.uuid4())
+        span.set_attribute("artemis.task_id", task_id)
+        span.set_attribute("artemis.namespace_id", str(namespace_id))
+        span.set_attribute("artemis.obj_id", str(source.obj_id))
+
+        if s3.size == 0:
+            raise EmptyObjectError(str(source.obj_id))
+
+        source_ref = BlobRef(bucket=s3.bucket, key=s3.object)
+        try:
+            return call_parse_submit(
+                source_ref=source_ref,
+                source=source,
+                parsing_url=settings.PARSING_SERVICE_URL,
+                timeout=settings.PARSING_SUBMIT_TIMEOUT,
+                logger=logger,
+            )
+        except pybreaker.CircuitBreakerError as exc:
+            jitter = random.uniform(0, parsing_breaker.reset_timeout * 0.25)
+            raise self.retry(
+                exc=exc,
+                countdown=parsing_breaker.reset_timeout + 5 + jitter,
+                max_retries=20,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code >= 500:
+                backoff = min(120, 2**self.request.retries)
+                raise self.retry(
+                    exc=exc,
+                    countdown=backoff + random.uniform(0, backoff),
+                    max_retries=20,
+                )
+            raise
+
+
+@app.task(
+    name="tasks.poll_parse",
+    base=FailureRecordingTask,
+    bind=True,
+    backend=_db_backend,
+    result_serializer="json",
+)
+def poll_parse(
+    self,
+    submit_result: dict,
+    *,
+    namespace_id: str,
+    group_id: str | None = None,
+    task_id: str | None = None,
+    operation: str | None = None,
+) -> dict:
+    """Poll conversion status until terminal; pass SubmitResult through on success.
+
+    Retries with a 60–75 s countdown while status is "processing".
+    Transient HTTP errors (5xx, breaker) draw from the same max_retries=1440
+    budget as in-progress polls (24 h ceiling at 60 s intervals).
+    """
+    parsing_task_id = submit_result["parsing_task_id"]
+    try:
+        status = call_parse_status(
+            task_id=parsing_task_id,
+            parsing_url=settings.PARSING_SERVICE_URL,
+            timeout=settings.PARSING_STATUS_TIMEOUT,
+            logger=logger,
+        )
+    except pybreaker.CircuitBreakerError as exc:
+        jitter = random.uniform(0, parsing_breaker.reset_timeout * 0.25)
+        raise self.retry(
+            exc=exc,
+            countdown=parsing_breaker.reset_timeout + 5 + jitter,
+            max_retries=1440,
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code >= 500:
+            backoff = min(120, 2**self.request.retries)
+            raise self.retry(
+                exc=exc,
+                countdown=backoff + random.uniform(0, backoff),
+                max_retries=1440,
+            )
+        raise
+
+    if status["status"] == "processing":
+        raise self.retry(
+            countdown=60 + random.uniform(0, 15),
+            max_retries=1440,
+        )
+    if status["status"] == "failure":
+        raise DocumentConversionError(
+            f"docling-serve conversion failed for task {parsing_task_id}: "
+            f"{status.get('error_message', 'no detail')}"
+        )
+    return submit_result
+
+
+@app.task(
+    name="tasks.resolve_parse",
+    base=FailureRecordingTask,
+    bind=True,
+    backend=_db_backend,
+    result_serializer="json",
+)
+def resolve_parse(
+    self,
+    submit_result: dict,
+    *,
+    namespace_id: str,
+    group_id: str | None = None,
+    task_id: str | None = None,
+    operation: str | None = None,
+) -> dict:
+    """Download conversion result, concatenate shards, submit chunk job.
+
+    Calls POST /v1/parse/resolve and returns ResolveResult dict with
+    chunking_task_id immediately.
+    """
+    try:
+        return call_parse_resolve(
+            submit_result=submit_result,
+            parsing_url=settings.PARSING_SERVICE_URL,
+            timeout=settings.PARSING_RESOLVE_TIMEOUT,
+            logger=logger,
+        )
+    except pybreaker.CircuitBreakerError as exc:
+        jitter = random.uniform(0, parsing_breaker.reset_timeout * 0.25)
+        raise self.retry(
+            exc=exc,
+            countdown=parsing_breaker.reset_timeout + 5 + jitter,
+            max_retries=20,
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code >= 500:
+            backoff = min(120, 2**self.request.retries)
+            raise self.retry(
+                exc=exc,
+                countdown=backoff + random.uniform(0, backoff),
+                max_retries=20,
+            )
+        raise
+
+
+@app.task(
+    name="tasks.poll_resolve",
+    base=FailureRecordingTask,
+    bind=True,
+    backend=_db_backend,
+    result_serializer="json",
+)
+def poll_resolve(
+    self,
+    resolve_result: dict,
+    *,
+    source: dict,
+    namespace_id: str,
+    group_id: str | None = None,
+    task_id: str | None = None,
+    operation: str | None = None,
+) -> dict:
+    """Poll chunk status until terminal; call finalize on success → BlobRef dict.
+
+    Retries with a 60–75 s countdown while chunking is in progress.
+    Both the poll and the finalize call share the same 1440-retry budget.
+    """
+    chunking_task_id = resolve_result["chunking_task_id"]
+    obj_id = resolve_result["obj_id"]
+
+    try:
+        status = call_parse_status(
+            task_id=chunking_task_id,
+            parsing_url=settings.PARSING_SERVICE_URL,
+            timeout=settings.PARSING_STATUS_TIMEOUT,
+            logger=logger,
+        )
+    except pybreaker.CircuitBreakerError as exc:
+        jitter = random.uniform(0, parsing_breaker.reset_timeout * 0.25)
+        raise self.retry(
+            exc=exc,
+            countdown=parsing_breaker.reset_timeout + 5 + jitter,
+            max_retries=1440,
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code >= 500:
+            backoff = min(120, 2**self.request.retries)
+            raise self.retry(
+                exc=exc,
+                countdown=backoff + random.uniform(0, backoff),
+                max_retries=1440,
+            )
+        raise
+
+    if status["status"] == "processing":
+        raise self.retry(
+            countdown=60 + random.uniform(0, 15),
+            max_retries=1440,
+        )
+    if status["status"] == "failure":
+        raise DocumentChunkingError(
+            f"docling-serve chunking failed for task {chunking_task_id}: "
+            f"{status.get('error_message', 'no detail')}"
+        )
+
+    try:
+        blob_ref = call_parse_finalize(
+            resolve_result=resolve_result,
+            metadata={"obj_id": obj_id},
+            parsing_url=settings.PARSING_SERVICE_URL,
+            timeout=settings.PARSING_FINALIZE_TIMEOUT,
+            logger=logger,
+        )
+    except pybreaker.CircuitBreakerError as exc:
+        jitter = random.uniform(0, parsing_breaker.reset_timeout * 0.25)
+        raise self.retry(
+            exc=exc,
+            countdown=parsing_breaker.reset_timeout + 5 + jitter,
+            max_retries=1440,
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code >= 500:
+            backoff = min(120, 2**self.request.retries)
+            raise self.retry(
+                exc=exc,
+                countdown=backoff + random.uniform(0, backoff),
+                max_retries=1440,
+            )
+        raise
+
+    logger.info("poll_resolve=finalized obj_id=%s key=%s", obj_id, blob_ref.get("key"))
+    return blob_ref
 
 
 # ---------------------------------------------------------------------------

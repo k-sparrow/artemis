@@ -1,0 +1,25 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@pip//:requirements.bzl", "requirement")
+
+py_test(
+    name = "test_sharding",
+    srcs = ["test_sharding.py"],
+    tags = ["unit"],
+    deps = [
+        "//src/backend/parsing/lib:sharding",
+        requirement("pypdf"),
+        requirement("pytest"),
+    ],
+)
+
+py_test(
+    name = "test_artifact",
+    srcs = ["test_artifact.py"],
+    tags = ["unit"],
+    deps = [
+        "//src/backend/parsing/lib:artifact",
+        "//src/lib/core/ingestion:types",
+        requirement("docling"),
+        requirement("pytest"),
+    ],
+)

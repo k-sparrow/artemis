@@ -32,6 +32,19 @@ class ParsingSettings(BaseSettings):
     # without a GPU re-parse.
     REPLAY_CACHE_BUCKET: str = "docling-replay"
 
+    # Temporary bucket for PDF shards uploaded before batch conversion.
+    DOCLING_SCRATCH_BUCKET: str = "docling-scratch"
+
+    # Shard PDFs whose page count exceeds this threshold; each shard is at
+    # most DOCLING_SHARD_PAGE_LIMIT pages.
+    DOCLING_SHARD_TRIGGER_PAGES: int = 400
+    DOCLING_SHARD_PAGE_LIMIT: int = 400
+
+    # Per-call HTTP timeouts for the new async parse endpoints.
+    DOCLING_STATUS_TIMEOUT: float = 30.0
+    DOCLING_RESOLVE_TIMEOUT: float = 120.0
+    DOCLING_FINALIZE_TIMEOUT: float = 60.0
+
     @computed_field
     @property
     def DOCLING_SERVE_HEALTHCHECK_URL(self) -> str:

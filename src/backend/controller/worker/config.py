@@ -48,8 +48,14 @@ class WorkerSettings(BaseSettings):
     # MinIO bucket for parsed-chunk intermediate objects
     PARSED_CHUNKS_BUCKET: str = "parsed-chunks"
 
-    # httpx timeout (seconds) for calls to parsing and indexing services
+    # httpx timeout (seconds) for legacy parsing and indexing service calls
     HTTPX_TIMEOUT: float = 86400.0
+
+    # Per-call timeouts for the new async parse endpoints
+    PARSING_SUBMIT_TIMEOUT: float = 120.0  # shard uploads + HTTP POST
+    PARSING_STATUS_TIMEOUT: float = 30.0  # single status GET
+    PARSING_RESOLVE_TIMEOUT: float = 120.0  # S3 downloads + concat + chunk submit
+    PARSING_FINALIZE_TIMEOUT: float = 60.0  # chunk result fetch + artifact write
 
     # Celery exchange name
     EXCHANGE_NAME: str

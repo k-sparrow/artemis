@@ -12,3 +12,16 @@ py_test(
         requirement("pytest"),
     ],
 )
+
+py_test(
+    name = "test_parse_tasks",
+    srcs = ["test_parse_tasks.py"],
+    tags = ["unit"],
+    deps = [
+        "//src/backend/controller/worker:tasks",
+        "//tests/backend/controller/worker:conftest",
+        requirement("httpx"),
+        requirement("pybreaker"),
+        requirement("pytest"),
+    ],
+)

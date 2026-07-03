@@ -32,24 +32,20 @@ app.conf.result_serializer = "json"
 app.conf.database_create_tables_at_setup = True
 app.conf.result_extended = True
 
-# Stabilisation stopgap for heavy-PDF workloads until docling async API is adopted.
-# One worker slot per process ensures Docling/TEI calls don't queue behind each other
-# and prefetch=1 prevents a single worker from hoarding multiple long-running tasks.
-app.conf.worker_concurrency = 1
+# Workers are split into two pools with different scaling profiles:
+#   parse  — Celery poll loop (async, non-blocking); concurrency=3
+#   index  — I/O-bound (TEI + Qdrant + Postgres); concurrency=1
+# prefetch=1 prevents any single worker from hoarding multiple tasks.
 app.conf.worker_prefetch_multiplier = 1
-# Global default: tasks ack on receipt so failed workers don't leave ghosts in the queue.
-# fetch_and_parse overrides this to acks_late=True (see tasks.py) so a crashed GPU worker
-# causes the broker to redeliver rather than silently drop the task.
+# Global default: tasks ack on receipt so failed workers don't leave ghosts.
+# Tasks that must be redelivered on worker crash override to acks_late=True.
 app.conf.task_acks_late = False
 
-# Two queues with different scaling profiles:
-#   fetch-and-parse  — GPU-bound (Docling); scale with GPU workers
-#   index            — I/O-bound (TEI + Qdrant + Postgres); scale independently
 app.conf.task_queues = [
     Queue(
-        name="artemis.ingestion.fetch-and-parse",
+        name="artemis.ingestion.parse",
         exchange=Exchange(settings.EXCHANGE_NAME, type="direct"),
-        routing_key="fetch-and-parse",
+        routing_key="parse",
         durable=True,
     ),
     Queue(
@@ -58,32 +54,43 @@ app.conf.task_queues = [
         routing_key="index",
         durable=True,
     ),
+    # Retained so in-flight fetch-and-parse tasks can drain gracefully after
+    # the worker is renamed. Remove once migration is complete.
+    Queue(
+        name="artemis.ingestion.fetch-and-parse",
+        exchange=Exchange(settings.EXCHANGE_NAME, type="direct"),
+        routing_key="fetch-and-parse",
+        durable=True,
+    ),
 ]
 
+_PARSE_ROUTE = {
+    "queue": "artemis.ingestion.parse",
+    "routing_key": "parse",
+    "serializer": "json",
+}
+_INDEX_ROUTE = {
+    "queue": "artemis.ingestion.index",
+    "routing_key": "index",
+    "serializer": "json",
+}
+
 app.conf.task_routes = {
-    "tasks.ingest": {
-        "queue": "artemis.ingestion.fetch-and-parse",
-        "routing_key": "fetch-and-parse",
-        "serializer": "json",
-    },
+    # New async parse sub-chain
+    "tasks.ingest": _PARSE_ROUTE,
+    "tasks.parse": _PARSE_ROUTE,
+    "tasks.submit_parse": _PARSE_ROUTE,
+    "tasks.poll_parse": _PARSE_ROUTE,
+    "tasks.resolve_parse": _PARSE_ROUTE,
+    "tasks.poll_resolve": _PARSE_ROUTE,
+    # Indexing
+    "tasks.index": _INDEX_ROUTE,
+    "tasks.delete_document": _INDEX_ROUTE,
+    "tasks.delete_namespace": _INDEX_ROUTE,
+    # Legacy — retained for in-flight tasks during migration
     "tasks.fetch_and_parse": {
         "queue": "artemis.ingestion.fetch-and-parse",
         "routing_key": "fetch-and-parse",
-        "serializer": "json",
-    },
-    "tasks.index": {
-        "queue": "artemis.ingestion.index",
-        "routing_key": "index",
-        "serializer": "json",
-    },
-    "tasks.delete_document": {
-        "queue": "artemis.ingestion.index",
-        "routing_key": "index",
-        "serializer": "json",
-    },
-    "tasks.delete_namespace": {
-        "queue": "artemis.ingestion.index",
-        "routing_key": "index",
         "serializer": "json",
     },
 }

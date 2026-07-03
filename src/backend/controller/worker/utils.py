@@ -36,6 +36,10 @@ from src.backend.controller.lib.schemas import BlobRef, S3Details, SourceDetails
 __all__ = [
     "fetch_from_s3",
     "call_parsing_service",
+    "call_parse_submit",
+    "call_parse_status",
+    "call_parse_resolve",
+    "call_parse_finalize",
     "call_indexing_service",
     "call_delete_service",
     "parsing_breaker",
@@ -137,6 +141,134 @@ def call_parsing_service(
     artifact = BlobRef.model_validate(raw)
     logger.info("parsing=done artifact=%s", artifact.key)
     return artifact
+
+
+def call_parse_submit(
+    source_ref: BlobRef,
+    source: SourceDetails,
+    parsing_url: str,
+    timeout: float,
+    logger: Logger,
+) -> dict:
+    """POST /v1/parse/submit → SubmitResult dict.
+
+    Fetches source by claim-check reference and queues an async conversion job
+    on docling-serve. Returns immediately with a parsing_task_id.
+    """
+    url = f"{parsing_url.rstrip('/')}/v1/parse/submit"
+    logger.info("parse_submit=request url=%s key=%s", url, source_ref.key)
+
+    def _request() -> dict:
+        with httpx.Client(timeout=timeout) as http:
+            response = http.post(
+                url,
+                data={
+                    "source_ref": source_ref.model_dump_json(),
+                    "filename": source.source,
+                    "content_type": source.content_type,
+                    "metadata": json.dumps({"obj_id": str(source.obj_id)}),
+                },
+            )
+            response.raise_for_status()
+            return response.json()
+
+    with _tracer.start_as_current_span("http.parse_submit"):
+        result = parsing_breaker.call(_request)
+    logger.info(
+        "parse_submit=done task_id=%s mode=%s",
+        result.get("parsing_task_id"),
+        result.get("mode"),
+    )
+    return result
+
+
+def call_parse_status(
+    task_id: str,
+    parsing_url: str,
+    timeout: float,
+    logger: Logger,
+) -> dict:
+    """GET /v1/parse/status/{task_id} → ParseStatus dict.
+
+    Non-blocking single check. Works for both conversion and chunk task_ids.
+    """
+    url = f"{parsing_url.rstrip('/')}/v1/parse/status/{task_id}"
+
+    def _request() -> dict:
+        with httpx.Client(timeout=timeout) as http:
+            response = http.get(url)
+            response.raise_for_status()
+            return response.json()
+
+    with _tracer.start_as_current_span("http.parse_status"):
+        return parsing_breaker.call(_request)
+
+
+def call_parse_resolve(
+    submit_result: dict,
+    parsing_url: str,
+    timeout: float,
+    logger: Logger,
+) -> dict:
+    """POST /v1/parse/resolve → ResolveResult dict.
+
+    Downloads completed conversion result, concatenates shards if batch mode,
+    writes replay cache, and queues a hybrid chunk job. Returns immediately
+    with a chunking_task_id.
+    """
+    url = f"{parsing_url.rstrip('/')}/v1/parse/resolve"
+    logger.info(
+        "parse_resolve=request url=%s task_id=%s",
+        url,
+        submit_result.get("parsing_task_id"),
+    )
+
+    def _request() -> dict:
+        with httpx.Client(timeout=timeout) as http:
+            response = http.post(url, json=submit_result)
+            response.raise_for_status()
+            return response.json()
+
+    with _tracer.start_as_current_span("http.parse_resolve"):
+        result = parsing_breaker.call(_request)
+    logger.info("parse_resolve=done chunk_task_id=%s", result.get("chunking_task_id"))
+    return result
+
+
+def call_parse_finalize(
+    resolve_result: dict,
+    metadata: dict,
+    parsing_url: str,
+    timeout: float,
+    logger: Logger,
+) -> dict:
+    """POST /v1/parse/finalize → BlobRef dict.
+
+    Fetches chunk result and builds the ParseArtifact from the replay cache.
+    Returns a BlobRef pointing at the written artifact.
+    """
+    url = f"{parsing_url.rstrip('/')}/v1/parse/finalize"
+    logger.info(
+        "parse_finalize=request url=%s chunk_task_id=%s",
+        url,
+        resolve_result.get("chunking_task_id"),
+    )
+    body = {
+        "chunking_task_id": resolve_result["chunking_task_id"],
+        "obj_id": resolve_result["obj_id"],
+        "metadata": metadata,
+    }
+
+    def _request() -> dict:
+        with httpx.Client(timeout=timeout) as http:
+            response = http.post(url, json=body)
+            response.raise_for_status()
+            return response.json()
+
+    with _tracer.start_as_current_span("http.parse_finalize"):
+        result = parsing_breaker.call(_request)
+    logger.info("parse_finalize=done key=%s", result.get("key"))
+    return result
 
 
 def call_indexing_service(

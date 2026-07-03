@@ -1,0 +1,50 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+package(default_visibility = [
+    "//src/backend/parsing/api:__subpackages__",
+    "//tests/backend/parsing:__subpackages__",
+])
+
+py_library(
+    name = "sharding",
+    srcs = ["sharding.py"],
+    deps = [
+        requirement("pypdf"),
+    ],
+)
+
+py_library(
+    name = "artifact",
+    srcs = ["artifact.py"],
+    deps = [
+        "//src/lib/core/adapters/loaders:docling",
+        "//src/lib/core/ingestion:types",
+        requirement("docling"),
+        requirement("pydantic"),
+    ],
+)
+
+py_library(
+    name = "docling_client",
+    srcs = ["docling_client.py"],
+    deps = [
+        ":artifact",
+        requirement("docling"),
+        requirement("httpx"),
+    ],
+)
+
+py_library(
+    name = "pkg",
+    srcs = ["__init__.py"],
+    deps = [
+        ":artifact",
+        ":docling_client",
+        ":sharding",
+    ],
+)

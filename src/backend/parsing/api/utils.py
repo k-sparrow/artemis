@@ -27,7 +27,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # explicit; construction is pure). S3 settings are required, so this always
     # runs — a misconfigured/unreachable MinIO fails fast here.
     s3 = get_s3_client()
-    for bucket in (settings.PARSED_ARTIFACTS_BUCKET, settings.REPLAY_CACHE_BUCKET):
+    for bucket in (
+        settings.PARSED_ARTIFACTS_BUCKET,
+        settings.REPLAY_CACHE_BUCKET,
+        settings.DOCLING_SCRATCH_BUCKET,
+    ):
         MinioBlobStore(s3, bucket).ensure_bucket()
         logger.info("bucket_ready", bucket=bucket)
 

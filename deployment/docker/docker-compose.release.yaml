@@ -207,9 +207,46 @@ services:
       - "7000"
     networks:
       - default
-  backend-indexing-controller-celery-worker:
+  backend-controller-parse-worker:
     profiles: [backend, enterprise]
     image: artemis/backend-controller-worker:${ARTEMIS_VERSION:?set ARTEMIS_VERSION to a release tag}
+    command: ["--queues", "artemis.ingestion.parse", "--concurrency", "3", "--prefetch-multiplier", "1"]
+    restart: unless-stopped
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      artemis-db-migrations:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: artemis
+      RABBITMQ_PASSWORD: artemis
+      RABBITMQ_VHOST: artemis
+      SQL_DB_HOST: postgres
+      SQL_DB_PORT: 5432
+      SQL_DB_USER: postgres
+      SQL_DB_PASSWORD: testpass
+      SQL_DB_DATABASE: documents
+      SQL_DRIVER: postgresql+psycopg
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_SECURE: false
+      EXCHANGE_NAME: ingestion_test0
+      INGESTION_SERVICE_URL: http://backend-indexing-ingestion:10000
+      PARSING_SERVICE_URL: http://backend-parsing:10001
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+    networks:
+      - default
+  backend-controller-index-worker:
+    profiles: [backend, enterprise]
+    image: artemis/backend-controller-worker:${ARTEMIS_VERSION:?set ARTEMIS_VERSION to a release tag}
+    command: ["--queues", "artemis.ingestion.index", "--concurrency", "1", "--prefetch-multiplier", "1"]
     restart: unless-stopped
     depends_on:
       rabbitmq:
@@ -542,7 +579,7 @@ services:
       - docling-models:/mnt/models
     environment:
       DOCLING_SERVE_ENABLE_UI: "true"
-      DOCLING_SERVE_MAX_SYNC_WAIT: 86400
+      DOCLING_SERVE_MAX_SYNC_WAIT: 12
       DOCLING_SERVE_ARTIFACTS_PATH: /mnt/models
       HF_HUB_OFFLINE: "${IS_AIR_GAPPED:-0}"
       NVIDIA_VISIBLE_DEVICES: "all" # https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/docker-specialized.html

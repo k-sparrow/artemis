@@ -12,6 +12,7 @@ from src.lib.core.adapters.loaders import (
 from src.lib.core.adapters.stores.base.blob import BlobStoreFactory
 from src.lib.core.adapters.stores.minio.blob import MinioBlobStore
 from src.backend.parsing.api.config import settings
+from src.backend.parsing.lib.docling_client import DoclingParseClient
 
 __all__ = [
     "LoaderFactory",
@@ -19,6 +20,9 @@ __all__ = [
     "get_s3_client",
     "get_blob_store_factory",
     "blob_store_factory_dependency",
+    "get_docling_client",
+    "docling_client_dependency",
+    "s3_client_dependency",
 ]
 
 
@@ -50,7 +54,13 @@ def get_blob_store_factory(
     return lambda bucket: MinioBlobStore(client, bucket)
 
 
+def get_docling_client() -> DoclingParseClient:
+    return DoclingParseClient(base_url=settings.DOCLING_SERVE_URI)
+
+
 loader_factory_dependency = Annotated[LoaderFactory, Depends(get_loader_factory)]
 blob_store_factory_dependency = Annotated[
     BlobStoreFactory, Depends(get_blob_store_factory)
 ]
+docling_client_dependency = Annotated[DoclingParseClient, Depends(get_docling_client)]
+s3_client_dependency = Annotated[Minio, Depends(get_s3_client)]
