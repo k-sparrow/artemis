@@ -20,7 +20,9 @@ _OBJ_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 
 
 class TestChunkItemsToParsed:
-    def _item(self, text="chunk text", filename="doc.json", page_numbers=None, doc_items=None):
+    def _item(
+        self, text="chunk text", filename="doc.json", page_numbers=None, doc_items=None
+    ):
         return {
             "text": text,
             "filename": filename,

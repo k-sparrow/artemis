@@ -282,13 +282,25 @@ async def resolve_endpoint(
             timeout=settings.DOCLING_RESOLVE_TIMEOUT,
         )
     else:
-        results_prefix = f"{obj_id}/results/json/"
+        results_prefix = f"{obj_id}/results/"
+        # docling_jobkit._upload_document_to_s3_target appends a 12-char SHA-256
+        # hash of each source URI between our dst_prefix and the shard filename:
+        #   {dst_prefix}{sha256(s3://{bucket}/{key})[:12]}/{shard}.json
+        # This is hardcoded in docling_jobkit with no API knob to disable it.
+        # Recursive listing absorbs the extra hash directory level transparently.
+        # TODO: remove the sort-by-basename once IBM fixes docling-jobkit to honour
+        #       dst_prefix verbatim (track: docling-project/docling-jobkit).
         shard_keys = sorted(
-            obj.object_name
-            for obj in s3.list_objects(
-                settings.DOCLING_SCRATCH_BUCKET, prefix=results_prefix, recursive=True
-            )
-            if obj.object_name and obj.object_name.endswith(".json")
+            (
+                obj.object_name
+                for obj in s3.list_objects(
+                    settings.DOCLING_SCRATCH_BUCKET,
+                    prefix=results_prefix,
+                    recursive=True,
+                )
+                if obj.object_name and obj.object_name.endswith(".json")
+            ),
+            key=lambda k: k.rsplit("/", 1)[-1],
         )
         if not shard_keys:
             raise HTTPException(

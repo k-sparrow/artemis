@@ -218,7 +218,15 @@ class TestCircuitBreakers:
                 side_effect=[
                     Response(503),
                     Response(503),
-                    Response(200, json={"status": "success", "num_processed": 1, "num_total": 1, "error_message": None}),
+                    Response(
+                        200,
+                        json={
+                            "status": "success",
+                            "num_processed": 1,
+                            "num_total": 1,
+                            "error_message": None,
+                        },
+                    ),
                     Response(503),
                 ]
             )

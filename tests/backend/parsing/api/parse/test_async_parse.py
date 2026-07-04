@@ -368,7 +368,9 @@ class TestResolveEndpoint:
         chunk job submitted, chunking_task_id returned."""
         from docling.datamodel.document import DoclingDocument
 
-        shard_key = f"{OBJ_ID_STR}/results/json/shard-0000.json"
+        # docling_jobkit stores results at {dst_prefix}{hash}/{shard}.json;
+        # simulate the hash subdirectory that the router must absorb.
+        shard_key = f"{OBJ_ID_STR}/results/abc123def456/shard-0000.json"
         store.put(shard_key, DoclingDocument(name="shard").model_dump_json().encode())
 
         mock_obj = MagicMock()

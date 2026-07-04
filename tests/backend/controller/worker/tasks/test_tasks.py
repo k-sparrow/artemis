@@ -27,7 +27,6 @@ from src.backend.controller.lib.schemas import (
     S3Details,
     UploadAction,
 )
-from src.backend.controller.worker.exceptions import EmptyObjectError
 
 from src.backend.controller.worker.tasks import (
     FailureRecordingTask,

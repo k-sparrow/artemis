@@ -12,6 +12,7 @@ handles.
 from __future__ import annotations
 
 import httpx
+from docling.datamodel.document import DoclingDocument
 
 from src.backend.parsing.lib.artifact import ParseStatus
 
@@ -63,8 +64,15 @@ class DoclingParseClient:
         """POST /v1/convert/source/batch with S3SourceRequest + S3Target → task_id.
 
         Submits all shard PDFs at src_prefix as a batch S3 conversion.
-        Results are written to dst_bucket/dst_prefix by docling-serve.
-        Each shard produces a JSON file at dst_prefix/json/{shard_name}.json.
+        Results land at dst_bucket under dst_prefix, but docling_jobkit appends
+        a 12-char SHA-256 hash of each source URI before the shard filename:
+            {dst_prefix}{sha256(s3://{src_bucket}/{shard_key})[:12]}/{shard}.json
+        There is no API knob to disable this behaviour (hardcoded in
+        docling_jobkit._upload_document_to_s3_target). resolve_endpoint absorbs
+        the extra directory level via a recursive listing of dst_prefix.
+        TODO: drop the hash workaround once IBM fixes docling-jobkit to honour
+              dst_prefix verbatim (track upstream issue in
+              docling-project/docling-jobkit).
         """
         s3_creds = {
             "endpoint": s3_endpoint,
@@ -75,9 +83,19 @@ class DoclingParseClient:
         body = {
             "options": {"to_formats": ["json"]},
             "sources": [
-                {"kind": "s3", **s3_creds, "bucket": src_bucket, "key_prefix": src_prefix}
+                {
+                    "kind": "s3",
+                    **s3_creds,
+                    "bucket": src_bucket,
+                    "key_prefix": src_prefix,
+                }
             ],
-            "target": {"kind": "s3", **s3_creds, "bucket": dst_bucket, "key_prefix": dst_prefix},
+            "target": {
+                "kind": "s3",
+                **s3_creds,
+                "bucket": dst_bucket,
+                "key_prefix": dst_prefix,
+            },
         }
         async with httpx.AsyncClient(
             base_url=self._base_url, timeout=timeout
@@ -98,19 +116,39 @@ class DoclingParseClient:
             data = resp.json()
 
         raw = data.get("task_status", "pending")
+        server_error = data.get("error_message")
         if raw not in _TERMINAL:
             mapped = "processing"
+            error_message = None
         elif raw == "success":
             mapped = "success"
+            error_message = None
+        elif raw == "partial_success":
+            # Some shards failed → incomplete S3 results. Treat as failure so the
+            # Celery retry re-submits the whole batch rather than proceeding with a
+            # truncated DoclingDocument. Change to "success" here if partial results
+            # become acceptable.
+            mapped = "failure"
+            error_message = (
+                f"partial_success: {server_error}"
+                if server_error
+                else "partial_success"
+            )
+        elif raw == "skipped":
+            # Unexpected in our flow (we always submit fresh shard PDFs). Fail loudly
+            # rather than emit an empty artifact.
+            mapped = "failure"
+            error_message = f"skipped: {server_error}" if server_error else "skipped"
         else:
             mapped = "failure"
+            error_message = server_error
 
         meta = data.get("task_meta") or {}
         return ParseStatus(
             status=mapped,  # type: ignore[arg-type]
             num_processed=meta.get("num_processed"),
             num_total=meta.get("num_total"),
-            error_message=data.get("error_message"),
+            error_message=error_message,
         )
 
     async def fetch_conversion_result(
