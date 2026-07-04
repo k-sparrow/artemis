@@ -211,7 +211,7 @@ result backend that writes to `apollo_celery_taskmeta` (shared PostgreSQL) with
 | `PARSED_CHUNKS_BUCKET` | `parsed-chunks` | |
 | `PARSING_SERVICE_URL` | `http://backend-parsing:10001` | |
 | `INGESTION_SERVICE_URL` | `http://backend-indexing:10000` | |
-| `HTTPX_TIMEOUT` | `30` | For indexing/delete calls only; parse calls use per-endpoint timeouts |
+| `HTTPX_TIMEOUT` | `600` | For indexing/delete calls only; parse calls use per-endpoint timeouts |
 | `PARSING_SUBMIT_TIMEOUT` | `120.0` | S3 shard uploads + HTTP POST |
 | `PARSING_STATUS_TIMEOUT` | `30.0` | Single status GET |
 | `PARSING_RESOLVE_TIMEOUT` | `120.0` | S3 downloads + concatenate + chunk submit |

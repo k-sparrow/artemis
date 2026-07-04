@@ -48,8 +48,8 @@ class WorkerSettings(BaseSettings):
     # MinIO bucket for parsed-chunk intermediate objects
     PARSED_CHUNKS_BUCKET: str = "parsed-chunks"
 
-    # httpx timeout (seconds) for legacy parsing and indexing service calls
-    HTTPX_TIMEOUT: float = 86400.0
+    # httpx timeout (seconds) for indexing and delete service calls
+    HTTPX_TIMEOUT: float = 1800.0
 
     # Per-call timeouts for the new async parse endpoints
     PARSING_SUBMIT_TIMEOUT: float = 120.0  # shard uploads + HTTP POST

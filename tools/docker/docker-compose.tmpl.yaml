@@ -888,10 +888,9 @@ volumes:
 configs:
   rabbitmq-conf:
     content: |
-      # 24-hour consumer timeout — required for heavy-PDF Docling tasks that run
-      # longer than RabbitMQ's default 30-minute delivery acknowledgement window.
-      # Remove once the worker migrates to docling's async task API.
-      consumer_timeout = 86400000
+      # 30-minute consumer timeout. Aligned to HTTPX_TIMEOUT (1800s) for the
+      # blocking indexing call (TEI embed + Qdrant write for large documents).
+      consumer_timeout = 1800000
   jaeger-config:
     content: |
       service:
