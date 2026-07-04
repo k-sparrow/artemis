@@ -47,16 +47,16 @@ block
 
 **Controller Worker** — Celery worker consuming from RabbitMQ. Owns the ingestion
 orchestration: receives the `ingest` task from the task queue, dispatches the
-`fetch_and_parse → index` chain, and writes final task results (success or structured
-failure) to PostgreSQL via a custom result backend. Holds circuit breakers for both
-downstream services.
+`parse → index` chain (where `parse` self-replaces with a four-task async sub-chain),
+and writes final task results (success or structured failure) to PostgreSQL via a custom
+result backend. Holds circuit breakers for both downstream services.
 
-**Parsing Service** — FastAPI service (`POST /v1/parse`) that converts a raw document
-into a structured parse artifact. Accepts a `BlobRef` (claim-check); reads the input
-file from MinIO, drives [Docling Serve](https://github.com/docling-project/docling-serve)
-for document conversion and chunking, assembles a `ParseArtifact` (structured chunks +
-page-level markdown), writes the artifact and a lossless replay cache to MinIO, and
-returns only the artifact's `BlobRef`.
+**Parsing Service** — FastAPI service that converts a raw document into a structured parse
+artifact via an async scatter-gather pipeline. Accepts a `BlobRef` (claim-check); for large
+PDFs splits the document into shards, submits a batch conversion to
+[Docling Serve](https://github.com/docling-project/docling-serve), polls until complete,
+concatenates shard results, submits a chunk job, and writes the `ParseArtifact` and a
+lossless replay cache to MinIO. Returns only the artifact's `BlobRef`.
 
 **Indexing Service** — FastAPI service (`POST /ingest`) that embeds and stores a parse
 artifact. Accepts a `BlobRef` to the artifact; reads it from MinIO, embeds each chunk
@@ -87,15 +87,16 @@ the `ingestion_tasks` table.
 
 The controller worker declares two durable RabbitMQ queues with different scaling profiles:
 
-| Queue | Routing key | Tasks | Scale driver |
-|-------|-------------|-------|--------------|
-| `artemis.ingestion.fetch-and-parse` | `fetch-and-parse` | `tasks.ingest`, `tasks.fetch_and_parse` | GPU (Docling) |
-| `artemis.ingestion.index` | `index` | `tasks.index`, `tasks.delete_document`, `tasks.delete_namespace` | I/O (TEI + Qdrant + Postgres) |
+| Queue | Worker | Concurrency | Tasks | Scale driver |
+|-------|--------|-------------|-------|--------------|
+| `artemis.ingestion.parse` | `backend-controller-parse-worker` | 3 | `tasks.ingest`, `tasks.parse`, `tasks.submit_parse`, `tasks.poll_parse`, `tasks.resolve_parse`, `tasks.poll_resolve` | HTTP (Docling Serve async API) |
+| `artemis.ingestion.index` | `backend-controller-index-worker` | 1 | `tasks.index`, `tasks.delete_document`, `tasks.delete_namespace` | I/O (TEI + Qdrant + Postgres) |
 
-`tasks.ingest` (the entry point dispatched by the RabbitMQ sink) lands on the
-`fetch-and-parse` queue so it executes on the same worker pool that owns the GPU
-budget, keeping the chain dispatch co-located with the first heavy task. The `index`
-queue can scale independently on CPU/I/O workers without GPU resources.
+`tasks.ingest` (entry point dispatched by the RabbitMQ sink) lands on the `parse` queue
+so chain dispatch is co-located with the first parse task. Parse worker threads are never
+blocked for the duration of a Docling job — each thread either makes a single short HTTP
+call or sleeps in `self.retry()`. The `index` queue remains serial (`concurrency=1`)
+because the indexing service drives the GPU-bound TEI embedding model.
 
 Both queues share the same RabbitMQ exchange (`artemis.ingestion`, direct type).
 
@@ -115,10 +116,23 @@ sequenceDiagram
     participant PG as PostgreSQL
 
     Q->>CW: tasks.ingest {BlobRef, source, upload_action}
-    CW->>CW: dispatch chain(fetch_and_parse → index)
+    CW->>CW: dispatch chain(parse → index)
+    note over CW: parse self-replaces with sub-chain via self.replace()
 
-    note over CW,PS: Task 1 — fetch_and_parse (artemis.ingestion.fetch-and-parse queue)
-    CW->>PS: POST /v1/parse {source_ref: BlobRef}
+    note over CW,PS: Sub-chain — artemis.ingestion.parse queue
+    CW->>PS: POST /v1/parse/submit
+    PS-->>CW: SubmitResult {parsing_task_id, mode}
+    loop poll until success
+        CW->>PS: GET /v1/parse/status/{parsing_task_id}
+        PS-->>CW: ParseStatus {processing|success|failure}
+    end
+    CW->>PS: POST /v1/parse/resolve
+    PS-->>CW: ResolveResult {chunking_task_id}
+    loop poll until success
+        CW->>PS: GET /v1/parse/status/{chunking_task_id}
+        PS-->>CW: ParseStatus {processing|success|failure}
+    end
+    CW->>PS: POST /v1/parse/finalize
     PS-->>CW: artifact BlobRef
 
     note over CW,IS: Task 2 — index (artemis.ingestion.index queue)
@@ -138,13 +152,37 @@ sequenceDiagram
     participant Docling as Docling Serve
     participant S3 as MinIO S3
 
-    CW->>PS: POST /v1/parse {source_ref: BlobRef}
+    CW->>PS: POST /v1/parse/submit {source_ref: BlobRef}
     PS->>S3: read input file
     S3-->>PS: raw bytes
-    PS->>Docling: convert + chunk
-    Docling-->>PS: chunks + page markdown + DoclingDocument
-    PS->>S3: write parse/{obj_id}.json (artifact)
-    PS->>S3: write replay/{obj_id}.json (replay cache)
+    alt large PDF (> shard trigger)
+        PS->>PS: split into N shards (pypdf)
+        PS->>S3: write N shard PDFs to docling-scratch/{obj_id}/pages/
+        PS->>Docling: POST /v1/convert/source/batch (S3Source → S3Target)
+    else small doc
+        PS->>Docling: POST /v1/convert/file/async
+    end
+    Docling-->>PS: task_id
+    PS-->>CW: SubmitResult {parsing_task_id, mode}
+
+    note over CW,PS: polling omitted for brevity
+
+    CW->>PS: POST /v1/parse/resolve
+    PS->>S3: list docling-scratch/{obj_id}/results/ (recursive)
+    PS->>S3: download N result JSONs
+    PS->>PS: DoclingDocument.concatenate(shards)
+    PS->>S3: write replay/{obj_id}.json
+    PS->>Docling: POST /v1/chunk/hybrid/file/async
+    PS->>S3: delete scratch/{obj_id}/ (best-effort)
+    PS-->>CW: ResolveResult {chunking_task_id}
+
+    note over CW,PS: polling omitted for brevity
+
+    CW->>PS: POST /v1/parse/finalize
+    PS->>Docling: GET /v1/result/{chunking_task_id}
+    PS->>S3: read replay/{obj_id}.json
+    PS->>PS: build ParseArtifact (chunks + pages)
+    PS->>S3: write parse/{obj_id}.json
     PS-->>CW: artifact BlobRef
 ```
 
@@ -208,7 +246,7 @@ made, keeping worker threads available instead of blocking on a dead connection.
 
 ### Retry Strategy
 
-Both `fetch_and_parse` and `index` follow the same retry policy:
+All parse sub-tasks and `index` follow the same retry policy:
 
 | Error | Action |
 |-------|--------|

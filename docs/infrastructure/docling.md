@@ -1,6 +1,6 @@
 # Docling Serve
 
-**Version:** ds4sd/docling-serve:v1.24.0-cu128  
+**Version:** ghcr.io/docling-project/docling-serve-cu128:v1.24.0  
 **Role:** GPU-accelerated document parsing. Converts PDFs, DOCX, HTML, and other formats
 into structured output: page-delimited Markdown and semantic chunks with content type
 labels (TEXT, TABLE, SECTION_HEADER, etc.).
@@ -20,80 +20,130 @@ of the document with:
 - Semantic chunks with labels from `DocItemLabel` (TEXT, TABLE, SECTION_HEADER, CAPTION, etc.)
 - Layout and hierarchy metadata
 
-The parsing service calls Docling Serve and extracts from the `DoclingDocument`:
-- `pages[]` — page-numbered Markdown blocks (for parent-page retrieval)
-- `chunks[]` — semantic chunks with `DocItemLabel` type (for embedding)
+The parsing service uses two Docling Serve endpoint groups:
+
+1. **Conversion** — converts a document to `DoclingDocument` JSON
+2. **Chunking** — applies the hybrid chunker to a `DoclingDocument`, returning `ChunkedDocumentResult`
 
 ---
 
 ## API Usage
 
-The parsing service calls the synchronous conversion endpoint:
+### Single document (small files)
 
 ```
-POST http://docling-serve:5001/v1/convert/file
+POST /v1/convert/file/async
 Content-Type: multipart/form-data
 
-file=@document.pdf
+files=@document.pdf
+to_formats=json
 ```
 
-Docling Serve returns a `DoclingDocument` JSON when the conversion completes.
+Returns `{"task_id": "<uuid>"}` immediately. Poll
+`GET /v1/status/poll/{task_id}?wait=0` until `task_status` is terminal, then fetch
+the result with `GET /v1/result/{task_id}`.
 
-**Async mode:** For documents that exceed `DOCLING_SERVE_MAX_SYNC_WAIT` (12 seconds by
-default), Docling Serve switches to async mode and returns a `task_id` instead of the
-result. The current parsing service implementation does not handle this case — it waits
-synchronously and times out on large documents.
+### Batch conversion (large PDFs — S3Source → S3Target)
 
-This is a known limitation tracked as **Epic 18** (Async Docling Parsing for Large
-Documents). The stopgap is `HTTPX_TIMEOUT=86400` and `consumer_timeout=86400000ms` to
-allow up to 24 hours for heavy PDFs. This works for typical enterprise PDFs (up to ~500
-pages with GPU) but is not a long-term solution.
+Used when a PDF exceeds `DOCLING_SHARD_TRIGGER_PAGES` pages. The parsing service
+pre-splits the PDF into shards, uploads them to the `docling-scratch` MinIO bucket, then
+submits a batch job:
+
+```
+POST /v1/convert/source/batch
+Content-Type: application/json
+
+{
+  "options": {"to_formats": ["json"]},
+  "sources": [{"kind": "s3", "endpoint": "...", "bucket": "docling-scratch", "key_prefix": "{obj_id}/pages/"}],
+  "target":  {"kind": "s3", "endpoint": "...", "bucket": "docling-scratch", "key_prefix": "{obj_id}/results/"}
+}
+```
+
+Returns `{"task_id": "<uuid>"}` immediately. Docling Serve lists all objects under
+`key_prefix` and converts each in sequence (LOCAL engine) or in parallel (RAY engine).
+
+#### S3Target hash path behaviour
+
+`GET /v1/result/{task_id}` for a batch job returns **counts only** — no file paths and no
+presigned URLs. The actual result JSONs are written to the scratch bucket, but
+`docling_jobkit` (Docling Serve's internal job library) appends a 12-char SHA-256 hash of
+each source URI between `dst_prefix` and the shard filename:
+
+```
+{dst_prefix}{sha256(source_uri)[:12]}/{shard_basename}.json
+```
+
+There is no API knob to disable this. The parsing service absorbs it by listing
+`{obj_id}/results/` **recursively** and sorting results by basename — the hash directory
+level is transparent to the caller.
+
+### Hybrid chunking
+
+```
+POST /v1/chunk/hybrid/file/async
+Content-Type: multipart/form-data
+
+files=("doc.json", <DoclingDocument bytes>, "application/json")
+```
+
+Returns `{"task_id": "<uuid>"}`. Fetch result with `GET /v1/result/{task_id}` →
+`{"chunks": [...]}`.
+
+---
+
+## ConversionStatus
+
+All task types share the same status model:
+
+| Status | Meaning |
+|---|---|
+| `pending` | Queued, not yet picked up by a worker |
+| `started` | Worker has claimed the task; conversion may or may not have begun |
+| `success` | Terminal: conversion completed successfully |
+| `failure` | Terminal: conversion failed |
+| `partial_success` | Terminal: some documents in the batch succeeded, some failed |
+| `skipped` | Terminal: document(s) skipped |
+
+The LOCAL engine (default) does not populate `task_meta.num_processed` / `task_meta.num_total`.
+Progress tracking is only available with the RAY orchestrator backend.
+
+The LOCAL engine status transitions: `pending` → `started` → `success` | `failure`.
+`started` is set synchronously when the worker dequeues the task, before the conversion
+thread is spawned.
 
 ---
 
 ## Table Handling
 
-The parsing service controls how tables are chunked:
-
-- **SEMI_STRUCTURED pipeline:** `split_tables=False` — tables are kept whole as single
-  chunks (correct for multi-vector RAG; the table is stored as a unit and summarised)
-- **SIMPLE pipeline:** `split_tables=True` — tables are split at the splitter's chunk
-  boundary (trades coherence for size limits)
-
-`DocItemLabel.TABLE` is detected by `MetaExtractor` and assigned `ChunkType.TABLE` in the
-`ParseArtifact.chunks[]` output.
+- **SEMI_STRUCTURED pipeline:** `split_tables=False` — tables kept whole as single chunks
+- **SIMPLE pipeline:** `split_tables=True` — tables split at the chunk boundary
 
 ---
 
 ## CUDA Version
 
-The image `v1.24.0-cu128` requires CUDA 12.8. If your GPU does not support CUDA 12.8,
-use a compatible image version or run Docling Serve on CPU (significantly slower, not
-recommended for production).
+The image `docling-serve-cu128:v1.24.0` requires CUDA 12.8. If your GPU does not support
+CUDA 12.8, use a compatible image version or run Docling Serve on CPU (significantly
+slower, not recommended for production).
 
 ---
 
-## Replay Cache
+## Server-side timeout
 
-The parsing service writes the raw `DoclingDocument` JSON to MinIO:
-```
-docling-replay/{namespace_id}/{obj_id}.json
-```
-
-This is private to the parsing service — the bucket and key are not in any inter-service
-contract. The cache allows re-running the indexing pipeline without re-parsing the document
-(useful when indexing parameters change but the document content is unchanged).
+`DOCLING_SERVE_MAX_SYNC_WAIT` is set to `12` seconds in compose (the default). The
+parsing service uses only `/async` and `/batch` endpoints — it never calls the synchronous
+`/v1/convert/file` endpoint, so the sync timeout is irrelevant for production traffic.
 
 ---
 
 ## Health Check
 
-The parsing service's readiness probe includes a Docling reachability check:
+The parsing service's readiness probe checks Docling reachability:
 
 ```bash
-# From inside Docker network
 curl http://docling-serve:5001/health
 ```
 
 If Docling Serve is down, the parsing service returns `503 Service Unavailable` on
-`POST /v1/parse` immediately (circuit breaker opens after 3 failures).
+`POST /v1/parse/submit` immediately (circuit breaker opens after 3 failures).
