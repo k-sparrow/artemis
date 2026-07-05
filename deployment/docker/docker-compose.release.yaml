@@ -473,6 +473,61 @@ services:
   # ---------------------------------------------------------------------------
   # AI
   # ---------------------------------------------------------------------------
+  docling-model-downloader:
+    profiles: [ai]
+    image: "ghcr.io/docling-project/docling-serve-cu128:v1.24.0"
+    container_name: docling-model-downloader
+    user: "0"
+    entrypoint: /opt/app-root/bin/docling-tools
+    command:
+      - models
+      - download
+      - --output-dir
+      - /mnt/models
+    environment:
+      HF_HUB_OFFLINE: "${IS_AIR_GAPPED:-0}"
+    volumes:
+      - docling-models:/mnt/models
+    restart: "no"
+    networks:
+      - default
+  tei-model-downloader:
+    profiles: [ai-tei]
+    image: "huggingface/downloader:0.17.3-esgz"
+    container_name: tei-model-downloader
+    user: "0"
+    entrypoint: /usr/local/bin/huggingface-cli
+    command:
+      - download
+      - "Alibaba-NLP/gte-large-en-v1.5"
+      - --resume-download
+    environment:
+      HUGGINGFACE_HUB_CACHE: /mnt/models
+      HF_HUB_OFFLINE: "${IS_AIR_GAPPED:-0}"
+      HF_HUB_DOWNLOAD_TIMEOUT: "3600"
+    volumes:
+      - tei-models:/mnt/models
+    restart: "no"
+    networks:
+      - default
+  colbert-model-downloader:
+    profiles: [ai-colbert]
+    image: "vllm/vllm-openai:v0.20.2"
+    container_name: colbert-model-downloader
+    user: "0"
+    entrypoint: python3
+    command:
+      - -c
+      - "from huggingface_hub import snapshot_download; from transformers import AutoConfig; p = snapshot_download('jinaai/jina-colbert-v2', resume_download=True); AutoConfig.from_pretrained(p, trust_remote_code=True)"
+    environment:
+      HF_HOME: /mnt/models
+      HF_HUB_OFFLINE: "${IS_AIR_GAPPED:-0}"
+      HF_HUB_DOWNLOAD_TIMEOUT: "3600"
+    volumes:
+      - colbert-models:/mnt/models
+    restart: "no"
+    networks:
+      - default
   docling-serve:
     profiles: [ai]
     image: "ghcr.io/docling-project/docling-serve-cu128:v1.24.0"
@@ -483,9 +538,13 @@ services:
       timeout: 20s
       retries: 5
       start_period: 30s
+    volumes:
+      - docling-models:/mnt/models
     environment:
       DOCLING_SERVE_ENABLE_UI: "true"
       DOCLING_SERVE_MAX_SYNC_WAIT: 86400
+      DOCLING_SERVE_ARTIFACTS_PATH: /mnt/models
+      HF_HUB_OFFLINE: "${IS_AIR_GAPPED:-0}"
       NVIDIA_VISIBLE_DEVICES: "all" # https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/docker-specialized.html
     deploy: # This section is for compatibility with Swarm
       resources:
@@ -495,6 +554,9 @@ services:
               count: all
               capabilities: [gpu]
     runtime: nvidia
+    depends_on:
+      docling-model-downloader:
+        condition: service_completed_successfully
     restart: always
     networks:
       - default
@@ -508,8 +570,15 @@ services:
     # starts with no exporter and emits no warnings.
     command: "--model-id Alibaba-NLP/gte-large-en-v1.5 --pooling mean --auto-truncate${OTEL_EXPORTER_OTLP_ENDPOINT:+ --otlp-endpoint http://otel-collector:4317 --otlp-service-name tei}"
     container_name: tei
+    volumes:
+      - tei-models:/mnt/models
     environment:
       HF_ENDPOINT: "https://huggingface.co"
+      HUGGINGFACE_HUB_CACHE: /mnt/models
+      HF_HUB_OFFLINE: "${IS_AIR_GAPPED:-0}"
+    depends_on:
+      tei-model-downloader:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost/health || exit 1"]
       interval: 30s
@@ -550,12 +619,19 @@ services:
       - --gpu-memory-utilization
       - '0.10'
     container_name: colbert
+    volumes:
+      - colbert-models:/mnt/models
     environment:
       # Standard OTel SDK var (not vLLM-specific) — names vLLM's spans 'colbert'
       # in Jaeger via the SDK's resource detector. Inert when
       # OTEL_EXPORTER_OTLP_ENDPOINT is unset: no tracer is built, so the resource
       # is never created and this is never read (default would be unknown_service).
       OTEL_SERVICE_NAME: colbert
+      HF_HOME: /mnt/models
+      HF_HUB_OFFLINE: "${IS_AIR_GAPPED:-0}"
+    depends_on:
+      colbert-model-downloader:
+        condition: service_completed_successfully
     shm_size: "10g"
     ipc: host
     healthcheck:
@@ -684,6 +760,9 @@ volumes:
   qdrant-vectorstore:
   db-storage:
   s3-storage:
+  docling-models:
+  tei-models:
+  colbert-models:
 configs:
   rabbitmq-conf:
     content: |

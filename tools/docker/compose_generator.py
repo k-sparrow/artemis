@@ -13,6 +13,8 @@ The template file uses {PLACEHOLDER} markers:
   {TEI_MODEL}          Model ID passed to TEI at startup
   {TEI_GPU_BLOCK}      Multi-line YAML block for nvidia runtime + deploy section;
                        empty string in test mode (CPU-only TEI image)
+  {COLBERT_IMAGE}          Full image ref for the ColBERT vLLM service (reused by its model-downloader)
+  {COLBERT_MODEL}          Model ID for the ColBERT model-downloader init service
   {COLBERT_COMMAND_BLOCK}  Full YAML list-form command block for the ColBERT vLLM service
   {COLBERT_GPU_BLOCK}      Multi-line YAML block for nvidia runtime + deploy section
   {ARTEMIS_TAG_DEV}    Tag for artemis app images that ship a :dev variant
@@ -30,6 +32,13 @@ Modes
                service except the apisix gateway (internal `expose:` kept)
            NOTE: still carries the dev secrets/passwords from the template — this
            is a staging surface, not hardened prod. Override secrets before real use.
+
+  Conditional markers
+  -------------------
+  `# >>> dev-only` / `# <<< dev-only`   — removed in release mode only
+  `# >>> deploy-only` / `# <<< deploy-only` — removed in test mode only
+    Use deploy-only for model-downloader init services and their depends_on
+    references: they are a deployment feature, not needed for e2e test containers.
 
 Bazel integration
 -----------------
@@ -64,6 +73,12 @@ _ARTEMIS_TAG_RELEASE = "${ARTEMIS_VERSION:?set ARTEMIS_VERSION to a release tag}
 _DEV_ONLY_OPEN = "# >>> dev-only"
 _DEV_ONLY_CLOSE = "# <<< dev-only"
 
+# Markers for blocks that must be present in dev/release but stripped in test.
+# Use these around model-downloader init services and their depends_on references —
+# they are a deployment feature, not needed for e2e test containers.
+_DEPLOY_ONLY_OPEN = "# >>> deploy-only"
+_DEPLOY_ONLY_CLOSE = "# <<< deploy-only"
+
 # Services whose published host ports survive in release mode (gateway ingress).
 _RELEASE_PORT_ALLOWLIST = frozenset({"apisix"})
 
@@ -91,6 +106,8 @@ _DEV_SUBS: dict[str, str] = {
     "TEI_MODEL": "Alibaba-NLP/gte-large-en-v1.5",
     "TEI_POOLING": "mean",
     "TEI_GPU_BLOCK": _GPU_DEPLOY_BLOCK,
+    "COLBERT_IMAGE": "vllm/vllm-openai:v0.20.2",
+    "COLBERT_MODEL": "jinaai/jina-colbert-v2",
     "COLBERT_COMMAND_BLOCK": (
         "\n"
         "    command:\n"
@@ -115,6 +132,8 @@ _TEST_SUBS: dict[str, str] = {
     "TEI_MODEL": "BAAI/bge-small-en-v1.5",
     "TEI_POOLING": "cls",
     "TEI_GPU_BLOCK": "",
+    "COLBERT_IMAGE": "vllm/vllm-openai:v0.20.2",
+    "COLBERT_MODEL": "colbert-ir/colbertv2.0",
     "COLBERT_COMMAND_BLOCK": (
         "\n"
         "    command:\n"
@@ -156,6 +175,28 @@ def _strip_dev_only(lines: list[str], *, keep_content: bool) -> list[str]:
             inside = True
             continue
         if stripped == _DEV_ONLY_CLOSE:
+            inside = False
+            continue
+        if inside and not keep_content:
+            continue
+        out.append(line)
+    return out
+
+
+def _strip_deploy_only(lines: list[str], *, keep_content: bool) -> list[str]:
+    """Drop `# >>> deploy-only` … `# <<< deploy-only` marker blocks.
+
+    keep_content=True  → remove only the marker lines (dev/release: section stays).
+    keep_content=False → remove the markers AND everything between them (test).
+    """
+    out: list[str] = []
+    inside = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == _DEPLOY_ONLY_OPEN:
+            inside = True
+            continue
+        if stripped == _DEPLOY_ONLY_CLOSE:
             inside = False
             continue
         if inside and not keep_content:
@@ -210,6 +251,7 @@ def generate(template: str, mode: str) -> str:
 
     lines = result.split("\n")
     lines = _strip_dev_only(lines, keep_content=(mode != "release"))
+    lines = _strip_deploy_only(lines, keep_content=(mode != "test"))
     if mode == "release":
         lines = _strip_unpublished_ports(lines)
     result = "\n".join(lines)

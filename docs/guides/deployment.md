@@ -30,12 +30,15 @@ Start only what you need by combining profiles:
 | `infra` | PostgreSQL, MinIO, Qdrant, RabbitMQ, Kafka, Schema Registry, `artemis-db-migrations` |
 | `backend` | Storage, Parsing, Indexing, Controller Worker, ksqlDB, `artemis-ksqldb-init` |
 | `enterprise` | Kafka Connect, Enterprise Intake, Enterprise Data Sources, `artemis-kafka-connect-init`, `ksqldb-enterprise-init` |
-| `ai` | Docling Serve (GPU, CUDA 12.8) |
-| `ai-tei` | TEI text embedding inference (Alibaba gte-large-en-v1.5) |
-| `ai-colbert` | vLLM + ColBERT (jinaai/jina-colbert-v2) for multi-stage reranking |
+| `ai` | `docling-model-downloader` (init), Docling Serve (GPU, CUDA 12.8) |
+| `ai-tei` | `tei-model-downloader` (init), TEI text embedding inference (Alibaba gte-large-en-v1.5) |
+| `ai-colbert` | `colbert-model-downloader` (init), vLLM + ColBERT (jinaai/jina-colbert-v2) for multi-stage reranking |
 | `gateway` | APISIX, etcd, `artemis-apisix-init` |
 | `observability` | OTel Collector, Jaeger, Prometheus |
 | `dev-tools` | pgAdmin (5444), Kafka UI (18080), ksqlDB CLI |
+
+Each AI profile includes a one-shot init service that downloads model weights into a
+named Docker volume before the AI service starts. See [Air-Gap Deployment](#air-gap-deployment).
 
 ---
 
@@ -74,19 +77,25 @@ docker compose -f deployment/docker/docker-compose.dev.yaml \
 ```
 1. PostgreSQL (infra)
 2. MinIO, Qdrant, RabbitMQ, Kafka, Schema Registry (infra, parallel)
-3. artemis-db-migrations  ←  waits for postgres: service_healthy
-4. Storage Service         ←  waits for minio + postgres + db-migrations
-5. Parsing Service         ←  waits for docling-serve (ai profile)
-6. Indexing Service        ←  waits for qdrant + postgres + db-migrations + tei
-7. Controller Worker       ←  waits for rabbitmq + postgres + db-migrations + minio
-8. ksqlDB                 ←  waits for broker + schemaregistry
-9. artemis-ksqldb-init    ←  waits for ksqldb: service_healthy
+3. artemis-db-migrations       ←  waits for postgres: service_healthy
+   docling-model-downloader    ←  one-shot; populates docling-models volume
+   tei-model-downloader        ←  one-shot; populates tei-models volume
+   colbert-model-downloader    ←  one-shot; populates colbert-models volume
+4. Storage Service             ←  waits for minio + postgres + db-migrations
+   Docling Serve               ←  waits for docling-model-downloader: service_completed_successfully
+   TEI                         ←  waits for tei-model-downloader: service_completed_successfully
+   ColBERT                     ←  waits for colbert-model-downloader: service_completed_successfully
+5. Parsing Service             ←  waits for docling-serve (ai profile)
+6. Indexing Service            ←  waits for qdrant + postgres + db-migrations + tei
+7. Controller Worker           ←  waits for rabbitmq + postgres + db-migrations + minio
+8. ksqlDB                     ←  waits for broker + schemaregistry
+9. artemis-ksqldb-init        ←  waits for ksqldb: service_healthy
    (enterprise)
-10. Kafka Connect          ←  waits for broker + schemaregistry + postgres
-11. artemis-kafka-connect-init  ←  waits for kafka-connect + storage
+10. Kafka Connect              ←  waits for broker + schemaregistry + postgres
+11. artemis-kafka-connect-init ←  waits for kafka-connect + storage
 12. Enterprise Intake, Data Sources  ←  wait for storage
-13. APISIX, etcd          ←  gateway profile
-14. artemis-apisix-init   ←  waits for apisix
+13. APISIX, etcd              ←  gateway profile
+14. artemis-apisix-init       ←  waits for apisix
 ```
 
 ---
@@ -100,6 +109,8 @@ set inline; in production use `.env` files or secrets management.
 ```
 OTEL_EXPORTER_OTLP_ENDPOINT   # OTel collector gRPC endpoint (e.g. http://otel-collector:4317)
 OTEL_SERVICE_NAME             # Set automatically per service in compose
+IS_AIR_GAPPED                 # Set to 1 to disable HuggingFace Hub network calls on all AI services
+                              # (model weights must be pre-downloaded into Docker volumes first)
 ```
 
 ### Storage service (port 7000)
@@ -209,5 +220,66 @@ Set the version before deploying:
 ```bash
 export ARTEMIS_VERSION=v1.0.0
 docker compose -f deployment/docker/docker-compose.release.yaml \
+  --profile infra --profile backend --profile ai --profile ai-tei --profile gateway up -d
+```
+
+---
+
+## Air-Gap Deployment
+
+Each AI profile ships a one-shot init service that downloads model weights into a
+dedicated named Docker volume before the AI service starts. The AI services then
+load from that volume rather than fetching from HuggingFace Hub at runtime.
+
+| Init service | Volume | Content |
+|---|---|---|
+| `docling-model-downloader` | `docling-models` | Docling layout, tableformer, figure classifier, formula models |
+| `tei-model-downloader` | `tei-models` | `Alibaba-NLP/gte-large-en-v1.5` (HF cache layout) |
+| `colbert-model-downloader` | `colbert-models` | `jinaai/jina-colbert-v2` (HF cache layout) |
+
+### Connected environment: populate the volumes
+
+Run the three downloaders once on a machine with internet access. They are
+idempotent — re-running skips files already present in the volume.
+
+```bash
+docker compose -f deployment/docker/docker-compose.dev.yaml \
+  --profile ai --profile ai-tei --profile ai-colbert \
+  up docling-model-downloader tei-model-downloader colbert-model-downloader
+```
+
+Verify the large model weights landed correctly (302 redirects from HF LFS
+are transparent, but worth confirming sizes):
+
+```bash
+docker run --rm -v artemis_docling-models:/mnt/models alpine sh -c \
+  'find /mnt/models \( -name "*.safetensors" -o -name "*.onnx" \) -exec stat -c "%s %n" {} \;'
+```
+
+### Transfer volumes to the air-gapped machine
+
+```bash
+# Export on connected machine
+for vol in artemis_docling-models artemis_tei-models artemis_colbert-models; do
+  docker run --rm -v ${vol}:/data alpine tar czf - /data \
+    > ${vol}.tar.gz
+done
+
+# Transfer the three .tar.gz files to the air-gapped machine, then import:
+for vol in artemis_docling-models artemis_tei-models artemis_colbert-models; do
+  docker volume create ${vol}
+  cat ${vol}.tar.gz | docker run --rm -i -v ${vol}:/data alpine tar xzf - -C /
+done
+```
+
+### Start the stack in air-gap mode
+
+Set `IS_AIR_GAPPED=1` in your `.env` (or inline). This maps to `HF_HUB_OFFLINE=1`
+on every init service and AI service, preventing any HuggingFace Hub network calls.
+The init services will exit immediately (files already present); the AI services load
+exclusively from the pre-populated volumes.
+
+```bash
+IS_AIR_GAPPED=1 docker compose -f deployment/docker/docker-compose.release.yaml \
   --profile infra --profile backend --profile ai --profile ai-tei --profile gateway up -d
 ```
