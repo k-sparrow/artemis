@@ -136,6 +136,10 @@ REPLAY_CACHE_BUCKET        docling-replay    # default
 ```
 
 ### Indexing service (port 10000)
+
+See [Retrieval Modes](retrieval-modes.md) for a full explanation of `RETRIEVAL_MODE`
+options (`dense`, `hybrid`, `multi_stage`) and pipeline types.
+
 ```
 QDRANT_HOST_URL            http://vectorstore:6333
 QDRANT_COLLECTION_NAME     artemis
@@ -146,9 +150,6 @@ COLBERT_HOST_URL           http://colbert:8000            # multi_stage only (no
 COLBERT_MODEL_NAME         colbert-ir/colbertv2.0
 COLBERT_MAX_TOKENS_PER_DOC 511
 RETRIEVE_CANDIDATES_MULTIPLIER 10                         # k × multiplier candidates before rerank
-SQL_DB_USER / SQL_DB_PASSWORD / SQL_DB_HOST / SQL_DB_PORT / SQL_DB_DATABASE / SQL_DRIVER
-S3_ENDPOINT / S3_ACCESS_KEY / S3_SECRET_KEY / S3_SECURE
-PAGE_BUCKET                parent-pages                   # parent-page doc store
 DEFAULT_PIPELINE_TYPE      simple                         # simple | semi_structured
 DEFAULT_CHUNK_SIZE         1024
 DEFAULT_CHUNK_OVERLAP      100
@@ -258,8 +259,18 @@ docker run --rm -v artemis_docling-models:/mnt/models alpine sh -c \
 
 ### Transfer volumes to the air-gapped machine
 
+The Docker Compose project name is prepended to every volume name. Confirm the
+actual names before exporting:
+
 ```bash
-# Export on connected machine
+docker volume ls | grep models
+# e.g. artemis_docling-models  artemis_tei-models  artemis_colbert-models
+```
+
+Then export, transfer, and import:
+
+```bash
+# Export on connected machine (adjust prefix if your project name differs)
 for vol in artemis_docling-models artemis_tei-models artemis_colbert-models; do
   docker run --rm -v ${vol}:/data alpine tar czf - /data \
     > ${vol}.tar.gz
@@ -276,10 +287,15 @@ done
 
 Set `IS_AIR_GAPPED=1` in your `.env` (or inline). This maps to `HF_HUB_OFFLINE=1`
 on every init service and AI service, preventing any HuggingFace Hub network calls.
-The init services will exit immediately (files already present); the AI services load
+The init services exit quickly (models already in the volume); the AI services load
 exclusively from the pre-populated volumes.
 
 ```bash
+# Without ColBERT reranking
 IS_AIR_GAPPED=1 docker compose -f deployment/docker/docker-compose.release.yaml \
   --profile infra --profile backend --profile ai --profile ai-tei --profile gateway up -d
+
+# With ColBERT reranking (requires colbert-models volume to be pre-populated)
+IS_AIR_GAPPED=1 docker compose -f deployment/docker/docker-compose.release.yaml \
+  --profile infra --profile backend --profile ai --profile ai-tei --profile ai-colbert --profile gateway up -d
 ```
