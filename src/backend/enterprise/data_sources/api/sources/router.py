@@ -33,6 +33,7 @@ async def create_data_source(
         namespace=body.namespace,
         org_name=body.org_name,
         recursive=body.recursive,
+        file_extensions=body.file_extensions,
     )
     log.info(
         "data_source_created",

@@ -10,9 +10,41 @@ statically-deployed connector — not managed by the control plane.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Sequence
 
 _FILESYSTEM_TOPIC = "artemis.datasource.filesystem"
+
+# Extensions an admin may choose to ingest. Anything not on this list is
+# rejected at the API layer (schemas.DataSourceCreate) before a connector is
+# ever rendered, so docling-serve never sees files it can't parse.
+ALLOWED_FILE_EXTENSIONS: tuple[str, ...] = (
+    "pdf",
+    "docx",
+    "pptx",
+    "xlsx",
+    "html",
+    "htm",
+    "md",
+    "txt",
+    "csv",
+    "png",
+    "jpg",
+    "jpeg",
+    "tiff",
+    "bmp",
+)
+
+DEFAULT_FILE_EXTENSIONS: tuple[str, ...] = (
+    "pdf",
+    "docx",
+    "pptx",
+    "xlsx",
+    "html",
+    "htm",
+    "md",
+    "txt",
+    "csv",
+)
 
 
 def render_filesystem_connector(
@@ -25,6 +57,7 @@ def render_filesystem_connector(
     org_name: str,
     owner_id: str,
     recursive: bool = True,
+    file_extensions: Sequence[str] = DEFAULT_FILE_EXTENSIONS,
 ) -> dict[str, Any]:
     """Render a Camel FileSource connector config.
 
@@ -62,107 +95,110 @@ def render_filesystem_connector(
         namespace_id: Artemis namespace UUID (from storage service POST /namespaces).
         org_name: Organisation name.
         recursive: Whether to watch subdirectories recursively.
+        file_extensions: File extensions (no leading dot) to ingest. Rendered
+            as ``camel.source.endpoint.includeExt`` so Camel drops everything
+            else (e.g. video files) before it ever reaches Kafka.
 
     Returns:
         Connector config dict for ``KafkaConnect.create_connector()``.
     """
-    return {
-        "name": connector_name,
-        "config": {
-            "connector.class": (
-                "org.apache.camel.kafkaconnector.file.CamelFileSourceConnector"
-            ),
-            "tasks.max": "1",
-            "camel.source.path.directoryName": watch_path,
-            "camel.source.endpoint.recursive": str(recursive).lower(),
-            # noop=true: filesystem is RO-mounted; never move or delete files.
-            "camel.source.endpoint.noop": "true",
-            "camel.source.endpoint.idempotent": "true",
-            # Use the consumed file path as the raw key material.
-            "camel.source.camelMessageHeaderKey": "CamelFileNameConsumed",
-            "topics": _FILESYSTEM_TOPIC,
-            # Key: plain string (namespace); Value: raw file content string.
-            "key.converter": "org.apache.kafka.connect.storage.StringConverter",
-            "key.converter.schemas.enable": "false",
-            "value.converter": "org.apache.kafka.connect.storage.StringConverter",
-            "value.converter.schemas.enable": "false",
-            "transforms": ",".join(
-                [
-                    # Key transforms
-                    "HoistKeyField",
-                    "InsertNamespaceKey",
-                    "RemovePathKey",
-                    "ExtractNamespaceKeyField",
-                    "DropCamelHeaders",
-                    # Header-only metadata injection
-                    "InjectNamespaceHeader",
-                    "InjectNamespaceIdHeader",
-                    "InjectOrgNameHeader",
-                    "InjectGroupIdHeader",
-                    "InjectOwnerIdHeader",
-                ]
-            ),
-            # ── Key transforms ───────────────────────────────────────────────
-            # 1. file-path string → {"path": <path>}
-            "transforms.HoistKeyField.type": (
-                "org.apache.kafka.connect.transforms.HoistField$Key"
-            ),
-            "transforms.HoistKeyField.field": "path",
-            # 2. {"path": <path>} → {"path": <path>, "namespace": <ns>}
-            "transforms.InsertNamespaceKey.type": (
-                "org.apache.kafka.connect.transforms.InsertField$Key"
-            ),
-            "transforms.InsertNamespaceKey.static.field": "namespace",
-            "transforms.InsertNamespaceKey.static.value": namespace,
-            # 3. {"path": <path>, "namespace": <ns>} → {"namespace": <ns>}
-            "transforms.RemovePathKey.type": (
-                "org.apache.kafka.connect.transforms.ReplaceField$Key"
-            ),
-            "transforms.RemovePathKey.exclude": "path",
-            # 4. {"namespace": <ns>} → <ns> (plain string)
-            "transforms.ExtractNamespaceKeyField.type": (
-                "org.apache.kafka.connect.transforms.ExtractField$Key"
-            ),
-            "transforms.ExtractNamespaceKeyField.field": "namespace",
-            # 5. Drop redundant Camel.* headers
-            "transforms.DropCamelHeaders.type": (
-                "org.apache.kafka.connect.transforms.DropHeaders"
-            ),
-            "transforms.DropCamelHeaders.headers": ",".join(
-                [
-                    "CamelHeader.CamelFileNameConsumed",
-                    "CamelHeader.CamelFileNameOnly",
-                    "CamelHeader.CamelFileRelativePath",
-                    "CamelHeader.CamelFileLength",
-                    "CamelHeader.CamelFileParent",
-                    "CamelHeader.CamelFileAbsolute",
-                ]
-            ),
-            # ── Header injection ─────────────────────────────────────────────
-            "transforms.InjectNamespaceHeader.type": (
-                "org.apache.kafka.connect.transforms.InsertHeader"
-            ),
-            "transforms.InjectNamespaceHeader.header": "artemis.namespace",
-            "transforms.InjectNamespaceHeader.value.literal": namespace,
-            "transforms.InjectNamespaceIdHeader.type": (
-                "org.apache.kafka.connect.transforms.InsertHeader"
-            ),
-            "transforms.InjectNamespaceIdHeader.header": "artemis.namespace_id",
-            "transforms.InjectNamespaceIdHeader.value.literal": namespace_id,
-            "transforms.InjectOrgNameHeader.type": (
-                "org.apache.kafka.connect.transforms.InsertHeader"
-            ),
-            "transforms.InjectOrgNameHeader.header": "artemis.org_name",
-            "transforms.InjectOrgNameHeader.value.literal": org_name,
-            "transforms.InjectGroupIdHeader.type": (
-                "org.apache.kafka.connect.transforms.InsertHeader"
-            ),
-            "transforms.InjectGroupIdHeader.header": "artemis.group_id",
-            "transforms.InjectGroupIdHeader.value.literal": connector_id,
-            "transforms.InjectOwnerIdHeader.type": (
-                "org.apache.kafka.connect.transforms.InsertHeader"
-            ),
-            "transforms.InjectOwnerIdHeader.header": "artemis.owner_id",
-            "transforms.InjectOwnerIdHeader.value.literal": owner_id,
-        },
+    config: dict[str, Any] = {
+        "connector.class": (
+            "org.apache.camel.kafkaconnector.file.CamelFileSourceConnector"
+        ),
+        "tasks.max": "1",
+        "camel.source.path.directoryName": watch_path,
+        "camel.source.endpoint.recursive": str(recursive).lower(),
+        # noop=true: filesystem is RO-mounted; never move or delete files.
+        "camel.source.endpoint.noop": "true",
+        "camel.source.endpoint.idempotent": "true",
+        # Use the consumed file path as the raw key material.
+        "camel.source.camelMessageHeaderKey": "CamelFileNameConsumed",
+        "topics": _FILESYSTEM_TOPIC,
+        # Key: plain string (namespace); Value: raw file content string.
+        "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+        "key.converter.schemas.enable": "false",
+        "value.converter": "org.apache.kafka.connect.storage.StringConverter",
+        "value.converter.schemas.enable": "false",
+        "transforms": ",".join(
+            [
+                # Key transforms
+                "HoistKeyField",
+                "InsertNamespaceKey",
+                "RemovePathKey",
+                "ExtractNamespaceKeyField",
+                "DropCamelHeaders",
+                # Header-only metadata injection
+                "InjectNamespaceHeader",
+                "InjectNamespaceIdHeader",
+                "InjectOrgNameHeader",
+                "InjectGroupIdHeader",
+                "InjectOwnerIdHeader",
+            ]
+        ),
+        # ── Key transforms ───────────────────────────────────────────────
+        # 1. file-path string → {"path": <path>}
+        "transforms.HoistKeyField.type": (
+            "org.apache.kafka.connect.transforms.HoistField$Key"
+        ),
+        "transforms.HoistKeyField.field": "path",
+        # 2. {"path": <path>} → {"path": <path>, "namespace": <ns>}
+        "transforms.InsertNamespaceKey.type": (
+            "org.apache.kafka.connect.transforms.InsertField$Key"
+        ),
+        "transforms.InsertNamespaceKey.static.field": "namespace",
+        "transforms.InsertNamespaceKey.static.value": namespace,
+        # 3. {"path": <path>, "namespace": <ns>} → {"namespace": <ns>}
+        "transforms.RemovePathKey.type": (
+            "org.apache.kafka.connect.transforms.ReplaceField$Key"
+        ),
+        "transforms.RemovePathKey.exclude": "path",
+        # 4. {"namespace": <ns>} → <ns> (plain string)
+        "transforms.ExtractNamespaceKeyField.type": (
+            "org.apache.kafka.connect.transforms.ExtractField$Key"
+        ),
+        "transforms.ExtractNamespaceKeyField.field": "namespace",
+        # 5. Drop redundant Camel.* headers
+        "transforms.DropCamelHeaders.type": (
+            "org.apache.kafka.connect.transforms.DropHeaders"
+        ),
+        "transforms.DropCamelHeaders.headers": ",".join(
+            [
+                "CamelHeader.CamelFileNameConsumed",
+                "CamelHeader.CamelFileNameOnly",
+                "CamelHeader.CamelFileRelativePath",
+                "CamelHeader.CamelFileLength",
+                "CamelHeader.CamelFileParent",
+                "CamelHeader.CamelFileAbsolute",
+            ]
+        ),
+        # ── Header injection ─────────────────────────────────────────────
+        "transforms.InjectNamespaceHeader.type": (
+            "org.apache.kafka.connect.transforms.InsertHeader"
+        ),
+        "transforms.InjectNamespaceHeader.header": "artemis.namespace",
+        "transforms.InjectNamespaceHeader.value.literal": namespace,
+        "transforms.InjectNamespaceIdHeader.type": (
+            "org.apache.kafka.connect.transforms.InsertHeader"
+        ),
+        "transforms.InjectNamespaceIdHeader.header": "artemis.namespace_id",
+        "transforms.InjectNamespaceIdHeader.value.literal": namespace_id,
+        "transforms.InjectOrgNameHeader.type": (
+            "org.apache.kafka.connect.transforms.InsertHeader"
+        ),
+        "transforms.InjectOrgNameHeader.header": "artemis.org_name",
+        "transforms.InjectOrgNameHeader.value.literal": org_name,
+        "transforms.InjectGroupIdHeader.type": (
+            "org.apache.kafka.connect.transforms.InsertHeader"
+        ),
+        "transforms.InjectGroupIdHeader.header": "artemis.group_id",
+        "transforms.InjectGroupIdHeader.value.literal": connector_id,
+        "transforms.InjectOwnerIdHeader.type": (
+            "org.apache.kafka.connect.transforms.InsertHeader"
+        ),
+        "transforms.InjectOwnerIdHeader.header": "artemis.owner_id",
+        "transforms.InjectOwnerIdHeader.value.literal": owner_id,
     }
+    if file_extensions:
+        config["camel.source.endpoint.includeExt"] = ",".join(file_extensions)
+    return {"name": connector_name, "config": config}

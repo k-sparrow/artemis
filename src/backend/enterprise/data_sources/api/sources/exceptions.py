@@ -23,6 +23,12 @@ class StorageServiceError(Exception):
         super().__init__(detail)
 
 
+class InvalidFileExtensionsError(Exception):
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(detail)
+
+
 def _data_source_not_found_handler(
     req: Request, exc: DataSourceNotFoundError
 ) -> JSONResponse:
@@ -50,8 +56,18 @@ def _storage_service_error_handler(
     )
 
 
+def _invalid_file_extensions_handler(
+    req: Request, exc: InvalidFileExtensionsError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        content={"detail": exc.detail},
+    )
+
+
 EXCEPTION_HANDLER_MAP = {
     DataSourceNotFoundError: _data_source_not_found_handler,
     KafkaConnectError: _kafka_connect_error_handler,
     StorageServiceError: _storage_service_error_handler,
+    InvalidFileExtensionsError: _invalid_file_extensions_handler,
 }

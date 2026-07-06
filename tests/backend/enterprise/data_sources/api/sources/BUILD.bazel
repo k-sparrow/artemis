@@ -36,6 +36,7 @@ py_test(
         "//src/backend/enterprise/data_sources/api/sources:exceptions",
         "//src/backend/enterprise/data_sources/api/sources:schemas",
         "//src/backend/enterprise/data_sources/api/sources:service",
+        "//src/backend/enterprise/data_sources/api/sources:templates",
         "//src/lib/backend/db:session",
         requirement("fastapi"),
         requirement("httpx"),

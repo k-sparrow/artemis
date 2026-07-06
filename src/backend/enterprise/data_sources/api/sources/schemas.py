@@ -6,7 +6,12 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from src.backend.enterprise.data_sources.api.sources.templates import (
+    ALLOWED_FILE_EXTENSIONS,
+    DEFAULT_FILE_EXTENSIONS,
+)
 
 
 class DataSourceCreate(BaseModel):
@@ -20,6 +25,24 @@ class DataSourceCreate(BaseModel):
         default=True,
         description="Watch subdirectories recursively.",
     )
+    file_extensions: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_FILE_EXTENSIONS),
+        description=(
+            "File extensions to ingest (case-insensitive, without the leading "
+            f"dot). Allowed values: {', '.join(ALLOWED_FILE_EXTENSIONS)}."
+        ),
+    )
+
+    @field_validator("file_extensions")
+    @classmethod
+    def _normalize_file_extensions(cls, value: list[str]) -> list[str]:
+        """Lowercase and strip leading dots; allow-list is enforced in service.py.
+
+        Bad extensions are a client request error, not a malformed payload, so
+        they're reported as 400 (see UnsupportedFileExtensionError) rather than
+        FastAPI's default 422 for schema violations.
+        """
+        return [ext.lower().lstrip(".") for ext in value]
 
 
 class ConnectorTaskStatus(BaseModel):

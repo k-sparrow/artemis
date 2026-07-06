@@ -6,9 +6,21 @@ from textual import on, work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Button, Checkbox, Footer, Header, Input, Label
+from textual.widgets import (
+    Button,
+    Checkbox,
+    Footer,
+    Header,
+    Input,
+    Label,
+    SelectionList,
+)
 
 from src.backend.enterprise.data_sources.api.sources.schemas import DataSourceCreate
+from src.backend.enterprise.data_sources.api.sources.templates import (
+    ALLOWED_FILE_EXTENSIONS,
+    DEFAULT_FILE_EXTENSIONS,
+)
 from src.cli.client import DataSourcesClient
 
 
@@ -25,6 +37,15 @@ class CreateScreen(Screen):
         self._org_name = org_name
 
     def compose(self) -> ComposeResult:
+        extensions_list = SelectionList(
+            *[
+                (ext, ext, ext in DEFAULT_FILE_EXTENSIONS)
+                for ext in ALLOWED_FILE_EXTENSIONS
+            ],
+            id="inp-file-extensions",
+        )
+        extensions_list.styles.max_height = 4
+
         yield Header(show_clock=True)
         yield Vertical(
             Label("Create Data Source", id="form-title"),
@@ -37,6 +58,8 @@ class CreateScreen(Screen):
             Label("Path"),
             Input(placeholder="/data/documents", id="inp-path"),
             Checkbox("Recursive", value=True, id="inp-recursive"),
+            Label("File Types"),
+            extensions_list,
             Horizontal(
                 Button("Create", id="btn-submit", variant="success"),
                 Button("Cancel", id="btn-cancel"),
@@ -68,9 +91,13 @@ class CreateScreen(Screen):
         org = self._org_name
         path = self.query_one("#inp-path", Input).value.strip()
         recursive = self.query_one("#inp-recursive", Checkbox).value
+        file_extensions = self.query_one("#inp-file-extensions", SelectionList).selected
 
         if not all([name, namespace, org, path]):
             self.notify("All fields are required.", severity="warning")
+            return
+        if not file_extensions:
+            self.notify("Select at least one file type.", severity="warning")
             return
 
         payload = DataSourceCreate(
@@ -79,6 +106,7 @@ class CreateScreen(Screen):
             org_name=org,
             path=path,
             recursive=recursive,
+            file_extensions=file_extensions,
         )
 
         try:

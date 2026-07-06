@@ -19,6 +19,9 @@ from src.backend.enterprise.data_sources.api.dependencies import (
 )
 from src.backend.enterprise.data_sources.api.main import app
 from src.backend.enterprise.data_sources.api.models import Base
+from src.backend.enterprise.data_sources.api.sources.templates import (
+    DEFAULT_FILE_EXTENSIONS,
+)
 from src.lib.backend.db.session import get_session
 from tests.backend.enterprise.data_sources.api.sources.conftest import _NAMESPACE_ID
 
@@ -63,7 +66,10 @@ class TestCreateDataSource:
         assert body["source_type"] == "filesystem"
         assert body["connector_name"].startswith("artemis-")
         assert body["org_name"] == "acme-corp"
-        assert body["config"] == {"path": "/data/acme"}
+        assert body["config"] == {
+            "path": "/data/acme",
+            "file_extensions": list(DEFAULT_FILE_EXTENSIONS),
+        }
 
     def test_kafka_status_included(self, client: TestClient) -> None:
         body = client.post("/data-sources", json=_CREATE_PAYLOAD).json()
@@ -88,10 +94,34 @@ class TestCreateDataSource:
         assert config["name"].startswith("artemis-")
         assert config["config"]["camel.source.path.directoryName"] == "/data/acme"
         assert config["config"]["camel.source.endpoint.noop"] == "true"
+        assert config["config"]["camel.source.endpoint.includeExt"] == ",".join(
+            DEFAULT_FILE_EXTENSIONS
+        )
         ns_id_literal = config["config"][
             "transforms.InjectNamespaceIdHeader.value.literal"
         ]
         assert ns_id_literal == str(_NAMESPACE_ID)
+
+    def test_custom_file_extensions_passed_to_connector(
+        self, client: TestClient, mock_kafka_connect: MagicMock
+    ) -> None:
+        payload = {**_CREATE_PAYLOAD, "file_extensions": ["PDF", ".Docx"]}
+        resp = client.post("/data-sources", json=payload)
+        assert resp.status_code == status.HTTP_201_CREATED
+        assert resp.json()["config"]["file_extensions"] == ["pdf", "docx"]
+        config = mock_kafka_connect.create_connector.call_args[0][0]
+        assert config["config"]["camel.source.endpoint.includeExt"] == "pdf,docx"
+
+    def test_unsupported_file_extension_returns_400(self, client: TestClient) -> None:
+        payload = {**_CREATE_PAYLOAD, "file_extensions": ["pdf", "mp4"]}
+        resp = client.post("/data-sources", json=payload)
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert "mp4" in resp.json()["detail"]
+
+    def test_empty_file_extensions_returns_400(self, client: TestClient) -> None:
+        payload = {**_CREATE_PAYLOAD, "file_extensions": []}
+        resp = client.post("/data-sources", json=payload)
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
 
     def test_namespace_409_resolves_existing(
         self, mock_kafka_connect: MagicMock, db_factory

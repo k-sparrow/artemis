@@ -101,6 +101,11 @@ CreateScreen {
     color: $artemis-text;
 }
 
+#inp-file-extensions {
+    max-height: 4;
+    border: solid $artemis-border;
+}
+
 Input {
     background: $artemis-panel;
     border: solid $artemis-border;

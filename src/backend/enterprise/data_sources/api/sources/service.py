@@ -35,6 +35,7 @@ from src.backend.enterprise.data_sources.api.config import settings
 from src.backend.enterprise.data_sources.api.models import ARTEMIS_NS, DataSource
 from src.backend.enterprise.data_sources.api.sources.exceptions import (
     DataSourceNotFoundError,
+    InvalidFileExtensionsError,
     KafkaConnectError,
     StorageServiceError,
 )
@@ -44,6 +45,8 @@ from src.backend.enterprise.data_sources.api.sources.schemas import (
     KafkaConnectStatus,
 )
 from src.backend.enterprise.data_sources.api.sources.templates import (
+    ALLOWED_FILE_EXTENSIONS,
+    DEFAULT_FILE_EXTENSIONS,
     render_filesystem_connector,
 )
 
@@ -61,6 +64,17 @@ def _make_kafka_client():
 
 def _connector_name(record_id: uuid.UUID) -> str:
     return f"artemis-{record_id}"
+
+
+def _validate_file_extensions(file_extensions: list[str]) -> None:
+    if not file_extensions:
+        raise InvalidFileExtensionsError("file_extensions must not be empty.")
+    invalid = sorted(set(file_extensions) - set(ALLOWED_FILE_EXTENSIONS))
+    if invalid:
+        raise InvalidFileExtensionsError(
+            f"Unsupported file extension(s): {', '.join(invalid)}. "
+            f"Allowed: {', '.join(ALLOWED_FILE_EXTENSIONS)}."
+        )
 
 
 def _parse_kafka_status(raw: dict[str, Any]) -> KafkaConnectStatus:
@@ -196,10 +210,13 @@ async def create_data_source(
     namespace: str,
     org_name: str,
     recursive: bool = True,
+    file_extensions: list[str] | None = None,
 ) -> DataSourceResponse:
     owner_id = uuid.uuid5(ARTEMIS_NS, org_name)
     record_id = uuid.uuid4()
     connector_name = _connector_name(record_id)
+    file_extensions = list(file_extensions or DEFAULT_FILE_EXTENSIONS)
+    _validate_file_extensions(file_extensions)
 
     namespace_id = await _upsert_namespace(http, namespace, owner_id)
 
@@ -212,6 +229,7 @@ async def create_data_source(
         org_name=org_name,
         owner_id=str(owner_id),
         recursive=recursive,
+        file_extensions=file_extensions,
     )
 
     kc = _make_kafka_client()
@@ -228,7 +246,7 @@ async def create_data_source(
         namespace_id=namespace_id,
         namespace_name=namespace,
         org_name=org_name,
-        config={"path": path},
+        config={"path": path, "file_extensions": file_extensions},
     )
     session.add(row)
     await session.commit()
