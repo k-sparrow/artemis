@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from textual import on, work
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import (
     Button,
@@ -47,7 +47,7 @@ class CreateScreen(Screen):
         extensions_list.styles.max_height = 4
 
         yield Header(show_clock=True)
-        yield Vertical(
+        yield VerticalScroll(
             Label("Create Data Source", id="form-title"),
             Label("Display Name"),
             Input(placeholder="e.g. docs-watcher", id="inp-name"),

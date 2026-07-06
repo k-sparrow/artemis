@@ -215,7 +215,8 @@ async def create_data_source(
     owner_id = uuid.uuid5(ARTEMIS_NS, org_name)
     record_id = uuid.uuid4()
     connector_name = _connector_name(record_id)
-    file_extensions = list(file_extensions or DEFAULT_FILE_EXTENSIONS)
+    if file_extensions is None:
+        file_extensions = list(DEFAULT_FILE_EXTENSIONS)
     _validate_file_extensions(file_extensions)
 
     namespace_id = await _upsert_namespace(http, namespace, owner_id)

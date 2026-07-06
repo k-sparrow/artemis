@@ -162,7 +162,9 @@ class TestFullPipeline:
         wiremock_host_url: str,
     ) -> None:
         """A file >1 MB is delivered intact through the full pipeline."""
-        fname = f"large-{uuid.uuid4().hex[:8]}.bin"
+        # .txt (not .bin): the connector's includeExt allow-list rejects
+        # unrecognized extensions, so this must use one on the list.
+        fname = f"large-{uuid.uuid4().hex[:8]}.txt"
         (session_watch_dir / fname).write_bytes(b"x" * (2 * 1024 * 1024))  # 2 MB
 
         calls = _wait_for_storage_upload(wiremock_host_url, count=1, timeout=120)
