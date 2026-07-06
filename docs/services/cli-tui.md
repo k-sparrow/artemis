@@ -26,7 +26,7 @@ artemis [--gateway-url URL]   # Overrides ARTEMIS_GATEWAY_URL
 |---------|-------------|
 | `artemis sources list [--json]` | List data sources; `--json` outputs raw JSON |
 | `artemis sources get <id>` | Show a single data source |
-| `artemis sources create --name --type --path [--recursive]` | Register a new filesystem data source |
+| `artemis sources create --name --type --path [--recursive]` | Register a new filesystem data source. Ingests the default file-extension set (see [CreateScreen](#createscreen)) — no flag to override it yet; use the TUI for a custom selection. |
 | `artemis sources pause <id>` | Pause the Kafka connector |
 | `artemis sources resume <id>` | Resume the Kafka connector |
 | `artemis sources restart <id>` | Restart the Kafka connector |
@@ -72,9 +72,18 @@ Launched via `artemis tui` or bare `artemis`.
 ### CreateScreen
 
 - Form for creating a new filesystem data source
-- Fields: name, type (currently only `filesystem`), watch_path, recursive checkbox
+- Fields: name, type (currently only `filesystem`), watch_path, recursive checkbox,
+  file types (multi-select checkbox list)
+- **File types**: restricts which files the Kafka Connect FileSource connector picks up,
+  via `camel.source.endpoint.includeExt` — anything not selected (e.g. video files) is
+  filtered out by Camel before it ever reaches Kafka. Defaults to a document-only subset
+  (`pdf`, `docx`, `pptx`, `xlsx`, `html`, `htm`, `md`, `txt`, `csv`); image formats
+  (`png`, `jpg`, `jpeg`, `tiff`, `bmp`) are selectable but off by default. The allow-list
+  itself lives in `ALLOWED_FILE_EXTENSIONS` /
+  `DEFAULT_FILE_EXTENSIONS` in `src/backend/enterprise/data_sources/api/sources/templates.py`.
 - Submit calls `artemis sources create` logic
-- Validation error messages inline
+- Validation error messages inline; an empty selection or an extension outside the
+  allow-list is rejected by the data-sources service with a 400
 
 ### ConfirmScreen
 
