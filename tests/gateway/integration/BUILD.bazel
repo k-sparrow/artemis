@@ -8,9 +8,9 @@ py_library(
     srcs = ["conftest.py"],
     deps = [
         "//tests/lib:polling",
-        requirement("httpx"),
         requirement("pytest"),
         requirement("testcontainers"),
+        requirement("wiremock"),
     ],
 )
 
@@ -25,5 +25,21 @@ py_test(
         ":conftest",
         requirement("httpx"),
         requirement("pytest"),
+    ],
+)
+
+py_test(
+    name = "test_mcp_client",
+    srcs = ["test_mcp_client.py"],
+    tags = [
+        "integration",
+        "local",
+    ],
+    deps = [
+        ":conftest",
+        requirement("mcp"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+        requirement("testcontainers"),
     ],
 )

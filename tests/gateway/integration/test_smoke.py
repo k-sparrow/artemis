@@ -26,7 +26,7 @@ class TestRouteRegistration:
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["value"]["uri"] == "/mcp/*"
+        assert body["value"]["uris"] == ["/mcp", "/mcp/*"]
 
     @pytest.mark.integration
     def test_data_sources_route_registered(self, admin_url: str) -> None:
@@ -57,6 +57,7 @@ class TestRouteRegistration:
 
 
 _REGISTERED_PATHS = [
+    pytest.param("/mcp", id="mcp-bare"),
     pytest.param("/mcp/anything", id="mcp"),
     pytest.param("/data-sources/anything", id="data-sources"),
     pytest.param("/namespaces/some-id", id="storage"),

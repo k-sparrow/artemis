@@ -17,12 +17,18 @@ import tempfile
 import pytest
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
+from wiremock.testing.testcontainer import WireMockContainer
+
 from tests.lib.polling import wait_for_http
 
 _ETCD_IMAGE = "gcr.io/etcd-development/etcd:v3.5.18"
 _APISIX_IMAGE = "apache/apisix:3.16.0-debian"
 _INIT_IMAGE = "artemis/apisix-init:latest"
+_MCP_IMAGE = "artemis/backend-mcp:dev"
+_MCP_PORT = 11000
 _ADMIN_KEY = "artemis-apisix-admin-key"
+_NS_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+
 
 _APISIX_CONFIG = """\
 deployment:
@@ -158,3 +164,89 @@ def admin_url(apisix: DockerContainer, apisix_init: None) -> str:
     host = apisix.get_container_host_ip()
     port = apisix.get_exposed_port(9180)
     return f"http://{host}:{port}"
+
+
+# ---------------------------------------------------------------------------
+# backend-mcp — real service behind the gateway's "mcp" route, with its own
+# storage/indexing dependencies stubbed by WireMock. Lets tests drive an
+# actual MCP client session through APISIX end to end.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def mcp_wiremock(
+    request: pytest.FixtureRequest,
+    docker_network: Network,
+) -> WireMockContainer:
+    wm = WireMockContainer(secure=False)
+    wm.with_network(docker_network)
+    wm.with_network_aliases("mcp-wiremock")
+    wm.with_mapping(
+        "health-liveness.json",
+        {
+            "request": {"method": "GET", "url": "/health/liveness"},
+            "response": {"status": 200},
+        },
+    )
+    wm.with_mapping(
+        "health-readiness.json",
+        {
+            "request": {"method": "GET", "url": "/health/readiness"},
+            "response": {"status": 200},
+        },
+    )
+    wm.with_mapping(
+        "get-namespaces.json",
+        {
+            "request": {"method": "GET", "url": "/namespaces"},
+            "response": {
+                "status": 200,
+                "headers": {"Content-Type": "application/json"},
+                "jsonBody": [
+                    {
+                        "id": _NS_ID,
+                        "name": "smoke-ns",
+                        "type": "SHARED",
+                        "owner_id": "00000000-0000-0000-0000-000000000000",
+                    }
+                ],
+            },
+        },
+    )
+    wm.start()
+    request.addfinalizer(wm.stop)
+    return wm
+
+
+@pytest.fixture(scope="session")
+def mcp_container(
+    request: pytest.FixtureRequest,
+    docker_network: Network,
+    mcp_wiremock: WireMockContainer,
+) -> DockerContainer:
+    """The backend-mcp service, aliased ``backend-mcp`` on ``docker_network`` —
+    the exact hostname the apisix-init route registers as its upstream node,
+    so the gateway's proxied requests resolve to this container."""
+    wiremock_url = f"http://mcp-wiremock:{mcp_wiremock.http_server_port}"
+    container = (
+        DockerContainer(_MCP_IMAGE)
+        .with_network(docker_network)
+        .with_network_aliases("backend-mcp")
+        .with_env("STORAGE_SERVICE_URL", wiremock_url)
+        .with_env("INDEXING_SERVICE_URL", wiremock_url)
+        .with_env("ENABLE_UPLOAD", "false")
+        .with_exposed_ports(_MCP_PORT)
+    )
+    container.start()
+    request.addfinalizer(container.stop)
+
+    host = container.get_container_host_ip()
+    port = container.get_exposed_port(_MCP_PORT)
+    try:
+        wait_for_http(f"http://{host}:{port}/health/liveness", timeout=90)
+    except TimeoutError:
+        stdout, stderr = container.get_logs()
+        print("\n=== backend-mcp stdout ===\n", stdout.decode(errors="replace"))
+        print("\n=== backend-mcp stderr ===\n", stderr.decode(errors="replace"))
+        raise
+    return container

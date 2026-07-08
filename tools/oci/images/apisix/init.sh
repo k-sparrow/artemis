@@ -21,7 +21,7 @@ curl -sf -X PUT "${ADMIN_URL}/apisix/admin/routes/mcp" \
   -H "X-API-KEY: ${ADMIN_KEY}" \
   -H "Content-Type: application/json" \
   -d '{
-    "uri": "/mcp/*",
+    "uris": ["/mcp", "/mcp/*"],
     "upstream": {
       "type": "roundrobin",
       "nodes": {"backend-mcp:11000": 1}

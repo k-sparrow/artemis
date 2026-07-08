@@ -41,9 +41,9 @@ class TestMcpRouteRegistration:
         _find_put(received_requests, "/apisix/admin/routes/mcp")
 
     @pytest.mark.integration
-    def test_uri(self, received_requests: list[dict]) -> None:
+    def test_uris(self, received_requests: list[dict]) -> None:
         req = _find_put(received_requests, "/apisix/admin/routes/mcp")
-        assert json.loads(req["body"])["uri"] == "/mcp/*"
+        assert json.loads(req["body"])["uris"] == ["/mcp", "/mcp/*"]
 
     @pytest.mark.integration
     def test_upstream_type(self, received_requests: list[dict]) -> None:
