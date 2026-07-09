@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pybreaker
 import pytest
-from celery.exceptions import Retry  # noqa: F401 — used for "processing" Retry assertions
+from celery.exceptions import MaxRetriesExceededError, Retry  # noqa: F401
 
 from src.backend.controller.worker.tasks import (
     DocumentChunkingError,
@@ -237,3 +237,74 @@ class TestPollResolve:
         assert (
             mock_status.call_args[1]["task_id"] == _RESOLVE_RESULT["chunking_task_id"]
         )
+
+
+# ---------------------------------------------------------------------------
+# Retry-budget exhaustion (max_retries=1440)
+#
+# ``.run()`` bypasses Celery's request machinery entirely: Task.retry() checks
+# ``request.called_directly`` first and, when true (which is what ``.run()``
+# produces), always raises Retry regardless of max_retries — it never reaches
+# the max_retries comparison. ``.apply(retries=N)`` goes through the real eager
+# apply path (``called_directly=False``) and seeds ``request.retries``, so it's
+# the only way to actually exercise exhaustion here. The exception raised on
+# exhaustion depends on how the task called ``self.retry()``:
+#   - no ``exc=`` (the "processing" branches) -> Celery raises
+#     MaxRetriesExceededError itself.
+#   - ``exc=exc`` (the 5xx / circuit-breaker branches) -> Celery re-raises the
+#     *original* exception instead, per Task.retry()'s
+#     ``if exc: raise_with_context(exc)`` — MaxRetriesExceededError is only the
+#     default when no cause exception was supplied.
+# Both are legitimate "give up" outcomes; FailureRecordingTask's on_failure
+# hook must handle either.
+# ---------------------------------------------------------------------------
+
+
+class TestPollParseRetryExhaustion:
+    def test_processing_exhausts_max_retries(self) -> None:
+        """The 1440th 'processing' retry attempt must give up, not retry forever."""
+        mock = MagicMock(return_value=_make_status("processing"))
+        with patch("src.backend.controller.worker.tasks.call_parse_status", mock):
+            with pytest.raises(MaxRetriesExceededError):
+                poll_parse.apply(args=(_SUBMIT_RESULT,), kwargs=_KWARGS, retries=1440)
+
+    def test_5xx_exhausts_max_retries(self) -> None:
+        """Transient 5xx errors share the same 1440-retry budget as in-progress polls."""
+        mock = MagicMock(side_effect=_make_http_error(503))
+        with patch("src.backend.controller.worker.tasks.call_parse_status", mock):
+            with pytest.raises(httpx.HTTPStatusError) as exc_info:
+                poll_parse.apply(args=(_SUBMIT_RESULT,), kwargs=_KWARGS, retries=1440)
+        assert exc_info.value.response.status_code == 503
+
+
+class TestPollResolveRetryExhaustion:
+    _SOURCE = TestPollResolve._SOURCE
+
+    def test_processing_exhausts_max_retries(self) -> None:
+        """The 1440th 'processing' chunk-status retry must give up, not retry forever."""
+        mock = MagicMock(return_value=_make_status("processing"))
+        with patch("src.backend.controller.worker.tasks.call_parse_status", mock):
+            with pytest.raises(MaxRetriesExceededError):
+                poll_resolve.apply(
+                    args=(_RESOLVE_RESULT,),
+                    kwargs={**_KWARGS, "source": self._SOURCE},
+                    retries=1440,
+                )
+
+    def test_finalize_5xx_exhausts_max_retries(self) -> None:
+        """5xx from finalize (after a successful chunk status) shares the same budget."""
+        mock_status = MagicMock(return_value=_make_status("success"))
+        mock_finalize = MagicMock(side_effect=_make_http_error(503))
+        with (
+            patch("src.backend.controller.worker.tasks.call_parse_status", mock_status),
+            patch(
+                "src.backend.controller.worker.tasks.call_parse_finalize", mock_finalize
+            ),
+        ):
+            with pytest.raises(httpx.HTTPStatusError) as exc_info:
+                poll_resolve.apply(
+                    args=(_RESOLVE_RESULT,),
+                    kwargs={**_KWARGS, "source": self._SOURCE},
+                    retries=1440,
+                )
+        assert exc_info.value.response.status_code == 503

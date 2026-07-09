@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import logging
 import random
+import time
 import uuid
 
 import httpx
@@ -35,7 +36,7 @@ import httpx
 from celery import Task, chain, states
 from celery.signals import worker_ready
 from celery.utils.log import get_task_logger
-from opentelemetry import trace
+from opentelemetry import metrics, trace
 
 import pybreaker
 
@@ -75,6 +76,22 @@ logger = get_task_logger(__name__)
 logger.setLevel(logging.DEBUG)
 
 _tracer = trace.get_tracer("controller.worker")
+
+# poll_parse/poll_resolve retry up to 1440 times (~24h ceiling); each retry is a
+# brand-new task execution, so per-attempt visibility goes to Prometheus counters/
+# histograms (cheap, aggregating) rather than spans (one stored record per attempt
+# would mean up to 1440 spans per document in the trace backend).
+_meter = metrics.get_meter("controller.worker")
+_poll_attempts = _meter.create_counter(
+    "parse.poll.attempts",
+    unit="1",
+    description="Poll attempts against docling-serve status, per poll task and outcome",
+)
+_poll_elapsed = _meter.create_histogram(
+    "parse.poll.elapsed_seconds",
+    unit="s",
+    description="Wall-clock time from submit to terminal poll outcome",
+)
 
 # Single shared result-backend instance — avoids recreating the SQLAlchemy
 # engine for every task invocation.
@@ -377,13 +394,15 @@ def submit_parse(
 
         source_ref = BlobRef(bucket=s3.bucket, key=s3.object)
         try:
-            return call_parse_submit(
+            result = call_parse_submit(
                 source_ref=source_ref,
                 source=source,
                 parsing_url=settings.PARSING_SERVICE_URL,
                 timeout=settings.PARSING_SUBMIT_TIMEOUT,
                 logger=logger,
             )
+            result["submitted_at"] = time.time()
+            return result
         except pybreaker.CircuitBreakerError as exc:
             jitter = random.uniform(0, parsing_breaker.reset_timeout * 0.25)
             raise self.retry(
@@ -408,6 +427,7 @@ def submit_parse(
     bind=True,
     backend=_db_backend,
     result_serializer="json",
+    acks_late=True,
 )
 def poll_parse(
     self,
@@ -423,8 +443,19 @@ def poll_parse(
     Retries with a 60–75 s countdown while status is "processing".
     Transient HTTP errors (5xx, breaker) draw from the same max_retries=1440
     budget as in-progress polls (24 h ceiling at 60 s intervals).
+
+    acks_late=True: between retries this task is "parked" in the worker's
+    in-memory timer waiting for its ETA, not sitting acked-and-forgotten in
+    RabbitMQ. Without acks_late, a worker crash during that park window drops
+    the message permanently (RabbitMQ already considers it delivered). With
+    acks_late, the crash leaves it unacked and RabbitMQ redelivers it.
     """
     parsing_task_id = submit_result["parsing_task_id"]
+
+    def _elapsed() -> float | None:
+        submitted_at = submit_result.get("submitted_at")
+        return time.time() - submitted_at if submitted_at is not None else None
+
     try:
         status = call_parse_status(
             task_id=parsing_task_id,
@@ -433,6 +464,9 @@ def poll_parse(
             logger=logger,
         )
     except pybreaker.CircuitBreakerError as exc:
+        _poll_attempts.add(
+            1, {"poll_task": "poll_parse", "outcome": "circuit_breaker_retry"}
+        )
         jitter = random.uniform(0, parsing_breaker.reset_timeout * 0.25)
         raise self.retry(
             exc=exc,
@@ -441,24 +475,43 @@ def poll_parse(
         )
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code >= 500:
+            _poll_attempts.add(1, {"poll_task": "poll_parse", "outcome": "5xx_retry"})
             backoff = min(120, 2**self.request.retries)
             raise self.retry(
                 exc=exc,
                 countdown=backoff + random.uniform(0, backoff),
                 max_retries=1440,
             )
+        _poll_attempts.add(1, {"poll_task": "poll_parse", "outcome": "4xx_error"})
+        elapsed = _elapsed()
+        if elapsed is not None:
+            _poll_elapsed.record(
+                elapsed, {"poll_task": "poll_parse", "outcome": "4xx_error"}
+            )
         raise
 
     if status["status"] == "processing":
+        _poll_attempts.add(1, {"poll_task": "poll_parse", "outcome": "processing"})
         raise self.retry(
             countdown=60 + random.uniform(0, 15),
             max_retries=1440,
         )
     if status["status"] == "failure":
+        _poll_attempts.add(1, {"poll_task": "poll_parse", "outcome": "failure"})
+        elapsed = _elapsed()
+        if elapsed is not None:
+            _poll_elapsed.record(
+                elapsed, {"poll_task": "poll_parse", "outcome": "failure"}
+            )
         raise DocumentConversionError(
             f"docling-serve conversion failed for task {parsing_task_id}: "
             f"{status.get('error_message', 'no detail')}"
         )
+
+    _poll_attempts.add(1, {"poll_task": "poll_parse", "outcome": "success"})
+    elapsed = _elapsed()
+    if elapsed is not None:
+        _poll_elapsed.record(elapsed, {"poll_task": "poll_parse", "outcome": "success"})
     return submit_result
 
 
@@ -468,6 +521,7 @@ def poll_parse(
     bind=True,
     backend=_db_backend,
     result_serializer="json",
+    acks_late=True,
 )
 def resolve_parse(
     self,
@@ -484,12 +538,14 @@ def resolve_parse(
     chunking_task_id immediately.
     """
     try:
-        return call_parse_resolve(
+        result = call_parse_resolve(
             submit_result=submit_result,
             parsing_url=settings.PARSING_SERVICE_URL,
             timeout=settings.PARSING_RESOLVE_TIMEOUT,
             logger=logger,
         )
+        result["resolved_at"] = time.time()
+        return result
     except pybreaker.CircuitBreakerError as exc:
         jitter = random.uniform(0, parsing_breaker.reset_timeout * 0.25)
         raise self.retry(
@@ -514,6 +570,7 @@ def resolve_parse(
     bind=True,
     backend=_db_backend,
     result_serializer="json",
+    acks_late=True,
 )
 def poll_resolve(
     self,
@@ -533,6 +590,10 @@ def poll_resolve(
     chunking_task_id = resolve_result["chunking_task_id"]
     obj_id = resolve_result["obj_id"]
 
+    def _elapsed() -> float | None:
+        resolved_at = resolve_result.get("resolved_at")
+        return time.time() - resolved_at if resolved_at is not None else None
+
     try:
         status = call_parse_status(
             task_id=chunking_task_id,
@@ -541,6 +602,9 @@ def poll_resolve(
             logger=logger,
         )
     except pybreaker.CircuitBreakerError as exc:
+        _poll_attempts.add(
+            1, {"poll_task": "poll_resolve", "outcome": "circuit_breaker_retry"}
+        )
         jitter = random.uniform(0, parsing_breaker.reset_timeout * 0.25)
         raise self.retry(
             exc=exc,
@@ -549,20 +613,34 @@ def poll_resolve(
         )
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code >= 500:
+            _poll_attempts.add(1, {"poll_task": "poll_resolve", "outcome": "5xx_retry"})
             backoff = min(120, 2**self.request.retries)
             raise self.retry(
                 exc=exc,
                 countdown=backoff + random.uniform(0, backoff),
                 max_retries=1440,
             )
+        _poll_attempts.add(1, {"poll_task": "poll_resolve", "outcome": "4xx_error"})
+        elapsed = _elapsed()
+        if elapsed is not None:
+            _poll_elapsed.record(
+                elapsed, {"poll_task": "poll_resolve", "outcome": "4xx_error"}
+            )
         raise
 
     if status["status"] == "processing":
+        _poll_attempts.add(1, {"poll_task": "poll_resolve", "outcome": "processing"})
         raise self.retry(
             countdown=60 + random.uniform(0, 15),
             max_retries=1440,
         )
     if status["status"] == "failure":
+        _poll_attempts.add(1, {"poll_task": "poll_resolve", "outcome": "failure"})
+        elapsed = _elapsed()
+        if elapsed is not None:
+            _poll_elapsed.record(
+                elapsed, {"poll_task": "poll_resolve", "outcome": "failure"}
+            )
         raise DocumentChunkingError(
             f"docling-serve chunking failed for task {chunking_task_id}: "
             f"{status.get('error_message', 'no detail')}"
@@ -577,6 +655,10 @@ def poll_resolve(
             logger=logger,
         )
     except pybreaker.CircuitBreakerError as exc:
+        _poll_attempts.add(
+            1,
+            {"poll_task": "poll_resolve", "outcome": "finalize_circuit_breaker_retry"},
+        )
         jitter = random.uniform(0, parsing_breaker.reset_timeout * 0.25)
         raise self.retry(
             exc=exc,
@@ -585,14 +667,31 @@ def poll_resolve(
         )
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code >= 500:
+            _poll_attempts.add(
+                1, {"poll_task": "poll_resolve", "outcome": "finalize_5xx_retry"}
+            )
             backoff = min(120, 2**self.request.retries)
             raise self.retry(
                 exc=exc,
                 countdown=backoff + random.uniform(0, backoff),
                 max_retries=1440,
             )
+        _poll_attempts.add(
+            1, {"poll_task": "poll_resolve", "outcome": "finalize_4xx_error"}
+        )
+        elapsed = _elapsed()
+        if elapsed is not None:
+            _poll_elapsed.record(
+                elapsed, {"poll_task": "poll_resolve", "outcome": "finalize_4xx_error"}
+            )
         raise
 
+    _poll_attempts.add(1, {"poll_task": "poll_resolve", "outcome": "success"})
+    elapsed = _elapsed()
+    if elapsed is not None:
+        _poll_elapsed.record(
+            elapsed, {"poll_task": "poll_resolve", "outcome": "success"}
+        )
     logger.info("poll_resolve=finalized obj_id=%s key=%s", obj_id, blob_ref.get("key"))
     return blob_ref
 

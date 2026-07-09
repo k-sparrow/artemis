@@ -10,9 +10,12 @@ import os
 import httpx  # noqa: F401
 import sqlalchemy  # noqa: F401
 
-from opentelemetry import trace
+from opentelemetry import metrics, trace
+from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -43,9 +46,20 @@ def setup_telemetry(service_name: str, *instrumentors: BaseInstrumentor) -> None
     )
     trace.set_tracer_provider(provider)
 
+    meter_provider = MeterProvider(
+        resource=resource,
+        metric_readers=[
+            PeriodicExportingMetricReader(
+                OTLPMetricExporter(endpoint=endpoint, insecure=True)
+            )
+        ],
+    )
+    metrics.set_meter_provider(meter_provider)
+
     for instrumentor in instrumentors:
         instrumentor.instrument()
 
     _log.info(
-        "OTel tracing configured", extra={"service": service_name, "endpoint": endpoint}
+        "OTel tracing + metrics configured",
+        extra={"service": service_name, "endpoint": endpoint},
     )
