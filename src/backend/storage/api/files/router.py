@@ -20,6 +20,7 @@ from src.backend.storage.api.dependencies import (
 from src.backend.storage.api.files import service
 from src.backend.storage.api.files.schemas import (
     GroupDeleteResponse,
+    GroupSummary,
     IngestedObjectResponse,
     IngestionTaskResponse,
     ObjectUploadResponse,
@@ -177,6 +178,39 @@ async def list_objects_endpoint(
         order=order,
     )
     return [IngestedObjectResponse.model_validate(o) for o in objects]
+
+
+@router.get("/{namespace_id}/objects/{obj_id}", response_model=IngestedObjectResponse)
+async def get_object_endpoint(
+    namespace_id: uuid.UUID,
+    obj_id: uuid.UUID,
+    session: db_session_dependency,
+    caller_owner_id: caller_owner_id_dependency,
+) -> IngestedObjectResponse:
+    obj = await service.get_object(
+        session=session,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+        obj_id=obj_id,
+    )
+    return IngestedObjectResponse.model_validate(obj)
+
+
+@router.get("/{namespace_id}/groups", response_model=list[GroupSummary])
+async def list_groups_endpoint(
+    namespace_id: uuid.UUID,
+    session: db_session_dependency,
+    caller_owner_id: caller_owner_id_dependency,
+) -> list[GroupSummary]:
+    groups = await service.list_groups(
+        session=session,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+    )
+    return [
+        GroupSummary(group_id=row.group_id, object_count=row.object_count)
+        for row in groups
+    ]
 
 
 @router.get("/{namespace_id}/tasks", response_model=list[IngestionTaskResponse])

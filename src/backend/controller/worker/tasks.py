@@ -462,7 +462,7 @@ def delete_document(
         jitter = random.uniform(0, indexing_breaker.reset_timeout * 0.25)
         raise self.retry(
             exc=exc,
-            countdown=indexing_breaker.reset_timeout + jitter,
+            countdown=indexing_breaker.reset_timeout + 5 + jitter,
             max_retries=20,
         )
     except httpx.HTTPStatusError as exc:
@@ -523,7 +523,7 @@ def delete_namespace(self, namespace_id: uuid.UUID) -> dict:
         jitter = random.uniform(0, indexing_breaker.reset_timeout * 0.25)
         raise self.retry(
             exc=exc,
-            countdown=indexing_breaker.reset_timeout + jitter,
+            countdown=indexing_breaker.reset_timeout + 5 + jitter,
             max_retries=20,
         )
     except httpx.HTTPStatusError as exc:

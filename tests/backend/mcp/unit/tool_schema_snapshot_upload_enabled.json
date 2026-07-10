@@ -176,6 +176,12 @@
           "default": null,
           "description": "Optional document UUID to restrict search to chunks from a single file. Useful for focused Q&A over a specific document.",
           "title": "Doc Id"
+        },
+        "return_parents": {
+          "default": false,
+          "description": "If true, return the full parent page containing each matched chunk instead of the chunk itself \u2014 more context, fewer/coarser results (duplicate chunks from the same page collapse to one page). score is typically null in this mode since it's a chunk-level signal.",
+          "title": "Return Parents",
+          "type": "boolean"
         }
       },
       "required": [

@@ -404,6 +404,115 @@ class TestListFiles:
 
 
 # ---------------------------------------------------------------------------
+# GET /namespaces/{namespace_id}/objects/{obj_id}
+# ---------------------------------------------------------------------------
+
+
+class TestGetObject:
+    def test_happy_path_returns_object(self, client: TestClient) -> None:
+        file_obj = SimpleNamespace(**_ingested_file_row())
+        with patch(f"{_SERVICE}.get_object", new=AsyncMock(return_value=file_obj)):
+            response = client.get(
+                f"/namespaces/{NAMESPACE_ID}/objects/{FILE_ID}",
+                headers=_OWNER_HEADER,
+            )
+        assert response.status_code == 200
+        assert response.json()["source"] == "report.pdf"
+
+    def test_namespace_not_found_returns_404(self, client: TestClient) -> None:
+        with patch(
+            f"{_SERVICE}.get_object",
+            new=AsyncMock(side_effect=NamespaceNotFoundError()),
+        ):
+            response = client.get(
+                f"/namespaces/{NAMESPACE_ID}/objects/{FILE_ID}",
+                headers=_OWNER_HEADER,
+            )
+        assert response.status_code == 404
+
+    def test_access_denied_returns_403(self, client: TestClient) -> None:
+        with patch(
+            f"{_SERVICE}.get_object",
+            new=AsyncMock(side_effect=NamespaceAccessDeniedError()),
+        ):
+            response = client.get(
+                f"/namespaces/{NAMESPACE_ID}/objects/{FILE_ID}",
+                headers=_OWNER_HEADER,
+            )
+        assert response.status_code == 403
+
+    def test_file_not_found_returns_404(self, client: TestClient) -> None:
+        with patch(
+            f"{_SERVICE}.get_object",
+            new=AsyncMock(side_effect=IngestedFileNotFoundError()),
+        ):
+            response = client.get(
+                f"/namespaces/{NAMESPACE_ID}/objects/{FILE_ID}",
+                headers=_OWNER_HEADER,
+            )
+        assert response.status_code == 404
+
+    def test_invalid_obj_id_returns_422(self, client: TestClient) -> None:
+        response = client.get(
+            f"/namespaces/{NAMESPACE_ID}/objects/not-a-uuid",
+            headers=_OWNER_HEADER,
+        )
+        assert response.status_code == 422
+
+    def test_missing_owner_header_returns_401(self, client: TestClient) -> None:
+        response = client.get(f"/namespaces/{NAMESPACE_ID}/objects/{FILE_ID}")
+        assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# GET /namespaces/{namespace_id}/groups
+# ---------------------------------------------------------------------------
+
+
+class TestListGroups:
+    def test_returns_list(self, client: TestClient) -> None:
+        row = SimpleNamespace(group_id=GROUP_ID, object_count=3)
+        with patch(f"{_SERVICE}.list_groups", new=AsyncMock(return_value=[row])):
+            response = client.get(
+                f"/namespaces/{NAMESPACE_ID}/groups", headers=_OWNER_HEADER
+            )
+        assert response.status_code == 200
+        assert response.json() == [{"group_id": str(GROUP_ID), "object_count": 3}]
+
+    def test_empty_namespace_returns_empty_list(self, client: TestClient) -> None:
+        with patch(f"{_SERVICE}.list_groups", new=AsyncMock(return_value=[])):
+            response = client.get(
+                f"/namespaces/{NAMESPACE_ID}/groups", headers=_OWNER_HEADER
+            )
+        assert response.status_code == 200
+        assert response.json() == []
+
+    def test_namespace_not_found_returns_404(self, client: TestClient) -> None:
+        with patch(
+            f"{_SERVICE}.list_groups",
+            new=AsyncMock(side_effect=NamespaceNotFoundError()),
+        ):
+            response = client.get(
+                f"/namespaces/{NAMESPACE_ID}/groups", headers=_OWNER_HEADER
+            )
+        assert response.status_code == 404
+
+    def test_access_denied_returns_403(self, client: TestClient) -> None:
+        with patch(
+            f"{_SERVICE}.list_groups",
+            new=AsyncMock(side_effect=NamespaceAccessDeniedError()),
+        ):
+            response = client.get(
+                f"/namespaces/{NAMESPACE_ID}/groups", headers=_OWNER_HEADER
+            )
+        assert response.status_code == 403
+
+    def test_missing_owner_header_returns_401(self, client: TestClient) -> None:
+        response = client.get(f"/namespaces/{NAMESPACE_ID}/groups")
+        assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
 # GET /namespaces/{namespace_id}/tasks
 # ---------------------------------------------------------------------------
 

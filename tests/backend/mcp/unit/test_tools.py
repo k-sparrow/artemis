@@ -27,6 +27,7 @@ from src.backend.mcp.api.tools import (
     list_groups,
     list_namespaces,
     list_objects,
+    mcp,
     retrieve,
     upload_file,
 )
@@ -38,7 +39,26 @@ _OBJ_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 _GROUP_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 
 _NAMESPACE = {"id": _NS_ID, "name": "test-ns", "type": "PRIVATE"}
-_OBJECT = {"obj_id": _OBJ_ID, "filename": "doc.pdf", "content_type": "application/pdf"}
+# Full shape returned by the storage service (IngestedObjectResponse) — the
+# MCP tool is expected to trim this down (see _TRIMMED_OBJECT below).
+_OBJECT = {
+    "id": _OBJ_ID,
+    "namespace_id": _NS_ID,
+    "source": "doc.pdf",
+    "object_type": "file",
+    "content_type": "application/pdf",
+    "size_bytes": 1234,
+    "group_id": None,
+    "ingested_at": "2026-06-08T12:00:00Z",
+}
+_TRIMMED_OBJECT = {
+    "obj_id": _OBJ_ID,
+    "source": "doc.pdf",
+    "content_type": "application/pdf",
+    "size_bytes": 1234,
+    "group_id": None,
+    "ingested_at": "2026-06-08T12:00:00Z",
+}
 _CHUNKS = [
     {"page_content": "hello", "metadata": {"source": "doc.pdf", "score": 0.9}},
 ]
@@ -104,7 +124,7 @@ async def test_list_objects_no_filter():
         )
         result = await list_objects(namespace_id=_NS_ID, ctx=_ctx())
 
-    assert result == [_OBJECT]
+    assert result == [_TRIMMED_OBJECT]
 
 
 @pytest.mark.asyncio
@@ -132,7 +152,7 @@ async def test_get_object():
         )
         result = await get_object(namespace_id=_NS_ID, obj_id=_OBJ_ID, ctx=_ctx())
 
-    assert result == _OBJECT
+    assert result == _TRIMMED_OBJECT
 
 
 # ---------------------------------------------------------------------------
@@ -237,3 +257,55 @@ async def test_retrieve_with_filters():
     assert cfg["k"] == 3
     assert cfg["group_id"] == _GROUP_ID
     assert cfg["doc_id"] == _OBJ_ID
+
+
+@pytest.mark.asyncio
+async def test_retrieve_with_return_parents():
+    langserve_response = {"output": _CHUNKS}
+
+    with respx.mock(base_url=mcp_client.indexing_client.base_url) as mock:
+        route = mock.post("/retrieve/invoke").mock(
+            return_value=Response(200, json=langserve_response)
+        )
+        await retrieve(
+            namespace_id=_NS_ID,
+            query="test",
+            return_parents=True,
+            ctx=_ctx(),
+        )
+
+    sent_body = json.loads(route.calls[0].request.content)
+    cfg = sent_body["config"]["configurable"]
+    assert cfg["return_parents"] is True
+
+
+@pytest.mark.asyncio
+async def test_retrieve_without_return_parents_omits_key():
+    langserve_response = {"output": _CHUNKS}
+
+    with respx.mock(base_url=mcp_client.indexing_client.base_url) as mock:
+        route = mock.post("/retrieve/invoke").mock(
+            return_value=Response(200, json=langserve_response)
+        )
+        await retrieve(namespace_id=_NS_ID, query="test", ctx=_ctx())
+
+    sent_body = json.loads(route.calls[0].request.content)
+    cfg = sent_body["config"]["configurable"]
+    assert "return_parents" not in cfg
+
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_about_resource_registered_and_readable():
+    resources = await mcp.list_resources()
+    assert any(str(r.uri) == "artemis://about" for r in resources)
+
+    contents = await mcp.read_resource("artemis://about")
+    contents = list(contents)
+    assert len(contents) == 1
+    assert "Artemis" in contents[0].content
+    assert contents[0].mime_type == "text/markdown"

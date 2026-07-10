@@ -235,6 +235,43 @@ async def delete_group(
     )
 
 
+async def get_object(
+    session: AsyncSession,
+    namespace_id: uuid.UUID,
+    caller_owner_id: uuid.UUID,
+    obj_id: uuid.UUID,
+) -> IngestedObject:
+    await _fetch_namespace(
+        session=session,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+    )
+    return await _fetch_ingested_object(
+        session=session, namespace_id=namespace_id, obj_id=obj_id
+    )
+
+
+async def list_groups(
+    session: AsyncSession,
+    namespace_id: uuid.UUID,
+    caller_owner_id: uuid.UUID,
+) -> list[sa.Row]:
+    await _fetch_namespace(
+        session=session,
+        namespace_id=namespace_id,
+        caller_owner_id=caller_owner_id,
+    )
+    result = await session.execute(
+        sa.select(IngestedObject.group_id, sa.func.count().label("object_count"))
+        .where(
+            IngestedObject.namespace_id == namespace_id,
+            IngestedObject.group_id.is_not(None),
+        )
+        .group_by(IngestedObject.group_id)
+    )
+    return list(result.all())
+
+
 async def list_files(
     session: AsyncSession,
     namespace_id: uuid.UUID,
