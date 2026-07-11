@@ -20,10 +20,13 @@ import uuid
 import pytest
 from minio import Minio
 from testcontainers.core.container import DockerContainer
+from testcontainers.postgres import PostgresContainer
 
 from tests.backend.controller.worker.integration.conftest import (
     WireMockStub,
     upload_file,
+    wait_for_task,
+    wait_for_task_result,
     wait_until_minio_empty,
     wait_until_stub_called,
     wait_until_stub_called_n_times,
@@ -192,12 +195,45 @@ class TestFetchAndParseIndexChain:
         wait_until_stub_called(indexing_stub, timeout=60)
         wait_until_minio_empty(minio_client, "parsed-chunks", timeout=30)
 
-    # TODO: test that the MinIO intermediate object is PRESERVED when indexing fails.
-    #   - Push a 500 response to indexing_stub so the task fails after all retries.
-    #   - Assert the "parsed-chunks" object is still present in MinIO.
-    #   - This validates the dead-letter replay design contract.
-    #   - Note: with autoretry_for + retry_backoff this test will be very slow unless
-    #     max_retries is patched to 0 for the test worker.
+    def test_intermediate_minio_object_preserved_on_indexing_failure(
+        self,
+        dispatch_app,
+        parsing_stub: WireMockStub,
+        indexing_stub: WireMockStub,
+        s3_source_bucket: str,
+        minio_client: Minio,
+        namespace_id: uuid.UUID,
+        worker_container: DockerContainer,
+        postgres_container: PostgresContainer,
+    ) -> None:
+        """A permanent indexing failure must leave the artifact in place for
+        dead-letter replay — cleanup only runs after a successful index.
+
+        Uses a 4xx response rather than a persistent 5xx: tasks.index only
+        schedules a retry for >=500 (see its httpx.HTTPStatusError branch), so a
+        4xx reaches FAILURE on the very first indexing call. That exercises the
+        exact same code path this test cares about (the exception propagates
+        before the cleanup delete line ever runs) without waiting out the real
+        20-retry/exponential-backoff budget, which the worker runs as an actual
+        out-of-process container here (no way to patch self.retry from the test).
+        """
+        indexing_stub.push_response(422, {"detail": "unprocessable"})
+
+        upload_file(minio_client, s3_source_bucket, "test.md")
+        outer_result = _dispatch_ingest(dispatch_app, s3_source_bucket, namespace_id)
+
+        # ingest's own return value ({"chain_id": ...}) carries index's task_id —
+        # chain(...).apply_async().id is the AsyncResult of the chain's LAST task.
+        chain_result = wait_for_task_result(
+            outer_result.id, postgres_container, timeout=30
+        )
+        index_task_id = chain_result["chain_id"]
+
+        status = wait_for_task(index_task_id, postgres_container, timeout=30)
+        assert status == "FAILURE"
+
+        objects = list(minio_client.list_objects("parsed-chunks", recursive=True))
+        assert len(objects) == 1
 
 
 @pytest.mark.integration

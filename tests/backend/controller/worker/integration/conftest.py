@@ -616,6 +616,12 @@ def wait_until_minio_empty(minio_client: Minio, bucket: str, timeout: int = 30) 
     poll_until(_empty, timeout=timeout, interval=0.5)
 
 
+def _pg_connstr(postgres_container: PostgresContainer) -> str:
+    host = postgres_container.get_container_host_ip()
+    port = postgres_container.get_exposed_port(5432)
+    return f"host={host} port={port} dbname=celery_results user=celery password=celery"
+
+
 def wait_for_task(
     task_id: str,
     postgres_container: PostgresContainer,
@@ -625,11 +631,7 @@ def wait_for_task(
 
     Returns the final status string. Raises TimeoutError if not done within *timeout*s.
     """
-    host = postgres_container.get_container_host_ip()
-    port = postgres_container.get_exposed_port(5432)
-    connstr = (
-        f"host={host} port={port} dbname=celery_results user=celery password=celery"
-    )
+    connstr = _pg_connstr(postgres_container)
 
     def _terminal_status() -> str | None:
         with psycopg.connect(connstr) as conn:
@@ -642,3 +644,29 @@ def wait_for_task(
         return None
 
     return poll_until(_terminal_status, timeout=timeout, interval=1.0)
+
+
+def wait_for_task_result(
+    task_id: str,
+    postgres_container: PostgresContainer,
+    timeout: int = 60,
+) -> dict:
+    """Poll until *task_id* reaches SUCCESS; return its parsed JSON result.
+
+    Used to read a dispatcher task's own return value (e.g. ``ingest``'s
+    ``{"chain_id": ...}``) — distinct from ``wait_for_task``, which only reports
+    the terminal status of a task whose result payload isn't needed.
+    """
+    connstr = _pg_connstr(postgres_container)
+
+    def _result() -> dict | None:
+        with psycopg.connect(connstr) as conn:
+            row = conn.execute(
+                "SELECT status, result FROM apollo_celery_taskmeta WHERE task_id = %s",
+                (task_id,),
+            ).fetchone()
+        if row and row[0] == "SUCCESS":
+            return json.loads(row[1])
+        return None
+
+    return poll_until(_result, timeout=timeout, interval=1.0)
