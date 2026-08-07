@@ -17,7 +17,7 @@ It accepts a file reference (claim-check), calls Docling Serve, and writes a str
 | `POST` | `/v1/parse` | Parse a document synchronously; returns artifact `BlobRef` | `200 BlobRef` |
 | `POST` | `/v1/parse/submit` | Submit a conversion job to Docling Serve; returns immediately | `200 SubmitResult` |
 | `GET`  | `/v1/parse/status/{task_id}` | Single non-blocking status check (conversion or chunk task) | `200 ParseStatus` |
-| `POST` | `/v1/parse/resolve` | Download conversion results, concatenate shards, submit chunk job | `200 ResolveResult` |
+| `POST` | `/v1/parse/resolve` | Download conversion result, submit chunk job | `200 ResolveResult` |
 | `POST` | `/v1/parse/finalize` | Fetch chunk result, build `ParseArtifact`, write to MinIO | `200 BlobRef` |
 | `GET`  | `/health` | Readiness probe (checks Docling reachability) | `200` or `503` |
 
@@ -32,11 +32,9 @@ The controller worker drives a scatter-gather pipeline across two long-running p
 Celery thread is blocked during conversion or chunking.
 
 ```
-submit_endpoint        → Docling Serve /v1/convert/file/async      (small docs)
-                       → Docling Serve /v1/convert/source/batch     (large PDFs)
+submit_endpoint        → Docling Serve /v1/convert/file/async
                               ↓ polling via status_endpoint
-resolve_endpoint       → download results from MinIO scratch
-                       → DoclingDocument.concatenate() (batch mode)
+resolve_endpoint       → download conversion result
                        → write replay cache
                        → Docling Serve /v1/chunk/hybrid/file/async
                               ↓ polling via status_endpoint
@@ -46,17 +44,25 @@ finalize_endpoint      → fetch chunk result
                        → return BlobRef
 ```
 
+Every document takes this same single-submission path regardless of size — there is no
+client-side splitting here. Docling Serve's Ray engine fans large PDFs out into page slices
+and converts them concurrently across Ray actors **server-side**; this service has no
+visibility into that and needs none (see [docs/infrastructure/docling.md](../infrastructure/docling.md)
+and TODOs.md Epic 21). A prior version of this service did its own client-side PDF sharding
+via a `/v1/convert/source/batch` S3 workflow — that path was retired outright once the Ray
+engine made it unnecessary, not kept as a fallback.
+
 ### Submit (`POST /v1/parse/submit`)
 
 Form fields identical to `POST /v1/parse`. Logic:
 
-1. Materialise document bytes (inline `file` or `source_ref` claim-check).
-2. If the document is a PDF larger than `DOCLING_SHARD_TRIGGER_PAGES` pages:
-   - Split into `DOCLING_SHARD_PAGE_LIMIT`-page shards via `pypdf`.
-   - Upload shards to `DOCLING_SCRATCH_BUCKET` at `{obj_id}/pages/shard-{n:04d}.pdf`.
-   - `POST /v1/convert/source/batch` (S3Source → S3Target) → `parsing_task_id`.
-   - Return `mode=batch`, `shard_count=N`, `scratch_prefix={obj_id}/`.
-3. Otherwise: `POST /v1/convert/file/async` → `parsing_task_id`. Return `mode=single`.
+1. Materialise document bytes: inline `file` bytes are read directly; `source_ref` claim-check
+   inputs are downloaded from MinIO into this service's memory, then forwarded the same way.
+   (An S3-direct handoff — letting Docling Serve fetch `source_ref` inputs itself via
+   `POST /v1/convert/source/async`, avoiding that download-then-forward round trip — was
+   prototyped and verified working, then deferred to a later session; see TODOs.md Epic 21.)
+2. `POST /v1/convert/file/async` → `parsing_task_id`.
+3. Return `{parsing_task_id, obj_id}`.
 
 ### Status (`GET /v1/parse/status/{task_id}`)
 
@@ -73,27 +79,25 @@ Docling Serve's `ConversionStatus` is normalised as follows:
 
 | Docling Serve status | `ParseStatus.status` | Notes |
 |---|---|---|
-| `pending`, `started` | `processing` | No distinction exposed — LOCAL engine provides no progress |
+| `pending`, `started` | `processing` | No further distinction exposed |
 | `success` | `success` | |
 | `failure` | `failure` | `error_message` = server error string |
-| `partial_success` | `failure` | `error_message = "partial_success: <server_error>"` — some shards failed; incomplete S3 results; treat as failure and retry whole batch |
+| `partial_success` | `failure` | `error_message = "partial_success: <server_error>"` — some page slices failed server-side (Ray engine fan-out); treat as failure and retry the whole document rather than proceed with a truncated result |
 | `skipped` | `failure` | `error_message = "skipped: <server_error>"` — unexpected in this flow |
 
-> **Note on progress:** The Docling Serve LOCAL engine does not populate `task_meta`
-> (`num_processed`/`num_total`). Both fields are always `null`. Progress tracking requires
-> the RAY orchestrator backend.
+> **Note on progress:** `task_meta.num_processed` / `num_total` population under the Ray
+> engine's page-slice fan-out isn't a documented Docling Serve contract. This service reads
+> them opportunistically (never requires them) — don't build logic that depends on them being
+> populated.
 
 ### Resolve (`POST /v1/parse/resolve`)
 
-Request body: `{parsing_task_id, mode, obj_id, scratch_prefix, shard_count}`.
+Request body: `{parsing_task_id, obj_id}`.
 
-1. **Single mode:** `GET /v1/result/{parsing_task_id}` → `DoclingDocument`.
-2. **Batch mode:** list objects under `{obj_id}/results/` recursively, filter `.json`,
-   sort by basename, download each, call `DoclingDocument.concatenate(shards)`.
-3. Write replay cache: `REPLAY_CACHE_BUCKET/replay/{obj_id}.json`.
-4. `POST /v1/chunk/hybrid/file/async` with `doc.json` → `chunking_task_id`.
-5. Delete scratch objects under `{obj_id}/` (batch mode only, best-effort).
-6. Return `{chunking_task_id, obj_id}`.
+1. `GET /v1/result/{parsing_task_id}` → `DoclingDocument`.
+2. Write replay cache: `REPLAY_CACHE_BUCKET/replay/{obj_id}.json`.
+3. `POST /v1/chunk/hybrid/file/async` with `doc.json` → `chunking_task_id`.
+4. Return `{chunking_task_id, obj_id}`.
 
 ### Finalize (`POST /v1/parse/finalize`)
 
@@ -167,9 +171,6 @@ This bucket is private to the parsing service; no other service reads from it.
 | `S3_SECRET_KEY` | *(required)* | |
 | `PARSED_ARTIFACTS_BUCKET` | `parsed-chunks` | |
 | `REPLAY_CACHE_BUCKET` | `docling-replay` | |
-| `DOCLING_SCRATCH_BUCKET` | `docling-scratch` | Shard staging + batch results |
-| `DOCLING_SHARD_PAGE_LIMIT` | `400` | Pages per shard |
-| `DOCLING_SHARD_TRIGGER_PAGES` | `400` | Shard only if PDF exceeds this |
 | `DOCLING_STATUS_TIMEOUT` | `30.0` | Seconds, for status proxy call |
 | `DOCLING_RESOLVE_TIMEOUT` | `120.0` | Seconds, for resolve (downloads + chunk submit) |
 | `DOCLING_FINALIZE_TIMEOUT` | `60.0` | Seconds, for finalize (chunk fetch + artifact write) |

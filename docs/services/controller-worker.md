@@ -84,10 +84,11 @@ Dispatched by the storage service when a namespace is soft-deleted.
 
 ### `submit_parse`
 
-Fetches source bytes from MinIO and calls `POST /v1/parse/submit` on the parsing service.
-For large PDFs the parsing service splits them into shards and submits a batch conversion
-to Docling Serve; for smaller documents it submits a single async conversion. Returns
-`SubmitResult {parsing_task_id, mode, obj_id, scratch_prefix, shard_count}`.
+Fetches source bytes from MinIO and calls `POST /v1/parse/submit` on the parsing service,
+which submits a single async conversion to Docling Serve regardless of document size — large
+PDFs are fanned out into page slices and converted concurrently server-side by Docling
+Serve's Ray engine (see TODOs.md Epic 21), not by any client-side splitting. Returns
+`SubmitResult {parsing_task_id, obj_id}`.
 
 ### `poll_parse`
 
@@ -99,11 +100,9 @@ On `"success"` passes `SubmitResult` through unchanged to `resolve_parse`.
 
 ### `resolve_parse`
 
-Calls `POST /v1/parse/resolve`. The parsing service downloads the conversion results from
-the MinIO scratch bucket (batch mode: recursive listing, sort-by-basename, concatenate
-shards; single mode: direct `/v1/result` fetch), writes the replay cache, submits the
-chunk job to Docling Serve, and cleans up the scratch prefix. Returns
-`ResolveResult {chunking_task_id, obj_id}`.
+Calls `POST /v1/parse/resolve`. The parsing service downloads the conversion result
+(`GET /v1/result/{parsing_task_id}`), writes the replay cache, and submits the chunk job to
+Docling Serve. Returns `ResolveResult {chunking_task_id, obj_id}`.
 
 ### `poll_resolve`
 
@@ -148,9 +147,9 @@ without making a network request. State transitions are logged at WARNING level 
 ## acks_late and GPU Serialisation
 
 `tasks.submit_parse` is decorated with `acks_late=True`. The RabbitMQ message is not
-acknowledged until `submit_parse` completes — if the worker crashes before the batch
-submission lands, the message is redelivered. The remaining poll and resolve tasks do not
-need `acks_late` because the Celery result backend tracks retry state.
+acknowledged until `submit_parse` completes — if the worker crashes before the submission
+lands, the message is redelivered. The remaining poll and resolve tasks do not need
+`acks_late` because the Celery result backend tracks retry state.
 
 ---
 
@@ -212,7 +211,7 @@ result backend that writes to `apollo_celery_taskmeta` (shared PostgreSQL) with
 | `PARSING_SERVICE_URL` | `http://backend-parsing:10001` | |
 | `INGESTION_SERVICE_URL` | `http://backend-indexing:10000` | |
 | `HTTPX_TIMEOUT` | `600` | For indexing/delete calls only; parse calls use per-endpoint timeouts |
-| `PARSING_SUBMIT_TIMEOUT` | `120.0` | S3 shard uploads + HTTP POST |
+| `PARSING_SUBMIT_TIMEOUT` | `120.0` | Source download/forward + HTTP POST |
 | `PARSING_STATUS_TIMEOUT` | `30.0` | Single status GET |
 | `PARSING_RESOLVE_TIMEOUT` | `120.0` | S3 downloads + concatenate + chunk submit |
 | `PARSING_FINALIZE_TIMEOUT` | `60.0` | Chunk result fetch + artifact write |

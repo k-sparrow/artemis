@@ -52,20 +52,24 @@ and writes final task results (success or structured failure) to PostgreSQL via 
 result backend. Holds circuit breakers for both downstream services.
 
 **Parsing Service** — FastAPI service that converts a raw document into a structured parse
-artifact via an async scatter-gather pipeline. Accepts a `BlobRef` (claim-check); for large
-PDFs splits the document into shards, submits a batch conversion to
-[Docling Serve](https://github.com/docling-project/docling-serve), polls until complete,
-concatenates shard results, submits a chunk job, and writes the `ParseArtifact` and a
-lossless replay cache to MinIO. Returns only the artifact's `BlobRef`.
+artifact via an async submit/poll/resolve/finalize pipeline. Accepts a `BlobRef` (claim-check),
+submits a single async conversion to
+[Docling Serve](https://github.com/docling-project/docling-serve) regardless of document size
+— large PDFs are fanned out into page slices and converted concurrently server-side by
+Docling Serve's Ray engine (see TODOs.md Epic 21), not by this service — polls until complete,
+submits a chunk job, and writes the `ParseArtifact` and a lossless replay cache to MinIO.
+Returns only the artifact's `BlobRef`.
 
 **Indexing Service** — FastAPI service (`POST /ingest`) that embeds and stores a parse
 artifact. Accepts a `BlobRef` to the artifact; reads it from MinIO, embeds each chunk
 via TEI, writes vectors to Qdrant, and caches parent-page markdown back to MinIO.
 Deduplicates via LangChain RecordManager keyed by `obj_id`.
 
-**[Docling Serve](https://github.com/docling-project/docling-serve)** — GPU-backed
-document conversion service. Called by the parsing service to extract structured chunks
-and full-page markdown from PDFs and other document formats.
+**[Docling Serve](https://github.com/docling-project/docling-serve)** — document conversion
+service, GPU-accelerated in dev. Called by the parsing service to extract structured chunks
+and full-page markdown from PDFs and other document formats. Ray-backed in dev/test compose
+(server-side page-slice fan-out for large PDFs, CPU-only in test — see TODOs.md Epic 21);
+release compose still runs the plain local engine.
 
 **[TEI (Text Embeddings Inference)](https://github.com/huggingface/text-embeddings-inference)** — embeds each chunk into a dense vector using the same model used at query time, ensuring chunk and query vectors live in the same space.
 
@@ -121,7 +125,7 @@ sequenceDiagram
 
     note over CW,PS: Sub-chain — artemis.ingestion.parse queue
     CW->>PS: POST /v1/parse/submit
-    PS-->>CW: SubmitResult {parsing_task_id, mode}
+    PS-->>CW: SubmitResult {parsing_task_id}
     loop poll until success
         CW->>PS: GET /v1/parse/status/{parsing_task_id}
         PS-->>CW: ParseStatus {processing|success|failure}
@@ -155,25 +159,17 @@ sequenceDiagram
     CW->>PS: POST /v1/parse/submit {source_ref: BlobRef}
     PS->>S3: read input file
     S3-->>PS: raw bytes
-    alt large PDF (> shard trigger)
-        PS->>PS: split into N shards (pypdf)
-        PS->>S3: write N shard PDFs to docling-scratch/{obj_id}/pages/
-        PS->>Docling: POST /v1/convert/source/batch (S3Source → S3Target)
-    else small doc
-        PS->>Docling: POST /v1/convert/file/async
-    end
+    note over PS,Docling: Same single-submission path regardless of document size —<br/>large PDFs are fanned into page slices and converted<br/>concurrently server-side by Docling Serve's Ray engine (Epic 21)
+    PS->>Docling: POST /v1/convert/file/async
     Docling-->>PS: task_id
-    PS-->>CW: SubmitResult {parsing_task_id, mode}
+    PS-->>CW: SubmitResult {parsing_task_id}
 
     note over CW,PS: polling omitted for brevity
 
     CW->>PS: POST /v1/parse/resolve
-    PS->>S3: list docling-scratch/{obj_id}/results/ (recursive)
-    PS->>S3: download N result JSONs
-    PS->>PS: DoclingDocument.concatenate(shards)
+    PS->>Docling: GET /v1/result/{parsing_task_id}
     PS->>S3: write replay/{obj_id}.json
     PS->>Docling: POST /v1/chunk/hybrid/file/async
-    PS->>S3: delete scratch/{obj_id}/ (best-effort)
     PS-->>CW: ResolveResult {chunking_task_id}
 
     note over CW,PS: polling omitted for brevity

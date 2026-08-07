@@ -1,12 +1,19 @@
 # Docling Serve
 
-**Version:** ghcr.io/docling-project/docling-serve-cu128:v1.24.0  
-**Role:** GPU-accelerated document parsing. Converts PDFs, DOCX, HTML, and other formats
-into structured output: page-delimited Markdown and semantic chunks with content type
-labels (TEXT, TABLE, SECTION_HEADER, etc.).
+**Version:** ghcr.io/docling-project/docling-serve-cu128:v1.29.0  
+**Role:** Document parsing. Converts PDFs, DOCX, HTML, and other formats into structured
+output: page-delimited Markdown and semantic chunks with content type labels (TEXT, TABLE,
+SECTION_HEADER, etc.). GPU-accelerated in dev; the Ray engine (below) runs CPU-only in
+`test` compose without any loss of correctness, just slower.
 
 **Compose profile:** `ai`  
 **Port:** 5001 (internal only, not exposed to host)
+
+**Engine:** Ray-backed in `dev` and `test` compose (`DOCLING_SERVE_ENG_KIND=ray`) — server-side
+PDF page-slice fan-out across a small Ray cluster (`ray-head` + `ray-worker`, GCS backed by
+`redis`, unrelated to Celery's RabbitMQ broker). Still the plain local sequential engine in
+`release` compose, pending a large-PDF memory-bounding proof before promotion — see TODOs.md
+Epic 21 for the full cluster topology and rollout status.
 
 ---
 
@@ -43,40 +50,22 @@ Returns `{"task_id": "<uuid>"}` immediately. Poll
 `GET /v1/status/poll/{task_id}?wait=0` until `task_status` is terminal, then fetch
 the result with `GET /v1/result/{task_id}`.
 
-### Batch conversion (large PDFs — S3Source → S3Target)
+### Large PDFs — server-side page-slice fan-out (Ray engine)
 
-Used when a PDF exceeds `DOCLING_SHARD_TRIGGER_PAGES` pages. The parsing service
-pre-splits the PDF into shards, uploads them to the `docling-scratch` MinIO bucket, then
-submits a batch job:
+Every document — regardless of size — goes through the exact same `/v1/convert/file/async`
+call above. There is no separate large-PDF code path on the client side any more (a prior
+version of this doc described one: client-side PDF sharding + a `/v1/convert/source/batch`
+S3 workflow. That was retired outright once the Ray engine made it unnecessary — see
+TODOs.md Epic 21).
 
-```
-POST /v1/convert/source/batch
-Content-Type: application/json
-
-{
-  "options": {"to_formats": ["json"]},
-  "sources": [{"kind": "s3", "endpoint": "...", "bucket": "docling-scratch", "key_prefix": "{obj_id}/pages/"}],
-  "target":  {"kind": "s3", "endpoint": "...", "bucket": "docling-scratch", "key_prefix": "{obj_id}/results/"}
-}
-```
-
-Returns `{"task_id": "<uuid>"}` immediately. Docling Serve lists all objects under
-`key_prefix` and converts each in sequence (LOCAL engine) or in parallel (RAY engine).
-
-#### S3Target hash path behaviour
-
-`GET /v1/result/{task_id}` for a batch job returns **counts only** — no file paths and no
-presigned URLs. The actual result JSONs are written to the scratch bucket, but
-`docling_jobkit` (Docling Serve's internal job library) appends a 12-char SHA-256 hash of
-each source URI between `dst_prefix` and the shard filename:
-
-```
-{dst_prefix}{sha256(source_uri)[:12]}/{shard_basename}.json
-```
-
-There is no API knob to disable this. The parsing service absorbs it by listing
-`{obj_id}/results/` **recursively** and sorting results by basename — the hash directory
-level is transparent to the caller.
+When `DOCLING_SERVE_ENG_KIND=ray` (dev + test compose), Docling Serve itself splits large PDFs
+into page slices and converts them concurrently across Ray actors on `ray-worker`, entirely
+transparent to callers — one `task_id`, one poll loop, one result, same as a small document.
+Concurrency and slice size are tuned via `DOCLING_SERVE_ENG_RAY_MAX_PAGE_SLICE_SIZE` and the
+`DOCLING_SERVE_ENG_RAY_MAX_CONCURRENT_TASKS` / `MAX_ONGOING_REQUESTS_PER_REPLICA` settings —
+see the `docling-serve` service block in `tools/docker/docker-compose.tmpl.yaml` for current
+values. `release` compose still runs the plain local engine (sequential, no fan-out) — see
+TODOs.md Epic 21 §21.7 for the promotion gate.
 
 ### Hybrid chunking
 
@@ -102,15 +91,15 @@ All task types share the same status model:
 | `started` | Worker has claimed the task; conversion may or may not have begun |
 | `success` | Terminal: conversion completed successfully |
 | `failure` | Terminal: conversion failed |
-| `partial_success` | Terminal: some documents in the batch succeeded, some failed |
+| `partial_success` | Terminal: some page slices failed under the Ray engine's server-side fan-out |
 | `skipped` | Terminal: document(s) skipped |
 
-The LOCAL engine (default) does not populate `task_meta.num_processed` / `task_meta.num_total`.
-Progress tracking is only available with the RAY orchestrator backend.
+`task_meta.num_processed` / `num_total` population under the Ray engine's page-slice fan-out
+isn't a documented contract — the parsing service reads them opportunistically and never
+requires them to be set. The local engine does not populate them at all.
 
-The LOCAL engine status transitions: `pending` → `started` → `success` | `failure`.
-`started` is set synchronously when the worker dequeues the task, before the conversion
-thread is spawned.
+Status transitions: `pending` → `started` → `success` | `failure` (or `partial_success` /
+`skipped`). `started` is set synchronously when the task is dequeued, before conversion begins.
 
 ---
 
@@ -123,16 +112,17 @@ thread is spawned.
 
 ## CUDA Version
 
-The image `docling-serve-cu128:v1.24.0` requires CUDA 12.8. If your GPU does not support
-CUDA 12.8, use a compatible image version or run Docling Serve on CPU (significantly
-slower, not recommended for production).
+The image `docling-serve-cu128:v1.29.0` requires CUDA 12.8. If your GPU does not support
+CUDA 12.8, use a compatible image version — or run without a GPU at all, which now works
+regardless of engine (the Ray engine's actual conversion work runs fine CPU-only, just
+slower; this is how `test` compose runs it).
 
 ---
 
 ## Server-side timeout
 
 `DOCLING_SERVE_MAX_SYNC_WAIT` is set to `12` seconds in compose (the default). The
-parsing service uses only `/async` and `/batch` endpoints — it never calls the synchronous
+parsing service only ever calls `/async` endpoints — it never calls the synchronous
 `/v1/convert/file` endpoint, so the sync timeout is irrelevant for production traffic.
 
 ---
