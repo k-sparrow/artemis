@@ -68,6 +68,12 @@ class DoclingServeRayCluster:
         )
         return f"http://{host}:{port}"
 
+    def get_logs(self, service: str) -> tuple[str, str]:
+        """Return (stdout, stderr) for one of the cluster's services (redis,
+        ray-head, ray-worker, docling-serve) — for dumping on test failure,
+        since the stack is gone by the time a caller sees an assertion error."""
+        return self._compose.get_logs(service)
+
     def __enter__(self) -> Self:
         return self.start()
 

@@ -676,7 +676,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      # <<< dev-only
+        # <<< dev-only
     restart: always
     networks:
       - default

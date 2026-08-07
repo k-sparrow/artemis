@@ -67,7 +67,14 @@ services:
     environment:
       NVIDIA_VISIBLE_DEVICES: "all"
       DOCLING_SERVE_ENABLE_UI: "true"
-      DOCLING_SERVE_ARTIFACTS_PATH: /mnt/models
+      # Deliberately NOT setting DOCLING_SERVE_ARTIFACTS_PATH here, unlike the
+      # dev/release compose: that setting tells docling-serve "assume every
+      # model is already present, never auto-download" — correct in dev/release
+      # because docling-model-downloader pre-seeds the volume first, but this
+      # standalone fixture has no such init step. Pointing ARTIFACTS_PATH at an
+      # empty volume caused a hard FileNotFoundError on RapidOCR model init
+      # (deterministic, not flaky — see TODOs.md Epic 21 §21.5). Leaving this
+      # unset lets docling auto-download on demand instead.
       # Engine selection
       DOCLING_SERVE_ENG_KIND: "ray"
       # Cluster connection

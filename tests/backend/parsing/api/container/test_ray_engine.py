@@ -35,6 +35,24 @@ from tests.lib.testcontainers.docling import DoclingServeRayCluster
 _BAZEL_WORKSPACE = "_main"
 _FIXTURE_DIR_REL = Path("tools/fixtures/docs")
 _FIXTURE_PAGE_COUNT = 50
+_CLUSTER_SERVICES = ("redis", "ray-head", "ray-worker", "docling-serve")
+
+
+def _dump_cluster_logs(cluster: DoclingServeRayCluster) -> None:
+    """Print every service's logs — the compose stack is torn down as soon as
+    the test exits, so this is the only chance to see why docling-serve
+    reported a failure (its own error messages are often as opaque as
+    "Internal processing error", with the real cause only in its own logs)."""
+    for service in _CLUSTER_SERVICES:
+        try:
+            stdout, stderr = cluster.get_logs(service)
+        except Exception as exc:
+            print(f"\n=== {service}: could not retrieve logs: {exc} ===")
+            continue
+        if stdout.strip() or stderr.strip():
+            print(
+                f"\n=== {service} stdout ===\n{stdout}\n=== {service} stderr ===\n{stderr}"
+            )
 
 
 def _fixture(name: str) -> Path:
@@ -86,23 +104,27 @@ async def test_ray_engine_converts_multi_slice_pdf(
     client = DoclingParseClient(ray_cluster.get_url())
     pdf_bytes = _fixture("sample-50-page-pdf-a4-size.pdf").read_bytes()
 
-    task_id = await client.submit_file(
-        content=pdf_bytes,
-        filename="sample-50-page.pdf",
-        content_type="application/pdf",
-        timeout=120.0,
-    )
+    try:
+        task_id = await client.submit_file(
+            content=pdf_bytes,
+            filename="sample-50-page.pdf",
+            content_type="application/pdf",
+            timeout=120.0,
+        )
 
-    status = await _poll_status(client, task_id, timeout=600.0)
-    # docling-serve's task_meta population under Ray page-slice fan-out for a
-    # single-file submission isn't a documented contract — assert on it only
-    # when present, never require it, so this doesn't become a flaky test tied
-    # to an internal detail.
-    if status.num_total is not None:
-        assert status.num_total >= 1
+        status = await _poll_status(client, task_id, timeout=600.0)
+        # docling-serve's task_meta population under Ray page-slice fan-out for a
+        # single-file submission isn't a documented contract — assert on it only
+        # when present, never require it, so this doesn't become a flaky test tied
+        # to an internal detail.
+        if status.num_total is not None:
+            assert status.num_total >= 1
 
-    dl_doc = await client.fetch_conversion_result(task_id, timeout=60.0)
-    assert len(dl_doc.pages) == _FIXTURE_PAGE_COUNT, (
-        f"expected all {_FIXTURE_PAGE_COUNT} pages reassembled from Ray fan-out, "
-        f"got {len(dl_doc.pages)}"
-    )
+        dl_doc = await client.fetch_conversion_result(task_id, timeout=60.0)
+        assert len(dl_doc.pages) == _FIXTURE_PAGE_COUNT, (
+            f"expected all {_FIXTURE_PAGE_COUNT} pages reassembled from Ray fan-out, "
+            f"got {len(dl_doc.pages)}"
+        )
+    except Exception:
+        _dump_cluster_logs(ray_cluster)
+        raise
