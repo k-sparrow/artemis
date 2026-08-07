@@ -66,10 +66,10 @@ via TEI, writes vectors to Qdrant, and caches parent-page markdown back to MinIO
 Deduplicates via LangChain RecordManager keyed by `obj_id`.
 
 **[Docling Serve](https://github.com/docling-project/docling-serve)** — document conversion
-service, GPU-accelerated in dev. Called by the parsing service to extract structured chunks
-and full-page markdown from PDFs and other document formats. Ray-backed in dev/test compose
-(server-side page-slice fan-out for large PDFs, CPU-only in test — see TODOs.md Epic 21);
-release compose still runs the plain local engine.
+service, GPU-accelerated in dev and release, CPU-only in test. Called by the parsing service to
+extract structured chunks and full-page markdown from PDFs and other document formats. Ray-backed
+in all three compose modes (server-side page-slice fan-out for large PDFs — see TODOs.md Epic 21);
+release was promoted ahead of a large-PDF memory-bounding proof on an explicit risk-acceptance call.
 
 **[TEI (Text Embeddings Inference)](https://github.com/huggingface/text-embeddings-inference)** — embeds each chunk into a dense vector using the same model used at query time, ensuring chunk and query vectors live in the same space.
 

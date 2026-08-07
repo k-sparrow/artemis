@@ -19,8 +19,7 @@ The template file uses {PLACEHOLDER} markers:
   {COLBERT_GPU_BLOCK}      Multi-line YAML block for nvidia runtime + deploy section
   {DOCLING_ENGINE_ENV_BLOCK}  Extra docling-serve `environment:` entries selecting the
                        Ray-backed engine (server-side PDF page-slice fan-out); set in
-                       dev + test, empty in release (docling-serve there stays on its
-                       local sequential engine until Epic 21 §21.7 promotes it)
+                       all three modes (Epic 21 §21.7)
   {ARTEMIS_TAG_DEV}    Tag for artemis app images that ship a :dev variant
   {ARTEMIS_TAG_LATEST} Tag for artemis images that ship a :latest variant
 
@@ -182,17 +181,16 @@ _TEST_SUBS: dict[str, str] = {
     "ARTEMIS_TAG_LATEST": "latest",
 }
 
-# Release reuses the dev (GPU, prod-image) substitutions, only the artemis tags
-# differ — both collapse to the pinned ${ARTEMIS_VERSION}. The Ray engine is
-# dev + test only for now (Epic 21 §21.7 covers release promotion) — explicitly
-# overridden back to the local engine here rather than inherited from _DEV_SUBS.
-# The dev-only markers around the ray-head/ray-worker/redis services already
-# strip those services from the release output; this override keeps
-# docling-serve's own env block consistent with that (no dangling
-# DOCLING_SERVE_ENG_KIND=ray with no cluster to talk to).
+# Release reuses the dev (GPU, prod-image, Ray-engine) substitutions unchanged —
+# only the artemis tags differ, collapsing to the pinned ${ARTEMIS_VERSION}.
+# Promoted to Ray 2026-08-07 (Epic 21 §21.7) ahead of a large-PDF (400+ page)
+# memory-bounding proof — the correctness fan-out was verified at 50 pages/5
+# slices, not at the scale the feature exists for; promoted anyway on an
+# explicit, deliberate call to accept that risk rather than wait. If a
+# large-PDF run later reveals a real memory-bounding problem, revert by
+# re-adding "DOCLING_ENGINE_ENV_BLOCK": "" here.
 _RELEASE_SUBS: dict[str, str] = {
     **_DEV_SUBS,
-    "DOCLING_ENGINE_ENV_BLOCK": "",
     "ARTEMIS_TAG_DEV": _ARTEMIS_TAG_RELEASE,
     "ARTEMIS_TAG_LATEST": _ARTEMIS_TAG_RELEASE,
 }

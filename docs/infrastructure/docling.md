@@ -9,11 +9,12 @@ SECTION_HEADER, etc.). GPU-accelerated in dev; the Ray engine (below) runs CPU-o
 **Compose profile:** `ai`  
 **Port:** 5001 (internal only, not exposed to host)
 
-**Engine:** Ray-backed in `dev` and `test` compose (`DOCLING_SERVE_ENG_KIND=ray`) — server-side
+**Engine:** Ray-backed in all three compose modes (`DOCLING_SERVE_ENG_KIND=ray`) — server-side
 PDF page-slice fan-out across a small Ray cluster (`ray-head` + `ray-worker`, GCS backed by
-`redis`, unrelated to Celery's RabbitMQ broker). Still the plain local sequential engine in
-`release` compose, pending a large-PDF memory-bounding proof before promotion — see TODOs.md
-Epic 21 for the full cluster topology and rollout status.
+`redis`, unrelated to Celery's RabbitMQ broker). `release` was promoted ahead of a large-PDF
+(400+ page) memory-bounding proof — correctness was verified at 50 pages/5 slices, not at
+production scale; an explicit, deliberate risk-acceptance call, not an oversight. See TODOs.md
+Epic 21 for the full cluster topology and rollout history.
 
 ---
 
@@ -58,14 +59,13 @@ version of this doc described one: client-side PDF sharding + a `/v1/convert/sou
 S3 workflow. That was retired outright once the Ray engine made it unnecessary — see
 TODOs.md Epic 21).
 
-When `DOCLING_SERVE_ENG_KIND=ray` (dev + test compose), Docling Serve itself splits large PDFs
-into page slices and converts them concurrently across Ray actors on `ray-worker`, entirely
+With `DOCLING_SERVE_ENG_KIND=ray` (all three compose modes), Docling Serve itself splits large
+PDFs into page slices and converts them concurrently across Ray actors on `ray-worker`, entirely
 transparent to callers — one `task_id`, one poll loop, one result, same as a small document.
 Concurrency and slice size are tuned via `DOCLING_SERVE_ENG_RAY_MAX_PAGE_SLICE_SIZE` and the
 `DOCLING_SERVE_ENG_RAY_MAX_CONCURRENT_TASKS` / `MAX_ONGOING_REQUESTS_PER_REPLICA` settings —
 see the `docling-serve` service block in `tools/docker/docker-compose.tmpl.yaml` for current
-values. `release` compose still runs the plain local engine (sequential, no fan-out) — see
-TODOs.md Epic 21 §21.7 for the promotion gate.
+values.
 
 ### Hybrid chunking
 

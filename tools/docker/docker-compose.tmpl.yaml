@@ -585,11 +585,10 @@ services:
     networks:
       - default
   # <<< deploy-only
-  # >>> dev-only
   # Ray cluster backing docling-serve's Ray engine (server-side PDF page-slice
-  # fan-out) — dev + test compose; release promotion deferred, see TODOs.md
-  # Epic 21 §21.7. Redis is Ray's GCS backend here, unrelated to Celery's
-  # RabbitMQ broker.
+  # fan-out) — live in all three compose modes (promoted to release 2026-08-07,
+  # Epic 21 §21.7, ahead of a large-PDF memory-bounding proof — see TODOs.md).
+  # Redis is Ray's GCS backend here, unrelated to Celery's RabbitMQ broker.
   redis:
     profiles: [ai]
     image: "redis:7-alpine"
@@ -641,7 +640,6 @@ services:
         condition: service_healthy
     networks:
       - default
-  # <<< dev-only
   docling-serve:
     profiles: [ai]
     image: "{DOCLING_IMAGE}"
@@ -671,12 +669,10 @@ services:
       docling-model-downloader:
         condition: service_completed_successfully
       # <<< deploy-only
-      # >>> dev-only
       ray-head:
         condition: service_healthy
       redis:
         condition: service_healthy
-        # <<< dev-only
     restart: always
     networks:
       - default
@@ -948,9 +944,7 @@ volumes:
   docling-models:
   tei-models:
   colbert-models:
-  # >>> dev-only
   redis-data:
-  # <<< dev-only
 configs:
   rabbitmq-conf:
     content: |

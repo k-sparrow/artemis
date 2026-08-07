@@ -584,9 +584,9 @@ services:
     networks:
       - default
   # Ray cluster backing docling-serve's Ray engine (server-side PDF page-slice
-  # fan-out) — dev + test compose; release promotion deferred, see TODOs.md
-  # Epic 21 §21.7. Redis is Ray's GCS backend here, unrelated to Celery's
-  # RabbitMQ broker.
+  # fan-out) — live in all three compose modes (promoted to release 2026-08-07,
+  # Epic 21 §21.7, ahead of a large-PDF memory-bounding proof — see TODOs.md).
+  # Redis is Ray's GCS backend here, unrelated to Celery's RabbitMQ broker.
   redis:
     profiles: [ai]
     image: "redis:7-alpine"
