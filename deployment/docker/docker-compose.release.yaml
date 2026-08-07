@@ -512,7 +512,7 @@ services:
   # ---------------------------------------------------------------------------
   docling-model-downloader:
     profiles: [ai]
-    image: "ghcr.io/docling-project/docling-serve-cu128:v1.24.0"
+    image: "ghcr.io/docling-project/docling-serve-cu128:v1.29.0"
     container_name: docling-model-downloader
     user: "0"
     entrypoint: /opt/app-root/bin/docling-tools
@@ -567,7 +567,7 @@ services:
       - default
   docling-serve:
     profiles: [ai]
-    image: "ghcr.io/docling-project/docling-serve-cu128:v1.24.0"
+    image: "ghcr.io/docling-project/docling-serve-cu128:v1.29.0"
     container_name: docling-serve
     healthcheck:
       test: wget http://localhost:5001/health || exit 1

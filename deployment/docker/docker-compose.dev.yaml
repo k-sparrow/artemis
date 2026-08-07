@@ -530,7 +530,7 @@ services:
   # ---------------------------------------------------------------------------
   docling-model-downloader:
     profiles: [ai]
-    image: "ghcr.io/docling-project/docling-serve-cu128:v1.24.0"
+    image: "ghcr.io/docling-project/docling-serve-cu128:v1.29.0"
     container_name: docling-model-downloader
     user: "0"
     entrypoint: /opt/app-root/bin/docling-tools
@@ -583,9 +583,79 @@ services:
     restart: "no"
     networks:
       - default
+  # Ray cluster backing docling-serve's Ray engine (server-side PDF page-slice
+  # fan-out) — dev-compose only for now, see TODOs.md Epic 21. Redis is Ray's
+  # GCS backend here, unrelated to Celery's RabbitMQ broker.
+  redis:
+    profiles: [ai]
+    image: "redis:7-alpine"
+    container_name: redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - default
+  ray-head:
+    profiles: [ai]
+    image: "ghcr.io/docling-project/docling-serve-cu128:v1.29.0"
+    container_name: ray-head
+    command: >
+      ray start --head --port=6379 --dashboard-host=0.0.0.0 --num-cpus=0 --block
+
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "all"
+      RAY_LOG_TO_STDERR: "1" # nvidia container runtime
+    deploy: # This section is for compatibility with Swarm
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    runtime: nvidia
+    healthcheck:
+      test: ["CMD", "ray", "health-check", "--address=127.0.0.1:6379"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - default
+  ray-worker:
+    profiles: [ai]
+    image: "ghcr.io/docling-project/docling-serve-cu128:v1.29.0"
+    container_name: ray-worker
+    command: >
+      ray start --address=ray-head:6379 --num-cpus=4 --block
+
+    shm_size: "8gb"
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "all"
+      RAY_LOG_TO_STDERR: "1"
+      RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES: "1" # nvidia container runtime
+    deploy: # This section is for compatibility with Swarm
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    runtime: nvidia
+    depends_on:
+      ray-head:
+        condition: service_healthy
+    networks:
+      - default
   docling-serve:
     profiles: [ai]
-    image: "ghcr.io/docling-project/docling-serve-cu128:v1.24.0"
+    image: "ghcr.io/docling-project/docling-serve-cu128:v1.29.0"
     container_name: docling-serve
     ports:
       - "5001:5001"
@@ -603,6 +673,20 @@ services:
       DOCLING_SERVE_ARTIFACTS_PATH: /mnt/models
       HF_HUB_OFFLINE: "${IS_AIR_GAPPED:-0}"
       NVIDIA_VISIBLE_DEVICES: "all" # https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/docker-specialized.html
+      DOCLING_SERVE_ENG_KIND: "ray"
+      DOCLING_SERVE_ENG_RAY_ADDRESS: "ray://ray-head:10001"
+      DOCLING_SERVE_ENG_RAY_NAMESPACE: "docling"
+      DOCLING_SERVE_ENG_RAY_REDIS_URL: "redis://redis:6379/"
+      # Autoscaling pinned to 1 warm converter replica (single dev-box GPU budget)
+      DOCLING_SERVE_ENG_RAY_MIN_ACTORS: "1"
+      DOCLING_SERVE_ENG_RAY_MAX_ACTORS: "1"
+      DOCLING_SERVE_ENG_RAY_CONVERTER_ACTOR_NUM_CPUS: "2"
+      # 2 slices in flight per replica, matched at the per-tenant dispatch gate
+      DOCLING_SERVE_ENG_RAY_MAX_ONGOING_REQUESTS_PER_REPLICA: "2"
+      DOCLING_SERVE_ENG_RAY_MAX_CONCURRENT_TASKS: "2"
+      # PDF page-slice fan-out is off by default upstream — opt in explicitly
+      DOCLING_SERVE_ENG_RAY_ENABLE_PDF_PAGE_SLICE_FANOUT: "true"
+      DOCLING_SERVE_ENG_RAY_MAX_PAGE_SLICE_SIZE: "10"
     deploy: # This section is for compatibility with Swarm
       resources:
         reservations:
@@ -614,6 +698,10 @@ services:
     depends_on:
       docling-model-downloader:
         condition: service_completed_successfully
+      ray-head:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: always
     networks:
       - default
@@ -896,6 +984,7 @@ volumes:
   docling-models:
   tei-models:
   colbert-models:
+  redis-data:
 configs:
   rabbitmq-conf:
     content: |

@@ -14,7 +14,7 @@ from testcontainers.core.wait_strategies import HttpWaitStrategy
 __all__ = ["DoclingServeContainer"]
 
 _HTTP_PORT = 5001
-_DEFAULT_IMAGE = "ghcr.io/docling-project/docling-serve-cu128:v1.24.0"
+_DEFAULT_IMAGE = "ghcr.io/docling-project/docling-serve-cu128:v1.29.0"
 _STARTUP_TIMEOUT_S = 300
 
 

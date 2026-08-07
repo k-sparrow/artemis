@@ -17,6 +17,9 @@ The template file uses {PLACEHOLDER} markers:
   {COLBERT_MODEL}          Model ID for the ColBERT model-downloader init service
   {COLBERT_COMMAND_BLOCK}  Full YAML list-form command block for the ColBERT vLLM service
   {COLBERT_GPU_BLOCK}      Multi-line YAML block for nvidia runtime + deploy section
+  {DOCLING_ENGINE_ENV_BLOCK}  Extra docling-serve `environment:` entries selecting the
+                       Ray-backed engine (server-side PDF page-slice fan-out); empty in
+                       test/release (docling-serve stays on its local sequential engine)
   {ARTEMIS_TAG_DEV}    Tag for artemis app images that ship a :dev variant
   {ARTEMIS_TAG_LATEST} Tag for artemis images that ship a :latest variant
 
@@ -39,6 +42,10 @@ Modes
   `# >>> deploy-only` / `# <<< deploy-only` — removed in test mode only
     Use deploy-only for model-downloader init services and their depends_on
     references: they are a deployment feature, not needed for e2e test containers.
+  `# >>> local-dev-only` / `# <<< local-dev-only` — kept in dev only, removed in
+    both test and release. Use for infra that backs an opt-in dev capability
+    (e.g. the Ray cluster behind docling-serve's Ray engine) that hasn't been
+    validated/rolled out to release yet and isn't needed by the e2e test stack.
 
 Bazel integration
 -----------------
@@ -79,6 +86,33 @@ _DEV_ONLY_CLOSE = "# <<< dev-only"
 _DEPLOY_ONLY_OPEN = "# >>> deploy-only"
 _DEPLOY_ONLY_CLOSE = "# <<< deploy-only"
 
+# Markers for blocks kept in dev only, stripped from both test and release —
+# an opt-in dev capability not yet rolled out to release, and not exercised by
+# the e2e test stack.
+_LOCAL_DEV_ONLY_OPEN = "# >>> local-dev-only"
+_LOCAL_DEV_ONLY_CLOSE = "# <<< local-dev-only"
+
+# docling-serve Ray engine — server-side PDF page-slice fan-out across a Ray
+# cluster (ray-head + ray-worker, GCS backed by redis). Dev-compose only for
+# now; see TODOs.md Epic 21.
+_DOCLING_RAY_ENGINE_ENV_BLOCK = (
+    "\n"
+    '      DOCLING_SERVE_ENG_KIND: "ray"\n'
+    '      DOCLING_SERVE_ENG_RAY_ADDRESS: "ray://ray-head:10001"\n'
+    '      DOCLING_SERVE_ENG_RAY_NAMESPACE: "docling"\n'
+    '      DOCLING_SERVE_ENG_RAY_REDIS_URL: "redis://redis:6379/"\n'
+    "      # Autoscaling pinned to 1 warm converter replica (single dev-box GPU budget)\n"
+    '      DOCLING_SERVE_ENG_RAY_MIN_ACTORS: "1"\n'
+    '      DOCLING_SERVE_ENG_RAY_MAX_ACTORS: "1"\n'
+    '      DOCLING_SERVE_ENG_RAY_CONVERTER_ACTOR_NUM_CPUS: "2"\n'
+    "      # 2 slices in flight per replica, matched at the per-tenant dispatch gate\n"
+    '      DOCLING_SERVE_ENG_RAY_MAX_ONGOING_REQUESTS_PER_REPLICA: "2"\n'
+    '      DOCLING_SERVE_ENG_RAY_MAX_CONCURRENT_TASKS: "2"\n'
+    "      # PDF page-slice fan-out is off by default upstream — opt in explicitly\n"
+    '      DOCLING_SERVE_ENG_RAY_ENABLE_PDF_PAGE_SLICE_FANOUT: "true"\n'
+    '      DOCLING_SERVE_ENG_RAY_MAX_PAGE_SLICE_SIZE: "10"'
+)
+
 # Services whose published host ports survive in release mode (gateway ingress).
 _RELEASE_PORT_ALLOWLIST = frozenset({"apisix"})
 
@@ -100,8 +134,9 @@ _DEV_SUBS: dict[str, str] = {
     # Pinned to the latest stable release (NOT a moving :main tag): the
     # parsing-service redesign depends on the /v1/chunk/hybrid response shape
     # (per-chunk page_numbers + documents[].md_content). cu128 GPU variant.
-    "DOCLING_IMAGE": "ghcr.io/docling-project/docling-serve-cu128:v1.24.0",
+    "DOCLING_IMAGE": "ghcr.io/docling-project/docling-serve-cu128:v1.29.0",
     "DOCLING_GPU_BLOCK": _GPU_DEPLOY_BLOCK,
+    "DOCLING_ENGINE_ENV_BLOCK": _DOCLING_RAY_ENGINE_ENV_BLOCK,
     "TEI_IMAGE": "ghcr.io/huggingface/text-embeddings-inference:1.6",
     "TEI_MODEL": "Alibaba-NLP/gte-large-en-v1.5",
     "TEI_POOLING": "mean",
@@ -128,6 +163,7 @@ _DEV_SUBS: dict[str, str] = {
 _TEST_SUBS: dict[str, str] = {
     "DOCLING_IMAGE": "ghcr.io/docling-project/docling-serve:main",
     "DOCLING_GPU_BLOCK": "",
+    "DOCLING_ENGINE_ENV_BLOCK": "",
     "TEI_IMAGE": "ghcr.io/huggingface/text-embeddings-inference:cpu-1.6",
     "TEI_MODEL": "BAAI/bge-small-en-v1.5",
     "TEI_POOLING": "cls",
@@ -147,9 +183,15 @@ _TEST_SUBS: dict[str, str] = {
 }
 
 # Release reuses the dev (GPU, prod-image) substitutions, only the artemis tags
-# differ — both collapse to the pinned ${ARTEMIS_VERSION}.
+# differ — both collapse to the pinned ${ARTEMIS_VERSION}. The Ray engine is
+# dev-compose only for now (Epic 21) — explicitly overridden back to the local
+# engine here rather than inherited from _DEV_SUBS. The local-dev-only markers
+# around the ray-head/ray-worker/redis services strip those services from the
+# release output regardless; this override keeps docling-serve's own env block
+# consistent with that (no dangling DOCLING_SERVE_ENG_KIND=ray with no cluster).
 _RELEASE_SUBS: dict[str, str] = {
     **_DEV_SUBS,
+    "DOCLING_ENGINE_ENV_BLOCK": "",
     "ARTEMIS_TAG_DEV": _ARTEMIS_TAG_RELEASE,
     "ARTEMIS_TAG_LATEST": _ARTEMIS_TAG_RELEASE,
 }
@@ -205,6 +247,28 @@ def _strip_deploy_only(lines: list[str], *, keep_content: bool) -> list[str]:
     return out
 
 
+def _strip_local_dev_only(lines: list[str], *, keep_content: bool) -> list[str]:
+    """Drop `# >>> local-dev-only` … `# <<< local-dev-only` marker blocks.
+
+    keep_content=True  → remove only the marker lines (dev: section stays).
+    keep_content=False → remove the markers AND everything between them (test/release).
+    """
+    out: list[str] = []
+    inside = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == _LOCAL_DEV_ONLY_OPEN:
+            inside = True
+            continue
+        if stripped == _LOCAL_DEV_ONLY_CLOSE:
+            inside = False
+            continue
+        if inside and not keep_content:
+            continue
+        out.append(line)
+    return out
+
+
 def _strip_unpublished_ports(lines: list[str]) -> list[str]:
     """Remove published `ports:` blocks for every service not in the allowlist.
 
@@ -252,6 +316,7 @@ def generate(template: str, mode: str) -> str:
     lines = result.split("\n")
     lines = _strip_dev_only(lines, keep_content=(mode != "release"))
     lines = _strip_deploy_only(lines, keep_content=(mode != "test"))
+    lines = _strip_local_dev_only(lines, keep_content=(mode == "dev"))
     if mode == "release":
         lines = _strip_unpublished_ports(lines)
     result = "\n".join(lines)

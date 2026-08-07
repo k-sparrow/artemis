@@ -97,10 +97,7 @@ _PARSE_RESPONSE = {"bucket": _ARTIFACT_BUCKET, "key": _ARTIFACT_KEY}
 # submit → status (success) → resolve → status (success) → finalize
 _SUBMIT_RESULT = {
     "parsing_task_id": _STUB_CONV_TASK_ID,
-    "mode": "single",
     "obj_id": _STUB_OBJ_ID,
-    "scratch_prefix": None,
-    "shard_count": None,
 }
 _PARSE_STATUS_SUCCESS = {
     "status": "success",

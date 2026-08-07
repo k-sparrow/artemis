@@ -48,62 +48,6 @@ class DoclingParseClient:
             resp.raise_for_status()
             return resp.json()["task_id"]
 
-    async def submit_batch(
-        self,
-        *,
-        s3_endpoint: str,
-        s3_access_key: str,
-        s3_secret_key: str,
-        s3_secure: bool,
-        src_bucket: str,
-        src_prefix: str,
-        dst_bucket: str,
-        dst_prefix: str,
-        timeout: float = 120.0,
-    ) -> str:
-        """POST /v1/convert/source/batch with S3SourceRequest + S3Target → task_id.
-
-        Submits all shard PDFs at src_prefix as a batch S3 conversion.
-        Results land at dst_bucket under dst_prefix, but docling_jobkit appends
-        a 12-char SHA-256 hash of each source URI before the shard filename:
-            {dst_prefix}{sha256(s3://{src_bucket}/{shard_key})[:12]}/{shard}.json
-        There is no API knob to disable this behaviour (hardcoded in
-        docling_jobkit._upload_document_to_s3_target). resolve_endpoint absorbs
-        the extra directory level via a recursive listing of dst_prefix.
-        TODO: drop the hash workaround once IBM fixes docling-jobkit to honour
-              dst_prefix verbatim (track upstream issue in
-              docling-project/docling-jobkit).
-        """
-        s3_creds = {
-            "endpoint": s3_endpoint,
-            "access_key": s3_access_key,
-            "secret_key": s3_secret_key,
-            "verify_ssl": s3_secure,
-        }
-        body = {
-            "options": {"to_formats": ["json"]},
-            "sources": [
-                {
-                    "kind": "s3",
-                    **s3_creds,
-                    "bucket": src_bucket,
-                    "key_prefix": src_prefix,
-                }
-            ],
-            "target": {
-                "kind": "s3",
-                **s3_creds,
-                "bucket": dst_bucket,
-                "key_prefix": dst_prefix,
-            },
-        }
-        async with httpx.AsyncClient(
-            base_url=self._base_url, timeout=timeout
-        ) as client:
-            resp = await client.post("/v1/convert/source/batch", json=body)
-            resp.raise_for_status()
-            return resp.json()["task_id"]
-
     async def get_status(self, task_id: str, *, timeout: float = 30.0) -> ParseStatus:
         """
         Non-blocking single status check (wait=0). Works for conversion and chunk tasks.
@@ -124,10 +68,10 @@ class DoclingParseClient:
             mapped = "success"
             error_message = None
         elif raw == "partial_success":
-            # Some shards failed → incomplete S3 results. Treat as failure so the
-            # Celery retry re-submits the whole batch rather than proceeding with a
-            # truncated DoclingDocument. Change to "success" here if partial results
-            # become acceptable.
+            # Some page slices failed server-side (Ray engine fan-out). Treat as
+            # failure so the Celery retry re-submits the whole document rather than
+            # proceeding with a truncated DoclingDocument. Change to "success" here
+            # if partial results become acceptable.
             mapped = "failure"
             error_message = (
                 f"partial_success: {server_error}"
@@ -135,7 +79,7 @@ class DoclingParseClient:
                 else "partial_success"
             )
         elif raw == "skipped":
-            # Unexpected in our flow (we always submit fresh shard PDFs). Fail loudly
+            # Unexpected in our flow (we always submit a fresh document). Fail loudly
             # rather than emit an empty artifact.
             mapped = "failure"
             error_message = f"skipped: {server_error}" if server_error else "skipped"

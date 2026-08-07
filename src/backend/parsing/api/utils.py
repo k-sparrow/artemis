@@ -30,7 +30,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     for bucket in (
         settings.PARSED_ARTIFACTS_BUCKET,
         settings.REPLAY_CACHE_BUCKET,
-        settings.DOCLING_SCRATCH_BUCKET,
     ):
         MinioBlobStore(s3, bucket).ensure_bucket()
         logger.info("bucket_ready", bucket=bucket)

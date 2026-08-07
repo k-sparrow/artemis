@@ -1,7 +1,6 @@
-import asyncio
 import json
 import uuid
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Optional
 
 from docling.datamodel.document import DoclingDocument
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
@@ -12,7 +11,6 @@ from src.backend.parsing.api.dependencies import (
     blob_store_factory_dependency,
     docling_client_dependency,
     loader_factory_dependency,
-    s3_client_dependency,
 )
 from src.backend.parsing.api.parse import service
 from src.backend.parsing.lib.artifact import (
@@ -20,7 +18,6 @@ from src.backend.parsing.lib.artifact import (
     build_artifact,
     chunk_items_to_parsed,
 )
-from src.backend.parsing.lib.sharding import pdf_page_count, split_pdf_shards
 from src.lib.backend.logging import get_logger
 from src.lib.core.ingestion.contract import BlobRef
 
@@ -43,18 +40,12 @@ _JsonDict = Annotated[dict[str, str], BeforeValidator(json.loads), Form()]
 
 class SubmitResult(BaseModel):
     parsing_task_id: str
-    mode: Literal["single", "batch"]
     obj_id: str
-    scratch_prefix: Optional[str] = None
-    shard_count: Optional[int] = None
 
 
 class ResolveRequest(BaseModel):
     parsing_task_id: str
-    mode: Literal["single", "batch"]
     obj_id: str
-    scratch_prefix: Optional[str] = None
-    shard_count: Optional[int] = None
 
 
 class ResolveResult(BaseModel):
@@ -164,9 +155,10 @@ async def submit_endpoint(
 ) -> SubmitResult:
     """Queue a document conversion job on docling-serve and return immediately.
 
-    Large PDFs (> DOCLING_SHARD_TRIGGER_PAGES pages) are split into shards,
-    uploaded to the scratch bucket, and submitted as a batch S3 conversion.
-    All other documents are submitted as a single async file conversion.
+    Every document is submitted as a single async file conversion — large PDFs
+    are fanned out into page slices and converted concurrently server-side by
+    docling-serve's Ray engine (see TODOs.md Epic 21), so no client-side
+    splitting is needed.
 
     Poll ``GET /v1/parse/status/{task_id}`` until "success" or "failure",
     then call ``POST /v1/parse/resolve``.
@@ -189,57 +181,15 @@ async def submit_endpoint(
 
     obj_id = metadata["obj_id"]
 
-    is_pdf = (in_type or "").lower() == "application/pdf" or in_name.lower().endswith(
-        ".pdf"
-    )
-
-    if is_pdf and pdf_page_count(content) > settings.DOCLING_SHARD_TRIGGER_PAGES:
-        shards = split_pdf_shards(content, settings.DOCLING_SHARD_PAGE_LIMIT)
-        scratch = blob_store(settings.DOCLING_SCRATCH_BUCKET)
-        shard_prefix = f"{obj_id}/pages/"
-        for i, shard_bytes in enumerate(shards):
-            key = f"{shard_prefix}shard-{i:04d}.pdf"
-            await scratch.aput(key, shard_bytes, content_type="application/pdf")
-
-        logger.info(
-            "submit_batch_started",
-            obj_id=obj_id,
-            shard_count=len(shards),
-            shard_prefix=shard_prefix,
-        )
-        task_id = await docling_client.submit_batch(
-            s3_endpoint=settings.S3_ENDPOINT,
-            s3_access_key=settings.S3_ACCESS_KEY,
-            s3_secret_key=settings.S3_SECRET_KEY,
-            s3_secure=settings.S3_SECURE,
-            src_bucket=settings.DOCLING_SCRATCH_BUCKET,
-            src_prefix=shard_prefix,
-            dst_bucket=settings.DOCLING_SCRATCH_BUCKET,
-            dst_prefix=f"{obj_id}/results/",
-            timeout=120.0,
-        )
-        logger.info("submit_batch_queued", obj_id=obj_id, parsing_task_id=task_id)
-        return SubmitResult(
-            parsing_task_id=task_id,
-            mode="batch",
-            obj_id=obj_id,
-            scratch_prefix=f"{obj_id}/",
-            shard_count=len(shards),
-        )
-
-    logger.info("submit_single_started", obj_id=obj_id, filename=in_name)
+    logger.info("submit_started", obj_id=obj_id, filename=in_name)
     task_id = await docling_client.submit_file(
         content=content,
         filename=in_name,
         content_type=in_type,
         timeout=120.0,
     )
-    logger.info("submit_single_queued", obj_id=obj_id, parsing_task_id=task_id)
-    return SubmitResult(
-        parsing_task_id=task_id,
-        mode="single",
-        obj_id=obj_id,
-    )
+    logger.info("submit_queued", obj_id=obj_id, parsing_task_id=task_id)
+    return SubmitResult(parsing_task_id=task_id, obj_id=obj_id)
 
 
 @router.get("/v1/parse/status/{task_id}", response_model=ParseStatus)
@@ -263,60 +213,20 @@ async def resolve_endpoint(
     request: ResolveRequest,
     docling_client: docling_client_dependency,
     blob_store: blob_store_factory_dependency,
-    s3: s3_client_dependency,
 ) -> ResolveResult:
-    """Download a completed conversion, concatenate shards if needed, submit chunk job.
+    """Download a completed conversion and submit a chunk job.
 
     Must only be called after /v1/parse/status/{task_id} returns "success".
     Writes the lossless DoclingDocument JSON to the private replay cache so that
     /v1/parse/finalize can extract page parents without passing large blobs.
-    Scratch objects are deleted after a successful chunk submission (batch mode).
     """
     obj_id = request.obj_id
     replay_store = blob_store(settings.REPLAY_CACHE_BUCKET)
-    scratch_store = blob_store(settings.DOCLING_SCRATCH_BUCKET)
 
-    if request.mode == "single":
-        dl_doc = await docling_client.fetch_conversion_result(
-            request.parsing_task_id,
-            timeout=settings.DOCLING_RESOLVE_TIMEOUT,
-        )
-    else:
-        results_prefix = f"{obj_id}/results/"
-        # docling_jobkit._upload_document_to_s3_target appends a 12-char SHA-256
-        # hash of each source URI between our dst_prefix and the shard filename:
-        #   {dst_prefix}{sha256(s3://{bucket}/{key})[:12]}/{shard}.json
-        # This is hardcoded in docling_jobkit with no API knob to disable it.
-        # Recursive listing absorbs the extra hash directory level transparently.
-        # TODO: remove the sort-by-basename once IBM fixes docling-jobkit to honour
-        #       dst_prefix verbatim (track: docling-project/docling-jobkit).
-        shard_keys = sorted(
-            (
-                obj.object_name
-                for obj in s3.list_objects(
-                    settings.DOCLING_SCRATCH_BUCKET,
-                    prefix=results_prefix,
-                    recursive=True,
-                )
-                if obj.object_name and obj.object_name.endswith(".json")
-            ),
-            key=lambda k: k.rsplit("/", 1)[-1],
-        )
-        if not shard_keys:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="no batch results in S3 scratch",
-            )
-        shard_docs = [
-            DoclingDocument.model_validate_json(await scratch_store.aget(key))
-            for key in shard_keys
-        ]
-        dl_doc = DoclingDocument.concatenate(shard_docs)
-        logger.info(
-            "batch_shards_concatenated",
-            obj_id=obj_id,
-            shard_count=len(shard_docs),
-        )
+    dl_doc = await docling_client.fetch_conversion_result(
+        request.parsing_task_id,
+        timeout=settings.DOCLING_RESOLVE_TIMEOUT,
+    )
 
     replay_bytes = dl_doc.model_dump_json().encode()
     await replay_store.aput(
@@ -329,9 +239,6 @@ async def resolve_endpoint(
         timeout=120.0,
     )
     logger.info("chunk_job_submitted", obj_id=obj_id, chunking_task_id=chunking_task_id)
-
-    if request.mode == "batch" and request.scratch_prefix:
-        await _delete_scratch_prefix(scratch_store, request.scratch_prefix, s3)
 
     return ResolveResult(chunking_task_id=chunking_task_id, obj_id=obj_id)
 
@@ -376,24 +283,3 @@ async def finalize_endpoint(
         key=key,
     )
     return BlobRef(bucket=settings.PARSED_ARTIFACTS_BUCKET, key=key)
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
-async def _delete_scratch_prefix(scratch_store, prefix: str, s3_client) -> None:
-    """Best-effort deletion of all scratch objects under prefix."""
-    try:
-        keys = [
-            obj.object_name
-            for obj in s3_client.list_objects(
-                settings.DOCLING_SCRATCH_BUCKET, prefix=prefix, recursive=True
-            )
-            if obj.object_name
-        ]
-        await asyncio.gather(*(scratch_store.adelete(k) for k in keys))
-        logger.info("scratch_cleaned", prefix=prefix, count=len(keys))
-    except Exception as exc:
-        logger.warning("scratch_cleanup_failed", prefix=prefix, error=str(exc))

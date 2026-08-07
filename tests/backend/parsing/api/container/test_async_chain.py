@@ -4,10 +4,11 @@ Drives the full submit → status → resolve → finalize chain against the rea
 ``artemis/backend-parsing:dev`` image backed by docling-serve and MinIO
 testcontainers, using real PDF fixtures from ``tools/fixtures/docs/``.
 
-Single-mode tests (text PDF and tables PDF) use the shared ``app_container``
-fixture (default shard threshold of 400 pages).  The batch-mode test uses
-``app_container_batch`` which sets ``DOCLING_SHARD_TRIGGER_PAGES=25`` so the
-50-page fixture PDF is split into exactly 2 shards.
+Large-PDF fan-out is no longer a client-side concern (see TODOs.md Epic 21) —
+every document takes this same submit/resolve path regardless of size, with
+docling-serve's Ray engine handling server-side page-slice fan-out for large
+documents. A Ray-cluster container test covering that fan-out path is tracked
+separately (Epic 21 §21.5), pending the Ray-backed testcontainer fixture.
 """
 
 from __future__ import annotations
@@ -96,10 +97,7 @@ async def _drive_async_chain(
         "/v1/parse/resolve",
         json={
             "parsing_task_id": submit["parsing_task_id"],
-            "mode": submit["mode"],
             "obj_id": submit["obj_id"],
-            "scratch_prefix": submit.get("scratch_prefix"),
-            "shard_count": submit.get("shard_count"),
         },
     )
     assert resp.status_code == 200, resp.text
@@ -155,87 +153,3 @@ async def test_async_chain_tables_pdf_produces_text_and_table_chunks(
     chunk_types = {c.type for c in _read_artifact(minio_client, ref).chunks}
     assert ChunkType.TEXT in chunk_types, "Expected at least one TEXT chunk"
     assert ChunkType.TABLE in chunk_types, "Expected at least one TABLE chunk"
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_async_chain_batch_mode_shards_concatenates_and_cleans_up(
-    client_batch: httpx.AsyncClient,
-    minio_client: Minio,
-) -> None:
-    """50-page PDF with threshold=25 exercises the batch sharding path.
-
-    Asserts:
-    - submit returns mode='batch' with shard_count=2
-    - two shard PDFs appear in docling-scratch immediately after submit
-    - resolve deletes all scratch objects (both pages/ and results/)
-    - finalize produces a non-empty artifact with correct obj_id
-    """
-    pdf_bytes = _fixture("sample-50-page-pdf-a4-size.pdf").read_bytes()
-    obj_id = uuid.uuid4()
-
-    # Step 1: submit
-    resp = await client_batch.post(
-        "/v1/parse/submit",
-        files={"file": ("sample-50-page.pdf", pdf_bytes, "application/pdf")},
-        data={"metadata": _metadata(obj_id)},
-    )
-    assert resp.status_code == 200, resp.text
-    submit = resp.json()
-    assert submit["mode"] == "batch"
-    assert submit["shard_count"] == 2
-
-    # Shard PDFs must be in docling-scratch before conversion completes.
-    shard_objs = list(
-        minio_client.list_objects(
-            "docling-scratch", prefix=f"{obj_id}/pages/", recursive=True
-        )
-    )
-    assert len(shard_objs) == 2, f"Expected 2 shard objects, got {len(shard_objs)}"
-
-    # Step 2: poll conversion
-    await _poll_status(client_batch, submit["parsing_task_id"], timeout=600.0)
-
-    # Step 3: resolve — downloads shard results, concatenates, submits chunk job,
-    # then deletes everything under the scratch prefix.
-    resp = await client_batch.post(
-        "/v1/parse/resolve",
-        json={
-            "parsing_task_id": submit["parsing_task_id"],
-            "mode": submit["mode"],
-            "obj_id": submit["obj_id"],
-            "scratch_prefix": submit.get("scratch_prefix"),
-            "shard_count": submit.get("shard_count"),
-        },
-    )
-    assert resp.status_code == 200, resp.text
-    resolve = resp.json()
-
-    remaining = list(
-        minio_client.list_objects(
-            "docling-scratch", prefix=f"{obj_id}/", recursive=True
-        )
-    )
-    assert remaining == [], (
-        f"Scratch objects must be deleted after resolve; found: "
-        f"{[o.object_name for o in remaining]}"
-    )
-
-    # Steps 4-5: poll chunking + finalize
-    await _poll_status(client_batch, resolve["chunking_task_id"], timeout=600.0)
-
-    resp = await client_batch.post(
-        "/v1/parse/finalize",
-        json={
-            "chunking_task_id": resolve["chunking_task_id"],
-            "obj_id": resolve["obj_id"],
-            "metadata": {"obj_id": str(obj_id)},
-        },
-    )
-    assert resp.status_code == 200, resp.text
-    ref = resp.json()
-
-    artifact = _read_artifact(minio_client, ref)
-    assert len(artifact.chunks) >= 1
-    assert all(c.obj_id == obj_id for c in artifact.chunks)
-    assert len(artifact.pages) >= 1

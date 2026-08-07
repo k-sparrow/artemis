@@ -44,3 +44,17 @@ py_test(
         requirement("pytest-asyncio"),
     ],
 )
+
+py_test(
+    name = "test_ray_engine",
+    srcs = ["test_ray_engine.py"],
+    data = ["//tools/fixtures/docs:all_fixtures"],
+    env = {"TC_MAX_TRIES": "1000000000"},
+    deps = [
+        "//src/backend/parsing/lib:artifact",
+        "//src/backend/parsing/lib:docling_client",
+        "//tests/lib/testcontainers/docling:pkg",
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+    ],
+)

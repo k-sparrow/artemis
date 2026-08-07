@@ -135,11 +135,7 @@ def call_parse_submit(
 
     with _tracer.start_as_current_span("http.parse_submit"):
         result = parsing_breaker.call(_request)
-    logger.info(
-        "parse_submit=done task_id=%s mode=%s",
-        result.get("parsing_task_id"),
-        result.get("mode"),
-    )
+    logger.info("parse_submit=done task_id=%s", result.get("parsing_task_id"))
     return result
 
 
@@ -173,9 +169,8 @@ def call_parse_resolve(
 ) -> dict:
     """POST /v1/parse/resolve → ResolveResult dict.
 
-    Downloads completed conversion result, concatenates shards if batch mode,
-    writes replay cache, and queues a hybrid chunk job. Returns immediately
-    with a chunking_task_id.
+    Downloads the completed conversion result, writes the replay cache, and
+    queues a hybrid chunk job. Returns immediately with a chunking_task_id.
     """
     url = f"{parsing_url.rstrip('/')}/v1/parse/resolve"
     logger.info(

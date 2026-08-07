@@ -585,6 +585,62 @@ services:
     networks:
       - default
   # <<< deploy-only
+  # >>> local-dev-only
+  # Ray cluster backing docling-serve's Ray engine (server-side PDF page-slice
+  # fan-out) — dev-compose only for now, see TODOs.md Epic 21. Redis is Ray's
+  # GCS backend here, unrelated to Celery's RabbitMQ broker.
+  redis:
+    profiles: [ai]
+    image: "redis:7-alpine"
+    container_name: redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - default
+  ray-head:
+    profiles: [ai]
+    image: "{DOCLING_IMAGE}"
+    container_name: ray-head
+    command: >
+      ray start --head --port=6379 --dashboard-host=0.0.0.0 --num-cpus=0 --block
+
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "all"
+      RAY_LOG_TO_STDERR: "1" # nvidia container runtime{DOCLING_GPU_BLOCK}
+    healthcheck:
+      test: ["CMD", "ray", "health-check", "--address=127.0.0.1:6379"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - default
+  ray-worker:
+    profiles: [ai]
+    image: "{DOCLING_IMAGE}"
+    container_name: ray-worker
+    command: >
+      ray start --address=ray-head:6379 --num-cpus=4 --block
+
+    shm_size: "8gb"
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "all"
+      RAY_LOG_TO_STDERR: "1"
+      RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES: "1" # nvidia container runtime{DOCLING_GPU_BLOCK}
+    depends_on:
+      ray-head:
+        condition: service_healthy
+    networks:
+      - default
+  # <<< local-dev-only
   docling-serve:
     profiles: [ai]
     image: "{DOCLING_IMAGE}"
@@ -608,11 +664,17 @@ services:
       DOCLING_SERVE_ARTIFACTS_PATH: /mnt/models
       # <<< deploy-only
       HF_HUB_OFFLINE: "${IS_AIR_GAPPED:-0}"
-      NVIDIA_VISIBLE_DEVICES: "all" # https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/docker-specialized.html{DOCLING_GPU_BLOCK}
+      NVIDIA_VISIBLE_DEVICES: "all" # https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/docker-specialized.html{DOCLING_ENGINE_ENV_BLOCK}{DOCLING_GPU_BLOCK}
     # >>> deploy-only
     depends_on:
       docling-model-downloader:
         condition: service_completed_successfully
+      # >>> local-dev-only
+      ray-head:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+        # <<< local-dev-only
     # <<< deploy-only
     restart: always
     networks:
@@ -885,6 +947,9 @@ volumes:
   docling-models:
   tei-models:
   colbert-models:
+  # >>> local-dev-only
+  redis-data:
+  # <<< local-dev-only
 configs:
   rabbitmq-conf:
     content: |

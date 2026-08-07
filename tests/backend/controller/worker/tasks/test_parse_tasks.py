@@ -26,10 +26,7 @@ from src.backend.controller.worker.tasks import (
 
 _SUBMIT_RESULT = {
     "parsing_task_id": "conv-task-1",
-    "mode": "single",
     "obj_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-    "scratch_prefix": None,
-    "shard_count": None,
 }
 
 _RESOLVE_RESULT = {

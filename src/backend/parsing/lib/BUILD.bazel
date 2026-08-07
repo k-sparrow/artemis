@@ -11,14 +11,6 @@ package(default_visibility = [
 ])
 
 py_library(
-    name = "sharding",
-    srcs = ["sharding.py"],
-    deps = [
-        requirement("pypdf"),
-    ],
-)
-
-py_library(
     name = "artifact",
     srcs = ["artifact.py"],
     deps = [
@@ -45,6 +37,5 @@ py_library(
     deps = [
         ":artifact",
         ":docling_client",
-        ":sharding",
     ],
 )

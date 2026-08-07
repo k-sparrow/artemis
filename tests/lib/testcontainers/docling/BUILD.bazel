@@ -1,0 +1,44 @@
+# -------------------------------------
+# Copyright (c) 2026, Dror Kabely
+# -------------------------------------
+#
+
+load("@pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
+
+package(
+    default_visibility = ["//tests:__subpackages__"],
+)
+
+py_library(
+    name = "docling",
+    testonly = True,
+    srcs = ["docling.py"],
+    deps = [
+        requirement("docker"),
+        requirement("testcontainers"),
+        requirement("typing-extensions"),
+    ],
+)
+
+py_library(
+    name = "docling_ray",
+    testonly = True,
+    srcs = ["docling_ray.py"],
+    data = ["docker-compose.ray.yaml"],
+    deps = [
+        "//tests/lib:polling",
+        requirement("testcontainers"),
+        requirement("typing-extensions"),
+    ],
+)
+
+py_library(
+    name = "pkg",
+    testonly = True,
+    srcs = ["__init__.py"],
+    deps = [
+        ":docling",
+        ":docling_ray",
+    ],
+)
