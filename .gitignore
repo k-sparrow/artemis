@@ -6,3 +6,6 @@ MODULE.bazel.lock
 /.venv*
 /venv*
 **/__pycache__*/
+
+# eval datasets fetched from third parties (non-commercial licenses, not ours to redistribute)
+/experiments/eval/datasets/*/corpus/
