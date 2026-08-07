@@ -585,10 +585,11 @@ services:
     networks:
       - default
   # <<< deploy-only
-  # >>> local-dev-only
+  # >>> dev-only
   # Ray cluster backing docling-serve's Ray engine (server-side PDF page-slice
-  # fan-out) — dev-compose only for now, see TODOs.md Epic 21. Redis is Ray's
-  # GCS backend here, unrelated to Celery's RabbitMQ broker.
+  # fan-out) — dev + test compose; release promotion deferred, see TODOs.md
+  # Epic 21 §21.7. Redis is Ray's GCS backend here, unrelated to Celery's
+  # RabbitMQ broker.
   redis:
     profiles: [ai]
     image: "redis:7-alpine"
@@ -640,7 +641,7 @@ services:
         condition: service_healthy
     networks:
       - default
-  # <<< local-dev-only
+  # <<< dev-only
   docling-serve:
     profiles: [ai]
     image: "{DOCLING_IMAGE}"
@@ -665,17 +666,17 @@ services:
       # <<< deploy-only
       HF_HUB_OFFLINE: "${IS_AIR_GAPPED:-0}"
       NVIDIA_VISIBLE_DEVICES: "all" # https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/docker-specialized.html{DOCLING_ENGINE_ENV_BLOCK}{DOCLING_GPU_BLOCK}
-    # >>> deploy-only
     depends_on:
+      # >>> deploy-only
       docling-model-downloader:
         condition: service_completed_successfully
-      # >>> local-dev-only
+      # <<< deploy-only
+      # >>> dev-only
       ray-head:
         condition: service_healthy
       redis:
         condition: service_healthy
-        # <<< local-dev-only
-    # <<< deploy-only
+      # <<< dev-only
     restart: always
     networks:
       - default
@@ -947,9 +948,9 @@ volumes:
   docling-models:
   tei-models:
   colbert-models:
-  # >>> local-dev-only
+  # >>> dev-only
   redis-data:
-  # <<< local-dev-only
+  # <<< dev-only
 configs:
   rabbitmq-conf:
     content: |

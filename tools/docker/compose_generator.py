@@ -18,15 +18,21 @@ The template file uses {PLACEHOLDER} markers:
   {COLBERT_COMMAND_BLOCK}  Full YAML list-form command block for the ColBERT vLLM service
   {COLBERT_GPU_BLOCK}      Multi-line YAML block for nvidia runtime + deploy section
   {DOCLING_ENGINE_ENV_BLOCK}  Extra docling-serve `environment:` entries selecting the
-                       Ray-backed engine (server-side PDF page-slice fan-out); empty in
-                       test/release (docling-serve stays on its local sequential engine)
+                       Ray-backed engine (server-side PDF page-slice fan-out); set in
+                       dev + test, empty in release (docling-serve there stays on its
+                       local sequential engine until Epic 21 §21.7 promotes it)
   {ARTEMIS_TAG_DEV}    Tag for artemis app images that ship a :dev variant
   {ARTEMIS_TAG_LATEST} Tag for artemis images that ship a :latest variant
 
 Modes
 -----
   dev      Local development. Artemis images at :dev/:latest; everything published.
-  test     e2e via testcontainers. CPU Docling/TEI, no GPU mounts.
+  test     e2e via testcontainers. CPU TEI, no GPU mounts. Docling-serve runs the
+           Ray-backed engine on the cu128 image but without a GPU reservation —
+           the Ray cluster's actual conversion work falls back to CPU (slower, still
+           correct); this deliberately reuses the cu128 image rather than switching to
+           a lighter CPU-only tag since only the cu128 image is proven to bundle the
+           Ray engine's dependencies (see TODOs.md Epic 21).
   release  Single-host staging/release of TAGGED images. Differs from dev by:
              - artemis images pinned to ${ARTEMIS_VERSION} (must be set)
              - dev-tools services dropped (the `# >>> dev-only` … `# <<< dev-only`
@@ -42,10 +48,6 @@ Modes
   `# >>> deploy-only` / `# <<< deploy-only` — removed in test mode only
     Use deploy-only for model-downloader init services and their depends_on
     references: they are a deployment feature, not needed for e2e test containers.
-  `# >>> local-dev-only` / `# <<< local-dev-only` — kept in dev only, removed in
-    both test and release. Use for infra that backs an opt-in dev capability
-    (e.g. the Ray cluster behind docling-serve's Ray engine) that hasn't been
-    validated/rolled out to release yet and isn't needed by the e2e test stack.
 
 Bazel integration
 -----------------
@@ -86,15 +88,9 @@ _DEV_ONLY_CLOSE = "# <<< dev-only"
 _DEPLOY_ONLY_OPEN = "# >>> deploy-only"
 _DEPLOY_ONLY_CLOSE = "# <<< deploy-only"
 
-# Markers for blocks kept in dev only, stripped from both test and release —
-# an opt-in dev capability not yet rolled out to release, and not exercised by
-# the e2e test stack.
-_LOCAL_DEV_ONLY_OPEN = "# >>> local-dev-only"
-_LOCAL_DEV_ONLY_CLOSE = "# <<< local-dev-only"
-
 # docling-serve Ray engine — server-side PDF page-slice fan-out across a Ray
-# cluster (ray-head + ray-worker, GCS backed by redis). Dev-compose only for
-# now; see TODOs.md Epic 21.
+# cluster (ray-head + ray-worker, GCS backed by redis). Dev + test compose for
+# now; release promotion deferred, see TODOs.md Epic 21 §21.7.
 _DOCLING_RAY_ENGINE_ENV_BLOCK = (
     "\n"
     '      DOCLING_SERVE_ENG_KIND: "ray"\n'
@@ -161,9 +157,13 @@ _DEV_SUBS: dict[str, str] = {
 }
 
 _TEST_SUBS: dict[str, str] = {
-    "DOCLING_IMAGE": "ghcr.io/docling-project/docling-serve:main",
+    # cu128, not the lighter :main CPU tag: the Ray engine's dependencies (Ray
+    # runtime, redis client) are only proven present on cu128 — see TODOs.md
+    # Epic 21. No GPU is reserved (DOCLING_GPU_BLOCK empty below), so this
+    # still runs CPU-only, just from the same image dev/release use.
+    "DOCLING_IMAGE": "ghcr.io/docling-project/docling-serve-cu128:v1.29.0",
     "DOCLING_GPU_BLOCK": "",
-    "DOCLING_ENGINE_ENV_BLOCK": "",
+    "DOCLING_ENGINE_ENV_BLOCK": _DOCLING_RAY_ENGINE_ENV_BLOCK,
     "TEI_IMAGE": "ghcr.io/huggingface/text-embeddings-inference:cpu-1.6",
     "TEI_MODEL": "BAAI/bge-small-en-v1.5",
     "TEI_POOLING": "cls",
@@ -184,11 +184,12 @@ _TEST_SUBS: dict[str, str] = {
 
 # Release reuses the dev (GPU, prod-image) substitutions, only the artemis tags
 # differ — both collapse to the pinned ${ARTEMIS_VERSION}. The Ray engine is
-# dev-compose only for now (Epic 21) — explicitly overridden back to the local
-# engine here rather than inherited from _DEV_SUBS. The local-dev-only markers
-# around the ray-head/ray-worker/redis services strip those services from the
-# release output regardless; this override keeps docling-serve's own env block
-# consistent with that (no dangling DOCLING_SERVE_ENG_KIND=ray with no cluster).
+# dev + test only for now (Epic 21 §21.7 covers release promotion) — explicitly
+# overridden back to the local engine here rather than inherited from _DEV_SUBS.
+# The dev-only markers around the ray-head/ray-worker/redis services already
+# strip those services from the release output; this override keeps
+# docling-serve's own env block consistent with that (no dangling
+# DOCLING_SERVE_ENG_KIND=ray with no cluster to talk to).
 _RELEASE_SUBS: dict[str, str] = {
     **_DEV_SUBS,
     "DOCLING_ENGINE_ENV_BLOCK": "",
@@ -247,28 +248,6 @@ def _strip_deploy_only(lines: list[str], *, keep_content: bool) -> list[str]:
     return out
 
 
-def _strip_local_dev_only(lines: list[str], *, keep_content: bool) -> list[str]:
-    """Drop `# >>> local-dev-only` … `# <<< local-dev-only` marker blocks.
-
-    keep_content=True  → remove only the marker lines (dev: section stays).
-    keep_content=False → remove the markers AND everything between them (test/release).
-    """
-    out: list[str] = []
-    inside = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped == _LOCAL_DEV_ONLY_OPEN:
-            inside = True
-            continue
-        if stripped == _LOCAL_DEV_ONLY_CLOSE:
-            inside = False
-            continue
-        if inside and not keep_content:
-            continue
-        out.append(line)
-    return out
-
-
 def _strip_unpublished_ports(lines: list[str]) -> list[str]:
     """Remove published `ports:` blocks for every service not in the allowlist.
 
@@ -316,7 +295,6 @@ def generate(template: str, mode: str) -> str:
     lines = result.split("\n")
     lines = _strip_dev_only(lines, keep_content=(mode != "release"))
     lines = _strip_deploy_only(lines, keep_content=(mode != "test"))
-    lines = _strip_local_dev_only(lines, keep_content=(mode == "dev"))
     if mode == "release":
         lines = _strip_unpublished_ports(lines)
     result = "\n".join(lines)
