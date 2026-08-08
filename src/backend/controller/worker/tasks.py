@@ -298,8 +298,10 @@ def ingest(
 #           submit_parse.s(…)   → SubmitResult dict
 #           poll_parse.s(…)     → SubmitResult dict      (polls until conversion done)
 #           resolve_parse.s(…)  → ResolveResult dict     (downloads + caches conversion)
-#           submit_chunk.s(…)   → ChunkSubmitResult dict (Epic 21 — chunking is its own stage)
-#           poll_chunk.s(…)     → BlobRef dict           (polls until chunk done, finalizes)
+#           submit_chunk.s(…)   → ChunkSubmitResult dict (Epic 21 —
+#                                                         chunking is its own stage)
+#           poll_chunk.s(…)     → BlobRef dict           (polls until chunk done,
+#                                                         finalizes)
 #        ))
 #
 # The BlobRef dict from poll_chunk flows into index as its first positional arg.

@@ -40,6 +40,18 @@ Docling adapter for now. A future direction (not started) is retiring this shim 
 and having the controller worker call docling-serve directly, since most heavy lifting —
 including page-slice fan-out — now happens server-side; see TODOs.md Epic 21.
 
+Both convert and chunk results come back via an S3Target rather than inline in the HTTP
+response (Epic 21 §21.9) — docling-serve writes the artifact directly into this service's own
+bucket instead of returning it in the task-result body, so a large `DoclingDocument` JSON never
+has to cross an HTTP response. `resolve_endpoint`/`chunk_finalize_endpoint` discover the exact
+written key via a recursive listing (`_discover_s3_result_key`) rather than guessing it —
+docling-jobkit nests the artifact under path segments (a format-type folder always, and on some
+versions an extra hash-subdirectory) with no API knob to disable. `PresignedUrlTarget` was
+considered and rejected: it doesn't work against locally-deployed S3 clusters (confirmed
+directly in code in a prior session) and is explicitly disallowed for chunk endpoints regardless
+(`docling-serve` returns 422 — `"presigned_url target is not supported for chunk endpoints"`),
+so plain `S3Target` is used for both convert and chunk rather than mixing target kinds.
+
 ---
 
 ## Async Parse + Chunk Flow
@@ -115,14 +127,22 @@ Docling Serve's `ConversionStatus` is normalised as follows:
 
 Request body: `{parsing_task_id, obj_id}`.
 
-1. `GET /v1/result/{parsing_task_id}` → `DoclingDocument`.
-2. Write replay cache: `REPLAY_CACHE_BUCKET/replay/{obj_id}.json`.
-3. Derive pages via `build_pages()` (`lib/artifact.py`, which calls `split_pages()` in
+1. `submit_endpoint` pointed docling-serve's `target` at
+   `REPLAY_CACHE_BUCKET/docling-out/convert/{obj_id}/` (an `S3Target`, not `inbody`) — the
+   conversion result already landed there server-side by the time status reported `"success"`.
+2. Discover the exact written key: recursively list `docling-out/convert/{obj_id}/`, filter to
+   keys ending `.json`, sort by basename, take the sole match (`_discover_s3_result_key`;
+   `502` if none found — docling-serve reported success but produced nothing discoverable).
+3. Read those bytes once and parse into a `DoclingDocument`.
+4. Copy the same bytes to the stable replay cache key: `REPLAY_CACHE_BUCKET/replay/{obj_id}.json`
+   — downstream consumers (chunk submit, future re-chunk/citation tooling) reference this fixed
+   key, never the scratch prefix. Delete the scratch key.
+5. Derive pages via `build_pages()` (`lib/artifact.py`, which calls `split_pages()` in
    `lib/core/adapters/loaders/docling.py`): `dl_doc.export_to_markdown(page_break_placeholder=
    "<!-- ARTEMIS_PAGE_BREAK -->")` once, then splits on the placeholder to produce
    `(page_no, markdown)` tuples.
-4. Write pages cache: `REPLAY_CACHE_BUCKET/pages/{obj_id}.json`.
-5. Return `{obj_id}` — no chunk job submitted here.
+6. Write pages cache: `REPLAY_CACHE_BUCKET/pages/{obj_id}.json`.
+7. Return `{obj_id}` — no chunk job submitted here.
 
 ### Chunk Submit (`POST /v1/chunk/submit`)
 
@@ -131,7 +151,9 @@ replay cache for this `obj_id`.
 
 1. `POST /v1/chunk/hybrid/source/async` pointing at `REPLAY_CACHE_BUCKET/replay/{obj_id}.json`
    as an S3 source — docling-serve fetches the JSON directly, this service never re-reads or
-   re-uploads it.
+   re-uploads it — with `target` pointed at `REPLAY_CACHE_BUCKET/docling-out/chunk/{obj_id}/`
+   (`S3Target`) and `convert_options.to_formats: []` to suppress the incidental json/md/html/etc.
+   uploads `ResultsProcessor` would otherwise also write alongside the chunks file.
 2. Return `{chunking_task_id, obj_id}`.
 
 ### Chunk Finalize (`POST /v1/chunk/finalize`)
@@ -139,12 +161,15 @@ replay cache for this `obj_id`.
 Request body: `{chunking_task_id, obj_id, metadata}`. Must only be called after
 `GET /v1/chunk/status/{chunking_task_id}` returns `"success"`.
 
-1. `GET /v1/result/{chunking_task_id}` → chunk list.
-2. Read `REPLAY_CACHE_BUCKET/pages/{obj_id}.json` → cached `Page[]` (never re-fetches or
+1. Discover the written chunks key: recursively list `docling-out/chunk/{obj_id}/`, filter to
+   keys ending `.chunks.jsonl`, sort by basename, take the sole match. `502` if none found.
+2. Read and parse the newline-delimited JSON — one `ChunkedDocumentResultItem`-shaped dict per
+   line, the same schema as the old inline `chunks` list. Delete the scratch key.
+3. Read `REPLAY_CACHE_BUCKET/pages/{obj_id}.json` → cached `Page[]` (never re-fetches or
    re-parses the `DoclingDocument`).
-3. Map chunks → `ParsedChunk[]`, build `ParseArtifact` from chunks + cached pages.
-4. Write to `PARSED_ARTIFACTS_BUCKET/parse/{obj_id}.json`.
-5. Return `BlobRef`.
+4. Map chunks → `ParsedChunk[]`, build `ParseArtifact` from chunks + cached pages.
+5. Write to `PARSED_ARTIFACTS_BUCKET/parse/{obj_id}.json`.
+6. Return `BlobRef`.
 
 ---
 
@@ -201,6 +226,14 @@ already in memory) and read back by `chunk_finalize_endpoint` to build the final
 
 Both keys are private to the parsing service; no other service reads from this bucket.
 
+Two further prefixes in the same bucket are purely transient — docling-serve's `S3Target`
+scratch space, discovered and deleted within a single request (Epic 21 §21.9), never
+referenced after that request completes:
+```
+docling-out/convert/{obj_id}/   — conversion output, before it's copied to replay_key()
+docling-out/chunk/{obj_id}/     — chunk output, before it's read into the final ParseArtifact
+```
+
 ---
 
 ## Configuration
@@ -215,8 +248,10 @@ Both keys are private to the parsing service; no other service reads from this b
 | `PARSED_ARTIFACTS_BUCKET` | `parsed-chunks` | |
 | `REPLAY_CACHE_BUCKET` | `docling-replay` | |
 | `DOCLING_STATUS_TIMEOUT` | `30.0` | Seconds, for status proxy calls (parse and chunk) |
-| `DOCLING_RESOLVE_TIMEOUT` | `120.0` | Seconds, for resolve (conversion result download + replay/pages cache write) |
-| `DOCLING_FINALIZE_TIMEOUT` | `60.0` | Seconds, for chunk finalize (chunk result fetch + artifact write) |
 | `LOADER_TYPE` | `DOCLING` | `DOCLING` or `PYMUPDF4LLM` (dev fallback, no GPU) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | |
 | `OTEL_SERVICE_NAME` | `backend-parsing` | |
+
+`DOCLING_RESOLVE_TIMEOUT` / `DOCLING_FINALIZE_TIMEOUT` were removed (Epic 21 §21.9) — resolve
+and chunk finalize no longer call docling-serve at all (S3 listing/read/write instead of an
+inline HTTP fetch), so there's no docling-serve HTTP call left for those settings to bound.
