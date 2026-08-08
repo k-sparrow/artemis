@@ -79,8 +79,8 @@ matter to Artemis:
 | `PresignedUrlTarget` | docling-serve computes a presigned URL itself and returns it in the result body (`ArtifactRef.uri`) | **No** — `app.py` returns `422` with `"presigned_url target is not supported for chunk endpoints"` for both `/v1/chunk/*/file/async` and `/v1/chunk/*/source/async` |
 
 Production submissions (`submit_source`, `submit_chunk_source`) use `S3Target` for **both**
-convert and chunk *results*, pointing `key_prefix` at a scratch prefix in the parsing service's
-own `REPLAY_CACHE_BUCKET` (Epic 21 §21.9 — avoids pulling a potentially large `DoclingDocument`
+convert and chunk, pointing `key_prefix` at a scratch prefix in the parsing service's own
+`REPLAY_CACHE_BUCKET` (Epic 21 §21.9 — avoids pulling a potentially large `DoclingDocument`
 JSON, or a large chunk list, through an HTTP response body). `PresignedUrlTarget` — despite
 being `ConvertSourcesRequest`'s own default — was considered and rejected for the convert side
 too, for consistency (using one target kind everywhere rather than mixing) and because it
@@ -89,36 +89,6 @@ session, not just documentation). `InBodyTarget` remains in use for `submit_file
 `submit_chunk` (multipart, inline-bytes paths) — those are non-production callers
 (`experiments/eval/runners/retrieval_eval.py`, `test_ray_engine.py`) that never had a large-payload
 problem to begin with.
-
-**The *source* side is more restricted than the target side, and differs between convert and
-chunk** — this was gotten wrong in an earlier pass of Epic 21 §21.9 and hit as a live `422` on
-`/v1/convert/source/async` before being corrected. Confirmed directly against docling-serve
-v1.29.0's request models:
-
-- `ConvertSourcesRequest.sources` (used by `/v1/convert/source/async`) and
-  `BaseChunkDocumentsRequest.sources` (used by all `/v1/chunk/*/source/async` endpoints) are
-  both typed `FileSourceRequest | HttpSourceRequest` only — an `S3Source` there is a **schema-level
-  422** (Pydantic discriminated-union rejection before any policy check ever runs), not a
-  disableable policy toggle.
-- `BatchConvertSourcesRequest.sources` (used by `/v1/convert/source/batch`) is the only source
-  union in this version that includes `S3SourceRequest`. Despite the name and the fact that a
-  prior version of this doc described client-side batch/sharding as retired, `/source/batch` is
-  still a single-request, async, `task_id`-pollable call through the same orchestrator as
-  `/source/async` for a single source — nothing else about the submit/poll/resolve flow differs.
-  `submit_source` uses this endpoint for exactly that reason.
-- **There is no batch equivalent for chunk endpoints in docling-serve v1.29.0** — `app.py` only
-  registers `/v1/chunk/{hybrid,hierarchical}/{source,file}/async` (and their sync counterparts),
-  no `/v1/chunk/*/source/batch`. So a chunk submission can never hand docling-serve an S3
-  *source* reference in this version, full stop. `submit_chunk_source` therefore has the parsing
-  service read the replay-cached `DoclingDocument` JSON itself (a small extra read against its
-  own S3-compatible storage, not through docling-serve) and embeds it as a base64
-  `FileSourceRequest` — the *target* side still goes to `S3Target`, since
-  `/v1/chunk/hybrid/source/async` (the JSON-body variant) is the only chunk endpoint whose
-  `target` field accepts anything but inbody/zip; the `/file/async` multipart variant hard-codes
-  `target` to inbody-or-zip only, so it couldn't have been used here either way. The bytes
-  crossing the wire are the *converted* JSON, not the original PDF, so this doesn't reintroduce
-  the large-payload problem this epic set out to avoid — it's meaningfully smaller for the vast
-  majority of documents (no rasterized page images unless image export mode is enabled).
 
 `S3Target`'s `key_prefix` is honored, but the exact written key underneath it is not fully
 predictable: `docling_jobkit.convert.results_processor.ResultsProcessor` nests the artifact
@@ -139,10 +109,9 @@ also collect files the discovery listing has to filter past.
 
 Chunking is a fully decoupled stage from conversion in the parsing service (Epic 21 §21.8) —
 it happens after `/v1/parse/resolve` has written the converted `DoclingDocument` to its
-replay cache, via a separate `/v1/chunk/submit` call. `/v1/chunk/submit` reads the replay-cached
-JSON itself (`chunk_submit_endpoint`, `router.py`) and hands docling-serve the bytes inline —
-no chunk source endpoint in this docling-serve version accepts an S3 reference (see above), so
-this is not a choice made for symmetry with conversion, it's the only option:
+replay cache, via a separate `/v1/chunk/submit` call. In production the parsing service
+always submits chunk jobs as an S3 source (mirroring conversion's `source_ref` path), not
+inline file bytes, so docling-serve fetches the JSON itself:
 
 ```
 POST /v1/chunk/hybrid/source/async
@@ -150,22 +119,19 @@ Content-Type: application/json
 
 {
   "convert_options": {"to_formats": []},
-  "sources": [{"kind": "file", "base64_string": "<base64 DoclingDocument JSON>", "filename": "doc.json"}],
+  "sources": [{"kind": "s3", "endpoint": ..., "bucket": ..., "key_prefix": "replay/{obj_id}.json", ...}],
   "target": {"kind": "s3", "endpoint": ..., "bucket": ..., "key_prefix": "docling-out/chunk/{obj_id}/", ...}
 }
 ```
 
-`POST /v1/chunk/hybrid/file/async` (multipart form, not JSON body) also exists and is used only
-by callers with no replay cache to read from (e.g.
-`experiments/eval/runners/retrieval_eval.py`) — it's a distinct, more restricted endpoint from
-the JSON-body `/source/async` variant used above: its `target` is a plain form field limited to
-`InBodyTarget`/`ZipTarget`, no `S3Target`, so it could never have been used for the production
-path regardless of the source-side fix.
+`POST /v1/chunk/hybrid/file/async` (multipart, inline bytes) also exists and is used only by
+callers with no S3 reference to hand off (e.g. `experiments/eval/runners/retrieval_eval.py`),
+and stays on `InBodyTarget`.
 
-Both return `{"task_id": "<uuid>"}`. The multipart/inbody path fetches its result with
-`GET /v1/result/{task_id}` → `{"chunks": [...]}`; the production path (S3 target, inline base64
-source) discovers its result via listing instead (see above) — the chunk rows in the
-`.chunks.jsonl` file are the same `ChunkedDocumentResultItem` schema either way.
+Both return `{"task_id": "<uuid>"}`. The file-based path fetches its result with
+`GET /v1/result/{task_id}` → `{"chunks": [...]}`; the S3-source production path discovers its
+result via listing instead (see above) — the chunk rows in the `.chunks.jsonl` file are the same
+`ChunkedDocumentResultItem` schema either way.
 
 `target` for chunk endpoints defaults to in-body (`InBodyTarget()`) if omitted — unlike
 convert's `target`, that default isn't policy-configurable via `resolve_default_target`, but

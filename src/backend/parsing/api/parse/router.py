@@ -347,29 +347,25 @@ async def resolve_endpoint(
 async def chunk_submit_endpoint(
     request: ChunkSubmitRequest,
     docling_client: docling_client_dependency,
-    blob_store: blob_store_factory_dependency,
 ) -> ChunkSubmitResult:
     """Submit the replay-cached DoclingDocument for hybrid chunking.
 
     Must only be called after /v1/parse/resolve has written the replay cache
-    for this obj_id. No chunk endpoint in docling-serve v1.29.0 accepts an S3
-    source (confirmed against v1.29.0's request schemas — unlike convert,
-    there's no batch variant either), so this service reads the replay-cached
-    JSON itself and hands it to docling-serve inline; only the chunk *result*
-    still goes to S3 (see submit_chunk_source's docstring).
+    for this obj_id. docling-serve fetches the JSON directly from S3 — this
+    service never re-reads or re-uploads it (mirrors /v1/parse/submit's
+    source_ref path).
 
     Poll GET /v1/chunk/status/{task_id} until "success", then call
     POST /v1/chunk/finalize.
     """
     obj_id = request.obj_id
-    replay_store = blob_store(settings.REPLAY_CACHE_BUCKET)
-    replay_bytes = await replay_store.aget(service.replay_key(obj_id))
     chunking_task_id = await docling_client.submit_chunk_source(
-        content=replay_bytes,
         s3_endpoint=settings.S3_ENDPOINT,
         s3_access_key=settings.S3_ACCESS_KEY,
         s3_secret_key=settings.S3_SECRET_KEY,
         s3_secure=settings.S3_SECURE,
+        bucket=settings.REPLAY_CACHE_BUCKET,
+        key=service.replay_key(obj_id),
         target_bucket=settings.REPLAY_CACHE_BUCKET,
         target_key_prefix=service.chunk_scratch_prefix(obj_id),
         timeout=120.0,

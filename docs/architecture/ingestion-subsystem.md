@@ -163,9 +163,8 @@ sequenceDiagram
     participant S3 as MinIO S3
 
     CW->>PS: POST /v1/parse/submit {source_ref: BlobRef}
-    note over PS,Docling: Same single-submission path regardless of document size —<br/>large PDFs are fanned into page slices and converted<br/>concurrently server-side by Docling Serve's Ray engine (Epic 21).<br/>source AND target are both S3 (Epic 21 §21.9) — PS never touches the original document bytes.
-    PS->>Docling: POST /v1/convert/source/batch {source: S3, target: S3 docling-out/convert/{obj_id}/}
-    note over PS,Docling: "batch" despite being a single document — the only convert endpoint<br/>whose source union accepts S3; /source/async's does not (schema-level 422).
+    note over PS,Docling: Same single-submission path regardless of document size —<br/>large PDFs are fanned into page slices and converted<br/>concurrently server-side by Docling Serve's Ray engine (Epic 21).<br/>source AND target are both S3 (Epic 21 §21.9) — PS never touches document bytes.
+    PS->>Docling: POST /v1/convert/source/async {source: S3, target: S3 docling-out/convert/{obj_id}/}
     Docling->>S3: fetch source directly
     Docling-->>PS: task_id
     PS-->>CW: SubmitResult {parsing_task_id}
@@ -185,10 +184,8 @@ sequenceDiagram
     note over CW,PS: Chunking is a fully decoupled stage (Epic 21 §21.8)
 
     CW->>PS: POST /v1/chunk/submit
-    PS->>S3: read replay/{obj_id}.json
-    S3-->>PS: DoclingDocument JSON
-    note over PS,Docling: No chunk endpoint accepts an S3 source (no batch variant exists) —<br/>PS sends the bytes inline; target is still S3 (Epic 21 §21.9).
-    PS->>Docling: POST /v1/chunk/hybrid/source/async {source: inline base64, target: S3 docling-out/chunk/{obj_id}/}
+    PS->>Docling: POST /v1/chunk/hybrid/source/async {source: S3 replay/{obj_id}.json, target: S3 docling-out/chunk/{obj_id}/}
+    Docling->>S3: fetch replay JSON directly
     Docling-->>PS: task_id
     PS-->>CW: ChunkSubmitResult {chunking_task_id}
 
