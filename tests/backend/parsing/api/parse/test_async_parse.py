@@ -331,14 +331,21 @@ class TestResolveEndpoint:
 
 
 class TestChunkSubmitEndpoint:
-    def test_submits_replay_cache_from_s3(
+    @pytest.fixture(autouse=True)
+    def seed_replay_cache(self, store: InMemoryBlobStore) -> None:
+        store.put(f"replay/{OBJ_ID_STR}.json", _docling_doc_json())
+
+    def test_submits_replay_cache_inline(
         self, client: TestClient, docling_client: MagicMock
     ) -> None:
         """
-        /v1/chunk/submit hands docling-serve the replay-cache S3 location as
-        source AND a per-obj_id scratch prefix as target — it fetches the
-        JSON itself and writes the chunk result back to S3 rather than
-        returning it inline (Epic 21 §21.9).
+        /v1/chunk/submit reads the replay-cached DoclingDocument itself and
+        hands docling-serve the bytes inline — no chunk endpoint in
+        docling-serve v1.29.0 accepts an S3 source (confirmed against
+        v1.29.0's request schemas; unlike convert, there's no batch variant
+        either) — while the chunk *result* still goes to a per-obj_id scratch
+        prefix in S3 rather than back through the response body (Epic 21
+        §21.9).
         """
         resp = client.post("/v1/chunk/submit", json={"obj_id": OBJ_ID_STR})
         assert resp.status_code == 200
@@ -347,12 +354,11 @@ class TestChunkSubmitEndpoint:
             "obj_id": OBJ_ID_STR,
         }
         docling_client.submit_chunk_source.assert_awaited_once_with(
+            content=_docling_doc_json(),
             s3_endpoint=settings.S3_ENDPOINT,
             s3_access_key=settings.S3_ACCESS_KEY,
             s3_secret_key=settings.S3_SECRET_KEY,
             s3_secure=settings.S3_SECURE,
-            bucket=settings.REPLAY_CACHE_BUCKET,
-            key=f"replay/{OBJ_ID_STR}.json",
             target_bucket=settings.REPLAY_CACHE_BUCKET,
             target_key_prefix=parse_service.chunk_scratch_prefix(OBJ_ID_STR),
             timeout=120.0,

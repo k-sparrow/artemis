@@ -11,6 +11,8 @@ handles.
 
 from __future__ import annotations
 
+import base64
+
 import httpx
 from docling.datamodel.document import DoclingDocument
 
@@ -61,7 +63,18 @@ class DoclingParseClient:
         target_key_prefix: str,
         timeout: float = 120.0,
     ) -> str:
-        """POST /v1/convert/source/async with an S3 source AND S3 target → task_id.
+        """POST /v1/convert/source/batch with an S3 source AND S3 target → task_id.
+
+        `/v1/convert/source/async`'s `sources` field is typed
+        `FileSourceRequest | HttpSourceRequest` only — an S3 source there is a
+        schema-level 422 (Pydantic discriminated-union rejection), not a policy
+        toggle; confirmed directly against docling-serve v1.29.0's
+        `docling.datamodel.service.requests.ConvertSourcesRequest`. Only the
+        *batch* endpoint's `sources` union (`BatchConvertSourcesRequest`)
+        includes `S3SourceRequest`. Despite the name, `/source/batch` is still
+        a single-request, async, `task_id`-pollable call through the same
+        orchestrator as `/source/async` — nothing else about the submit/poll/
+        resolve flow changes.
 
         docling-serve both fetches the source and writes the converted JSON
         directly to S3 server-side — no document bytes cross this process in
@@ -106,7 +119,7 @@ class DoclingParseClient:
         async with httpx.AsyncClient(
             base_url=self._base_url, timeout=timeout
         ) as client:
-            resp = await client.post("/v1/convert/source/async", json=body)
+            resp = await client.post("/v1/convert/source/batch", json=body)
             resp.raise_for_status()
             return resp.json()["task_id"]
 
@@ -192,29 +205,37 @@ class DoclingParseClient:
     async def submit_chunk_source(
         self,
         *,
+        content: bytes,
         s3_endpoint: str,
         s3_access_key: str,
         s3_secret_key: str,
         s3_secure: bool,
-        bucket: str,
-        key: str,
         target_bucket: str,
         target_key_prefix: str,
         timeout: float = 120.0,
     ) -> str:
-        """POST /v1/chunk/hybrid/source/async with an S3 source AND S3 target → task_id.
+        """POST /v1/chunk/hybrid/source/async with an inline source AND S3 target → task_id.
 
-        Chunks a previously-converted DoclingDocument JSON directly from S3 —
-        mirrors submit_source: docling-serve fetches the source itself and
-        writes the chunk JSONL directly to S3, no bytes cross this process in
-        either direction (Epic 21 §21.9). `presigned_url` is not an option
-        here — docling-serve rejects it outright for chunk endpoints — so
-        plain S3Target is used for both convert and chunk rather than mixing
-        target kinds. `convert_options.to_formats: []` suppresses the
-        incidental json/md/html/etc. uploads `ResultsProcessor` would
-        otherwise also write alongside the chunks file, keeping only the
-        chunks JSONL under `target_key_prefix`. Caller discovers the written
-        key via a recursive listing — see `submit_source`'s docstring and
+        No chunk endpoint in docling-serve v1.29.0 accepts an S3 source —
+        confirmed directly against `docling.datamodel.service.requests.
+        BaseChunkDocumentsRequest`, whose `sources` field is typed
+        `FileSourceRequest | HttpSourceRequest` only, and there is no batch
+        equivalent of `/v1/chunk/*/source/async` the way `/v1/convert/
+        source/batch` exists for convert. `target`, unlike `sources`, does
+        accept `S3Target` on this endpoint (the `/file/async` multipart
+        variant restricts target to inbody/zip only — this JSON-body variant
+        is the only chunk endpoint that can write to S3 at all), so the
+        caller (`content`, already read from the replay cache — this is the
+        converted DoclingDocument JSON, not the original PDF, so it's
+        typically much smaller than the large-payload case this epic set out
+        to avoid) is embedded as a base64 `FileSourceRequest`, while the
+        chunk JSONL result still goes to S3 rather than the response body.
+        `presigned_url` remains unavailable for chunk endpoints outright.
+        `convert_options.to_formats: []` suppresses the incidental
+        json/md/html/etc. uploads `ResultsProcessor` would otherwise also
+        write alongside the chunks file, keeping only the chunks JSONL under
+        `target_key_prefix`. Caller discovers the written key via a recursive
+        listing — see `submit_source`'s docstring and
         `router._discover_s3_result_key` for why guessing the exact key isn't
         safe.
         """
@@ -222,13 +243,9 @@ class DoclingParseClient:
             "convert_options": {"to_formats": []},
             "sources": [
                 {
-                    "kind": "s3",
-                    "endpoint": s3_endpoint,
-                    "access_key": s3_access_key,
-                    "secret_key": s3_secret_key,
-                    "verify_ssl": s3_secure,
-                    "bucket": bucket,
-                    "key_prefix": key,
+                    "kind": "file",
+                    "base64_string": base64.b64encode(content).decode("ascii"),
+                    "filename": "doc.json",
                 }
             ],
             "target": {

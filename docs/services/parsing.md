@@ -6,7 +6,11 @@
 
 The parsing service is a stateless bridge between raw documents and the indexing pipeline.
 It accepts a file reference (claim-check), calls Docling Serve, and writes a structured
-`ParseArtifact` to MinIO. It never sends document bytes over HTTP to another service.
+`ParseArtifact` to MinIO. It never sends the original document bytes over HTTP to another
+service — conversion is an S3-to-S3 handoff end to end. The one exception is chunking: the
+already-*converted* `DoclingDocument` JSON (materially smaller than the source document in the
+common case) does cross the wire inline to Docling Serve, because no chunk endpoint in the
+deployed Docling Serve version accepts an S3 source (see below).
 
 ---
 
@@ -40,7 +44,7 @@ Docling adapter for now. A future direction (not started) is retiring this shim 
 and having the controller worker call docling-serve directly, since most heavy lifting —
 including page-slice fan-out — now happens server-side; see TODOs.md Epic 21.
 
-Both convert and chunk results come back via an S3Target rather than inline in the HTTP
+Both convert and chunk *results* come back via an S3Target rather than inline in the HTTP
 response (Epic 21 §21.9) — docling-serve writes the artifact directly into this service's own
 bucket instead of returning it in the task-result body, so a large `DoclingDocument` JSON never
 has to cross an HTTP response. `resolve_endpoint`/`chunk_finalize_endpoint` discover the exact
@@ -52,6 +56,21 @@ directly in code in a prior session) and is explicitly disallowed for chunk endp
 (`docling-serve` returns 422 — `"presigned_url target is not supported for chunk endpoints"`),
 so plain `S3Target` is used for both convert and chunk rather than mixing target kinds.
 
+The *source* side is not symmetric between convert and chunk, and got this wrong once already
+(a live `422` on `/v1/convert/source/async` before this was corrected) — confirmed directly
+against docling-serve v1.29.0's request schemas:
+
+- Convert: `/v1/convert/source/async`'s `sources` field only accepts inline `file`/`http` kinds
+  — `s3` is a schema-level rejection there. The batch endpoint (`/v1/convert/source/batch`) is
+  the only one whose `sources` union includes `s3`, and despite the name it's still a normal
+  single-document async/pollable call through the same orchestrator — `submit_endpoint` uses it
+  for exactly that reason.
+- Chunk: **no chunk endpoint in this Docling Serve version has a batch variant or otherwise
+  accepts an `s3` source**, so `chunk_submit_endpoint` reads the replay-cached JSON itself and
+  sends it inline (base64 `FileSourceRequest`) to `/v1/chunk/hybrid/source/async` — the only
+  chunk endpoint whose `target` can still be `S3Target` (the multipart `/file/async` variant
+  hard-codes `target` to inbody/zip only).
+
 ---
 
 ## Async Parse + Chunk Flow
@@ -60,15 +79,15 @@ The controller worker drives a scatter-gather pipeline across four long-running 
 Celery thread is blocked during conversion or chunking.
 
 ```
-submit_endpoint         → Docling Serve /v1/convert/file/async (or .../source/async)
+submit_endpoint         → Docling Serve /v1/convert/file/async (or .../source/batch)
                                ↓ polling via status_endpoint
 resolve_endpoint        → download conversion result
                         → write replay cache (raw DoclingDocument JSON)
                         → derive + cache pages (Markdown parents)
                                ↓
-chunk_submit_endpoint   → Docling Serve /v1/chunk/hybrid/source/async
-                          (reads the replay cache directly from S3 — no bytes
-                          re-uploaded here, mirrors submit's source_ref path)
+chunk_submit_endpoint   → reads replay cache from S3 itself, then
+                          Docling Serve /v1/chunk/hybrid/source/async
+                          (JSON sent inline — no chunk endpoint takes an S3 source)
                                ↓ polling via chunk_status_endpoint
 chunk_finalize_endpoint → fetch chunk result
                         → read cached pages (never re-derives them)
@@ -91,9 +110,10 @@ Form fields identical to `POST /v1/parse`. Logic:
 
 1. Materialise document bytes: inline `file` bytes are read directly and forwarded to
    `POST /v1/convert/file/async`; `source_ref` claim-check inputs are handed to docling-serve
-   as an S3 source via `POST /v1/convert/source/async` — docling-serve fetches the object
+   as an S3 source via `POST /v1/convert/source/batch` (the non-batch `/source/async` endpoint's
+   `sources` field doesn't accept `s3` at all — see above) — docling-serve fetches the object
    directly from MinIO/S3 itself, so this service never downloads the bytes into its own
-   memory (Epic 21 §21.3).
+   memory (Epic 21 §21.3, §21.9).
 2. Return `{parsing_task_id, obj_id}`.
 
 ### Status (`GET /v1/parse/status/{task_id}`, `GET /v1/chunk/status/{task_id}`)
@@ -149,12 +169,13 @@ Request body: `{parsing_task_id, obj_id}`.
 Request body: `{obj_id}`. Must only be called after `/v1/parse/resolve` has written the
 replay cache for this `obj_id`.
 
-1. `POST /v1/chunk/hybrid/source/async` pointing at `REPLAY_CACHE_BUCKET/replay/{obj_id}.json`
-   as an S3 source — docling-serve fetches the JSON directly, this service never re-reads or
-   re-uploads it — with `target` pointed at `REPLAY_CACHE_BUCKET/docling-out/chunk/{obj_id}/`
+1. Read `REPLAY_CACHE_BUCKET/replay/{obj_id}.json` into memory — no chunk endpoint in this
+   Docling Serve version accepts an S3 source, so this service must fetch it itself.
+2. `POST /v1/chunk/hybrid/source/async` with those bytes embedded as a base64
+   `FileSourceRequest`, `target` pointed at `REPLAY_CACHE_BUCKET/docling-out/chunk/{obj_id}/`
    (`S3Target`) and `convert_options.to_formats: []` to suppress the incidental json/md/html/etc.
    uploads `ResultsProcessor` would otherwise also write alongside the chunks file.
-2. Return `{chunking_task_id, obj_id}`.
+3. Return `{chunking_task_id, obj_id}`.
 
 ### Chunk Finalize (`POST /v1/chunk/finalize`)
 
