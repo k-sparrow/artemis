@@ -1,6 +1,7 @@
-"""Unit tests for the async-parse Celery tasks: poll_parse and poll_resolve.
+"""Unit tests for the async-parse Celery tasks: resolve_parse, submit_chunk,
+poll_parse, poll_chunk.
 
-Tasks are exercised via ``.run()`` to bypass broker machinery.  All external
+Tasks are exercised via ``.run()`` to bypass broker machinery. All external
 calls are patched; no infrastructure required.
 """
 
@@ -16,8 +17,10 @@ from celery.exceptions import MaxRetriesExceededError, Retry  # noqa: F401
 from src.backend.controller.worker.tasks import (
     DocumentChunkingError,
     DocumentConversionError,
+    poll_chunk,
     poll_parse,
-    poll_resolve,
+    resolve_parse,
+    submit_chunk,
 )
 
 # ---------------------------------------------------------------------------
@@ -30,6 +33,10 @@ _SUBMIT_RESULT = {
 }
 
 _RESOLVE_RESULT = {
+    "obj_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+}
+
+_CHUNK_SUBMIT_RESULT = {
     "chunking_task_id": "chunk-task-1",
     "obj_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 }
@@ -44,6 +51,13 @@ _KWARGS = {
     "task_id": "contract-task-id",
     "group_id": None,
     "operation": "CREATE",
+}
+
+_SOURCE = {
+    "source": "doc.pdf",
+    "content_type": "application/pdf",
+    "obj_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "object_type": "file",
 }
 
 
@@ -126,18 +140,95 @@ class TestPollParse:
 
 
 # ---------------------------------------------------------------------------
-# poll_resolve
+# resolve_parse
 # ---------------------------------------------------------------------------
 
 
-class TestPollResolve:
-    _SOURCE = {
-        "source": "doc.pdf",
-        "content_type": "application/pdf",
-        "obj_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-        "object_type": "file",
-    }
+class TestResolveParse:
+    def _run(self, mock_resolve: MagicMock) -> dict:
+        with patch(
+            "src.backend.controller.worker.tasks.call_parse_resolve", mock_resolve
+        ):
+            return resolve_parse.run(_SUBMIT_RESULT, **_KWARGS)
 
+    def test_success_returns_resolve_result(self) -> None:
+        """Result of call_parse_resolve is returned unchanged — no chunk job
+        submitted here, that's a fully separate stage (Epic 21)."""
+        mock = MagicMock(return_value=_RESOLVE_RESULT)
+        result = self._run(mock)
+        assert result == _RESOLVE_RESULT
+
+    def test_circuit_breaker_schedules_retry(self) -> None:
+        mock = MagicMock(side_effect=pybreaker.CircuitBreakerError("open"))
+        with pytest.raises(pybreaker.CircuitBreakerError):
+            self._run(mock)
+
+    def test_5xx_schedules_retry(self) -> None:
+        mock = MagicMock(side_effect=_make_http_error(503))
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            self._run(mock)
+        assert exc_info.value.response.status_code == 503
+
+    def test_4xx_reraises_permanently(self) -> None:
+        mock = MagicMock(side_effect=_make_http_error(422))
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            self._run(mock)
+        assert exc_info.value.response.status_code == 422
+
+    def test_called_with_submit_result(self) -> None:
+        mock = MagicMock(return_value=_RESOLVE_RESULT)
+        self._run(mock)
+        assert mock.call_args[1]["submit_result"] == _SUBMIT_RESULT
+
+
+# ---------------------------------------------------------------------------
+# submit_chunk
+# ---------------------------------------------------------------------------
+
+
+class TestSubmitChunk:
+    def _run(self, mock_submit: MagicMock) -> dict:
+        with patch(
+            "src.backend.controller.worker.tasks.call_chunk_submit", mock_submit
+        ):
+            return submit_chunk.run(_RESOLVE_RESULT, **_KWARGS)
+
+    def test_success_returns_chunk_submit_result_with_timestamp(self) -> None:
+        mock = MagicMock(return_value=dict(_CHUNK_SUBMIT_RESULT))
+        result = self._run(mock)
+        assert result["chunking_task_id"] == _CHUNK_SUBMIT_RESULT["chunking_task_id"]
+        assert result["obj_id"] == _CHUNK_SUBMIT_RESULT["obj_id"]
+        assert "submitted_at" in result
+
+    def test_circuit_breaker_schedules_retry(self) -> None:
+        mock = MagicMock(side_effect=pybreaker.CircuitBreakerError("open"))
+        with pytest.raises(pybreaker.CircuitBreakerError):
+            self._run(mock)
+
+    def test_5xx_schedules_retry(self) -> None:
+        mock = MagicMock(side_effect=_make_http_error(503))
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            self._run(mock)
+        assert exc_info.value.response.status_code == 503
+
+    def test_4xx_reraises_permanently(self) -> None:
+        mock = MagicMock(side_effect=_make_http_error(422))
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            self._run(mock)
+        assert exc_info.value.response.status_code == 422
+
+    def test_called_with_resolve_result(self) -> None:
+        mock = MagicMock(return_value=dict(_CHUNK_SUBMIT_RESULT))
+        self._run(mock)
+        assert mock.call_args[1]["resolve_result"] == _RESOLVE_RESULT
+
+
+# ---------------------------------------------------------------------------
+# poll_chunk
+# ---------------------------------------------------------------------------
+
+
+class TestPollChunk:
     def _run(
         self,
         mock_status: MagicMock,
@@ -145,14 +236,14 @@ class TestPollResolve:
     ) -> dict:
         mock_finalize = mock_finalize or MagicMock(return_value=_BLOB_REF)
         with (
-            patch("src.backend.controller.worker.tasks.call_parse_status", mock_status),
+            patch("src.backend.controller.worker.tasks.call_chunk_status", mock_status),
             patch(
-                "src.backend.controller.worker.tasks.call_parse_finalize", mock_finalize
+                "src.backend.controller.worker.tasks.call_chunk_finalize", mock_finalize
             ),
         ):
-            return poll_resolve.run(
-                _RESOLVE_RESULT,
-                source=self._SOURCE,
+            return poll_chunk.run(
+                _CHUNK_SUBMIT_RESULT,
+                source=_SOURCE,
                 **_KWARGS,
             )
 
@@ -217,13 +308,13 @@ class TestPollResolve:
         assert exc_info.value.response.status_code == 503
 
     def test_finalize_called_with_correct_obj_id(self) -> None:
-        """finalize metadata must include the obj_id from ResolveResult."""
+        """finalize metadata must include the obj_id from ChunkSubmitResult."""
         mock_status = MagicMock(return_value=_make_status("success"))
         mock_finalize = MagicMock(return_value=_BLOB_REF)
         self._run(mock_status, mock_finalize)
         assert (
             mock_finalize.call_args[1]["metadata"]["obj_id"]
-            == _RESOLVE_RESULT["obj_id"]
+            == _CHUNK_SUBMIT_RESULT["obj_id"]
         )
 
     def test_status_called_with_chunking_task_id(self) -> None:
@@ -232,7 +323,8 @@ class TestPollResolve:
         mock_finalize = MagicMock(return_value=_BLOB_REF)
         self._run(mock_status, mock_finalize)
         assert (
-            mock_status.call_args[1]["task_id"] == _RESOLVE_RESULT["chunking_task_id"]
+            mock_status.call_args[1]["task_id"]
+            == _CHUNK_SUBMIT_RESULT["chunking_task_id"]
         )
 
 
@@ -274,17 +366,15 @@ class TestPollParseRetryExhaustion:
         assert exc_info.value.response.status_code == 503
 
 
-class TestPollResolveRetryExhaustion:
-    _SOURCE = TestPollResolve._SOURCE
-
+class TestPollChunkRetryExhaustion:
     def test_processing_exhausts_max_retries(self) -> None:
         """The 1440th 'processing' chunk-status retry must give up, not retry forever."""
         mock = MagicMock(return_value=_make_status("processing"))
-        with patch("src.backend.controller.worker.tasks.call_parse_status", mock):
+        with patch("src.backend.controller.worker.tasks.call_chunk_status", mock):
             with pytest.raises(MaxRetriesExceededError):
-                poll_resolve.apply(
-                    args=(_RESOLVE_RESULT,),
-                    kwargs={**_KWARGS, "source": self._SOURCE},
+                poll_chunk.apply(
+                    args=(_CHUNK_SUBMIT_RESULT,),
+                    kwargs={**_KWARGS, "source": _SOURCE},
                     retries=1440,
                 )
 
@@ -293,15 +383,15 @@ class TestPollResolveRetryExhaustion:
         mock_status = MagicMock(return_value=_make_status("success"))
         mock_finalize = MagicMock(side_effect=_make_http_error(503))
         with (
-            patch("src.backend.controller.worker.tasks.call_parse_status", mock_status),
+            patch("src.backend.controller.worker.tasks.call_chunk_status", mock_status),
             patch(
-                "src.backend.controller.worker.tasks.call_parse_finalize", mock_finalize
+                "src.backend.controller.worker.tasks.call_chunk_finalize", mock_finalize
             ),
         ):
             with pytest.raises(httpx.HTTPStatusError) as exc_info:
-                poll_resolve.apply(
-                    args=(_RESOLVE_RESULT,),
-                    kwargs={**_KWARGS, "source": self._SOURCE},
+                poll_chunk.apply(
+                    args=(_CHUNK_SUBMIT_RESULT,),
+                    kwargs={**_KWARGS, "source": _SOURCE},
                     retries=1440,
                 )
         assert exc_info.value.response.status_code == 503

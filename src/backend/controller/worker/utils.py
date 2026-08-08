@@ -38,7 +38,9 @@ __all__ = [
     "call_parse_submit",
     "call_parse_status",
     "call_parse_resolve",
-    "call_parse_finalize",
+    "call_chunk_submit",
+    "call_chunk_status",
+    "call_chunk_finalize",
     "call_indexing_service",
     "call_delete_service",
     "parsing_breaker",
@@ -147,7 +149,9 @@ def call_parse_status(
 ) -> dict:
     """GET /v1/parse/status/{task_id} → ParseStatus dict.
 
-    Non-blocking single check. Works for both conversion and chunk task_ids.
+    Non-blocking single check for a conversion task. Use call_chunk_status
+    for chunk tasks (Epic 21) — both hit the same underlying docling-serve
+    proxy logic (one unified task namespace), just different service paths.
     """
     url = f"{parsing_url.rstrip('/')}/v1/parse/status/{task_id}"
 
@@ -169,8 +173,11 @@ def call_parse_resolve(
 ) -> dict:
     """POST /v1/parse/resolve → ResolveResult dict.
 
-    Downloads the completed conversion result, writes the replay cache, and
-    queues a hybrid chunk job. Returns immediately with a chunking_task_id.
+    Downloads the completed conversion result and writes the replay cache
+    (used both for citation/re-chunk lookups and as the source the chunk
+    stage reads directly from S3 — see call_chunk_submit). Returns
+    immediately with just the obj_id; chunking is a fully separate stage
+    (Epic 21), not bundled into resolve.
     """
     url = f"{parsing_url.rstrip('/')}/v1/parse/resolve"
     logger.info(
@@ -187,31 +194,89 @@ def call_parse_resolve(
 
     with _tracer.start_as_current_span("http.parse_resolve"):
         result = parsing_breaker.call(_request)
-    logger.info("parse_resolve=done chunk_task_id=%s", result.get("chunking_task_id"))
+    logger.info("parse_resolve=done obj_id=%s", result.get("obj_id"))
     return result
 
 
-def call_parse_finalize(
+def call_chunk_submit(
     resolve_result: dict,
+    parsing_url: str,
+    timeout: float,
+    logger: Logger,
+) -> dict:
+    """POST /v1/chunk/submit → ChunkSubmitResult dict.
+
+    Submits the replay-cached DoclingDocument (written by call_parse_resolve)
+    for hybrid chunking. docling-serve fetches it directly from S3 — this
+    call only ever carries an obj_id, never document bytes. Returns
+    immediately with a chunking_task_id.
+    """
+    url = f"{parsing_url.rstrip('/')}/v1/chunk/submit"
+    logger.info(
+        "chunk_submit=request url=%s obj_id=%s",
+        url,
+        resolve_result.get("obj_id"),
+    )
+
+    def _request() -> dict:
+        with httpx.Client(timeout=timeout) as http:
+            response = http.post(url, json=resolve_result)
+            response.raise_for_status()
+            return response.json()
+
+    with _tracer.start_as_current_span("http.chunk_submit"):
+        result = parsing_breaker.call(_request)
+    logger.info("chunk_submit=done chunk_task_id=%s", result.get("chunking_task_id"))
+    return result
+
+
+def call_chunk_status(
+    task_id: str,
+    parsing_url: str,
+    timeout: float,
+    logger: Logger,
+) -> dict:
+    """GET /v1/chunk/status/{task_id} → ParseStatus dict.
+
+    Non-blocking single check for a chunk task. Identical proxy logic to
+    call_parse_status — docling-serve uses one task namespace regardless of
+    task type — hits the dedicated /v1/chunk/ path so polling a chunk task
+    doesn't read as polling a parse task (Epic 21).
+    """
+    url = f"{parsing_url.rstrip('/')}/v1/chunk/status/{task_id}"
+
+    def _request() -> dict:
+        with httpx.Client(timeout=timeout) as http:
+            response = http.get(url)
+            response.raise_for_status()
+            return response.json()
+
+    with _tracer.start_as_current_span("http.chunk_status"):
+        return parsing_breaker.call(_request)
+
+
+def call_chunk_finalize(
+    chunk_submit_result: dict,
     metadata: dict,
     parsing_url: str,
     timeout: float,
     logger: Logger,
 ) -> dict:
-    """POST /v1/parse/finalize → BlobRef dict.
+    """POST /v1/chunk/finalize → BlobRef dict.
 
-    Fetches chunk result and builds the ParseArtifact from the replay cache.
-    Returns a BlobRef pointing at the written artifact.
+    Fetches the chunk result and merges it with the pages call_parse_resolve
+    already cached, writing the final ParseArtifact. Returns a BlobRef
+    pointing at the written artifact.
     """
-    url = f"{parsing_url.rstrip('/')}/v1/parse/finalize"
+    url = f"{parsing_url.rstrip('/')}/v1/chunk/finalize"
     logger.info(
-        "parse_finalize=request url=%s chunk_task_id=%s",
+        "chunk_finalize=request url=%s chunk_task_id=%s",
         url,
-        resolve_result.get("chunking_task_id"),
+        chunk_submit_result.get("chunking_task_id"),
     )
     body = {
-        "chunking_task_id": resolve_result["chunking_task_id"],
-        "obj_id": resolve_result["obj_id"],
+        "chunking_task_id": chunk_submit_result["chunking_task_id"],
+        "obj_id": chunk_submit_result["obj_id"],
         "metadata": metadata,
     }
 
@@ -221,9 +286,9 @@ def call_parse_finalize(
             response.raise_for_status()
             return response.json()
 
-    with _tracer.start_as_current_span("http.parse_finalize"):
+    with _tracer.start_as_current_span("http.chunk_finalize"):
         result = parsing_breaker.call(_request)
-    logger.info("parse_finalize=done key=%s", result.get("key"))
+    logger.info("chunk_finalize=done key=%s", result.get("key"))
     return result
 
 

@@ -115,8 +115,10 @@ class TestFetchAndParseIndexChain:
         _dispatch_ingest(dispatch_app, s3_source_bucket, namespace_id)
         wait_until_stub_called(indexing_stub, timeout=60)
 
-        # Async chain calls 5 parsing endpoints: submit + status×2 + resolve + finalize
-        assert len(parsing_stub.requests) == 5
+        # Async chain calls 6 parsing endpoints: submit + status + resolve +
+        # chunk/submit + chunk/status + chunk/finalize (chunking is a fully
+        # decoupled stage from conversion, Epic 21, but still hits this same host).
+        assert len(parsing_stub.requests) == 6
         assert len(indexing_stub.requests) == 1
 
     def test_parsing_stub_receives_correct_filename(
@@ -377,7 +379,7 @@ class TestRetryBehavior:
         The stub returns 503 on the first call (triggering autoretry) then
         falls back to its default 200.  After the retry succeeds:
           - indexing stub received exactly 2 POST calls (attempt + retry)
-          - parsing stub received 3 POST calls (parse sub-chain not retried)
+          - parsing stub received 4 POST calls (parse sub-chain not retried)
           - the parsed-chunks MinIO object is cleaned up (indexing eventually succeeded)
         """
         indexing_stub.push_response(503, {"detail": "service unavailable"})
@@ -390,8 +392,9 @@ class TestRetryBehavior:
         # retry_backoff=True means the first retry fires after ~2s.
         wait_until_stub_called_n_times(indexing_stub, n=2, timeout=60)
 
-        # Parse sub-chain: submit + resolve + finalize = 3 POSTs; status uses GET.
-        assert sum(1 for r in parsing_stub.requests if r["method"] == "POST") == 3
+        # Parse sub-chain: submit + resolve + chunk/submit + chunk/finalize =
+        # 4 POSTs; both status checks use GET.
+        assert sum(1 for r in parsing_stub.requests if r["method"] == "POST") == 4
         assert sum(1 for r in indexing_stub.requests if r["method"] == "POST") == 2
 
         # Successful retry means the index task completed — cleanup must follow.

@@ -1,8 +1,15 @@
-"""Container integration tests for the async parse chain endpoints.
+"""Container integration tests for the async parse + chunk chain endpoints.
 
-Drives the full submit → status → resolve → finalize chain against the real
-``artemis/backend-parsing:dev`` image backed by docling-serve and MinIO
-testcontainers, using real PDF fixtures from ``tools/fixtures/docs/``.
+Drives the full submit → status → resolve → chunk/submit → chunk/status →
+chunk/finalize chain against the real ``artemis/backend-parsing:dev`` image
+backed by docling-serve and MinIO testcontainers, using real PDF fixtures
+from ``tools/fixtures/docs/``.
+
+Chunking is a fully decoupled stage from conversion (Epic 21): resolve only
+downloads + caches the conversion result (replay JSON + derived pages);
+/v1/chunk/submit separately hands docling-serve the replay-cache S3 location
+for hybrid chunking, and /v1/chunk/finalize merges the fetched chunks with
+the cached pages into the final artifact.
 
 Large-PDF fan-out is no longer a client-side concern (see TODOs.md Epic 21) —
 every document takes this same submit/resolve path regardless of size, with
@@ -58,12 +65,15 @@ def _read_artifact(minio_client: Minio, ref: dict) -> ParseArtifact:
 
 
 async def _poll_status(
-    client: httpx.AsyncClient, task_id: str, timeout: float = 300.0
+    client: httpx.AsyncClient,
+    task_id: str,
+    timeout: float = 300.0,
+    path: str = "/v1/parse/status",
 ) -> None:
-    """Poll GET /v1/parse/status/{task_id} until terminal; raise on failure."""
+    """Poll GET {path}/{task_id} until terminal; raise on failure."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        resp = await client.get(f"/v1/parse/status/{task_id}")
+        resp = await client.get(f"{path}/{task_id}")
         resp.raise_for_status()
         data = resp.json()
         if data["status"] == "success":
@@ -103,13 +113,22 @@ async def _drive_async_chain(
     assert resp.status_code == 200, resp.text
     resolve = resp.json()
 
-    await _poll_status(client, resolve["chunking_task_id"])
+    # Chunking is a fully separate stage from conversion (Epic 21) — resolve
+    # only cached the replay JSON + pages; chunk/submit hands docling-serve
+    # that S3 location directly, no bytes cross this call.
+    resp = await client.post("/v1/chunk/submit", json={"obj_id": resolve["obj_id"]})
+    assert resp.status_code == 200, resp.text
+    chunk_submit = resp.json()
+
+    await _poll_status(
+        client, chunk_submit["chunking_task_id"], path="/v1/chunk/status"
+    )
 
     resp = await client.post(
-        "/v1/parse/finalize",
+        "/v1/chunk/finalize",
         json={
-            "chunking_task_id": resolve["chunking_task_id"],
-            "obj_id": resolve["obj_id"],
+            "chunking_task_id": chunk_submit["chunking_task_id"],
+            "obj_id": chunk_submit["obj_id"],
             "metadata": {"obj_id": str(obj_id)},
         },
     )

@@ -5,9 +5,9 @@ from docling.datamodel.document import DoclingDocument
 from pydantic import BaseModel
 
 from src.lib.core.adapters.loaders.docling import split_pages
-from src.lib.core.ingestion.types import ChunkType, Page, ParseArtifact, ParsedChunk
+from src.lib.core.ingestion.types import ChunkType, Page, ParsedChunk
 
-__all__ = ["ParseStatus", "chunk_items_to_parsed", "build_artifact"]
+__all__ = ["ParseStatus", "chunk_items_to_parsed", "build_pages"]
 
 
 class ParseStatus(BaseModel):
@@ -53,14 +53,13 @@ def _item_to_parsed(item: dict, obj_id: uuid.UUID) -> ParsedChunk:
     )
 
 
-def build_artifact(
-    chunks: list[ParsedChunk],
-    dl_doc: DoclingDocument,
-    obj_id: uuid.UUID,
-) -> ParseArtifact:
-    """Assemble ParseArtifact from async-path parsed chunks + replay DoclingDocument."""
+def build_pages(dl_doc: DoclingDocument, obj_id: uuid.UUID) -> list[Page]:
+    """Derive page-level Markdown parents from a converted DoclingDocument.
+
+    Computed once in /v1/parse/resolve, right after conversion, and cached for
+    /v1/chunk/finalize to merge with the separately-fetched chunks — chunking
+    is a fully decoupled stage from conversion (Epic 21), so this half of the
+    final ParseArtifact never needs the DoclingDocument re-fetched or re-parsed.
+    """
     pages = split_pages(dl_doc)
-    return ParseArtifact(
-        pages=[Page(obj_id=obj_id, page_no=pno, markdown=md) for pno, md in pages],
-        chunks=chunks,
-    )
+    return [Page(obj_id=obj_id, page_no=pno, markdown=md) for pno, md in pages]

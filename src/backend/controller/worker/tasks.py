@@ -9,9 +9,12 @@ UUID and dispatches the two-task outer chain:
 
 ``parse`` replaces itself via ``self.replace`` with the async sub-chain:
 
-    submit_parse  →  poll_parse  →  resolve_parse  →  poll_resolve
+    submit_parse  →  poll_parse  →  resolve_parse  →  submit_chunk  →  poll_chunk
 
-``poll_resolve`` calls finalize on success and returns the artifact ``BlobRef``.
+Chunking is a fully decoupled stage from conversion (Epic 21) — ``resolve_parse``
+only downloads the conversion result and caches it; ``submit_chunk`` is a separate
+task that submits the hybrid-chunk job. ``poll_chunk`` calls finalize on success
+and returns the artifact ``BlobRef``.
 
 ``index`` (index queue)
     1. Receives the artifact ``BlobRef`` from the parse sub-chain
@@ -61,9 +64,11 @@ from src.backend.controller.worker.config import settings
 from src.backend.controller.worker.dependencies import get_s3_client
 from src.backend.controller.worker.exceptions import EmptyObjectError
 from src.backend.controller.worker.utils import (
+    call_chunk_finalize,
+    call_chunk_status,
+    call_chunk_submit,
     call_delete_service,
     call_indexing_service,
-    call_parse_finalize,
     call_parse_resolve,
     call_parse_status,
     call_parse_submit,
@@ -77,7 +82,7 @@ logger.setLevel(logging.DEBUG)
 
 _tracer = trace.get_tracer("controller.worker")
 
-# poll_parse/poll_resolve retry up to 1440 times (~24h ceiling); each retry is a
+# poll_parse/poll_chunk retry up to 1440 times (~24h ceiling); each retry is a
 # brand-new task execution, so per-attempt visibility goes to Prometheus counters/
 # histograms (cheap, aggregating) rather than spans (one stored record per attempt
 # would mean up to 1440 spans per document in the trace backend).
@@ -283,7 +288,7 @@ def ingest(
 
 
 # ---------------------------------------------------------------------------
-# Async parse sub-chain — tasks.parse + four polling subtasks
+# Async parse sub-chain — tasks.parse + five subtasks
 # ---------------------------------------------------------------------------
 #
 # Dispatch structure (via tasks.parse → self.replace):
@@ -291,13 +296,14 @@ def ingest(
 #   parse.s(s3, source=…, task_id=…, …)
 #     └─ self.replace(chain(
 #           submit_parse.s(…)   → SubmitResult dict
-#           poll_parse.s(…)     → SubmitResult dict (polls until conversion done)
-#           resolve_parse.s(…)  → ResolveResult dict
-#           poll_resolve.s(…)   → BlobRef dict      (polls until chunk done)
+#           poll_parse.s(…)     → SubmitResult dict      (polls until conversion done)
+#           resolve_parse.s(…)  → ResolveResult dict     (downloads + caches conversion)
+#           submit_chunk.s(…)   → ChunkSubmitResult dict (Epic 21 — chunking is its own stage)
+#           poll_chunk.s(…)     → BlobRef dict           (polls until chunk done, finalizes)
 #        ))
 #
-# The BlobRef dict from poll_resolve flows into index as its first positional arg.
-# The contract task_id from ingest is threaded through all five tasks as a kwarg
+# The BlobRef dict from poll_chunk flows into index as its first positional arg.
+# The contract task_id from ingest is threaded through all six tasks as a kwarg
 # so FailureRecordingTask.on_failure can always key the CDC FAILURE row correctly.
 
 
@@ -348,7 +354,13 @@ def parse(
                 task_id=task_id,
                 operation=operation,
             ),
-            poll_resolve.s(
+            submit_chunk.s(
+                namespace_id=namespace_id,
+                group_id=group_id,
+                task_id=task_id,
+                operation=operation,
+            ),
+            poll_chunk.s(
                 source=source,
                 namespace_id=namespace_id,
                 group_id=group_id,
@@ -532,19 +544,69 @@ def resolve_parse(
     task_id: str | None = None,
     operation: str | None = None,
 ) -> dict:
-    """Download conversion result, concatenate shards, submit chunk job.
+    """Download conversion result and cache it (replay + derived pages).
 
-    Calls POST /v1/parse/resolve and returns ResolveResult dict with
-    chunking_task_id immediately.
+    Calls POST /v1/parse/resolve and returns ResolveResult dict immediately.
+    Chunking is a fully separate stage from here (Epic 21, see submit_chunk)
+    — this task no longer submits a chunk job itself.
     """
     try:
-        result = call_parse_resolve(
+        return call_parse_resolve(
             submit_result=submit_result,
             parsing_url=settings.PARSING_SERVICE_URL,
             timeout=settings.PARSING_RESOLVE_TIMEOUT,
             logger=logger,
         )
-        result["resolved_at"] = time.time()
+    except pybreaker.CircuitBreakerError as exc:
+        jitter = random.uniform(0, parsing_breaker.reset_timeout * 0.25)
+        raise self.retry(
+            exc=exc,
+            countdown=parsing_breaker.reset_timeout + 5 + jitter,
+            max_retries=20,
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code >= 500:
+            backoff = min(120, 2**self.request.retries)
+            raise self.retry(
+                exc=exc,
+                countdown=backoff + random.uniform(0, backoff),
+                max_retries=20,
+            )
+        raise
+
+
+@app.task(
+    name="tasks.submit_chunk",
+    base=FailureRecordingTask,
+    bind=True,
+    backend=_db_backend,
+    result_serializer="json",
+    acks_late=True,
+)
+def submit_chunk(
+    self,
+    resolve_result: dict,
+    *,
+    namespace_id: str,
+    group_id: str | None = None,
+    task_id: str | None = None,
+    operation: str | None = None,
+) -> dict:
+    """Submit the replay-cached DoclingDocument for hybrid chunking.
+
+    Calls POST /v1/chunk/submit and returns ChunkSubmitResult dict
+    immediately. A fully separate stage from resolve_parse (Epic 21) —
+    docling-serve fetches the replay cache directly from S3, no document
+    bytes ever pass through this task.
+    """
+    try:
+        result = call_chunk_submit(
+            resolve_result=resolve_result,
+            parsing_url=settings.PARSING_SERVICE_URL,
+            timeout=settings.PARSING_CHUNK_SUBMIT_TIMEOUT,
+            logger=logger,
+        )
+        result["submitted_at"] = time.time()
         return result
     except pybreaker.CircuitBreakerError as exc:
         jitter = random.uniform(0, parsing_breaker.reset_timeout * 0.25)
@@ -565,16 +627,16 @@ def resolve_parse(
 
 
 @app.task(
-    name="tasks.poll_resolve",
+    name="tasks.poll_chunk",
     base=FailureRecordingTask,
     bind=True,
     backend=_db_backend,
     result_serializer="json",
     acks_late=True,
 )
-def poll_resolve(
+def poll_chunk(
     self,
-    resolve_result: dict,
+    chunk_submit_result: dict,
     *,
     source: dict,
     namespace_id: str,
@@ -587,15 +649,15 @@ def poll_resolve(
     Retries with a 60–75 s countdown while chunking is in progress.
     Both the poll and the finalize call share the same 1440-retry budget.
     """
-    chunking_task_id = resolve_result["chunking_task_id"]
-    obj_id = resolve_result["obj_id"]
+    chunking_task_id = chunk_submit_result["chunking_task_id"]
+    obj_id = chunk_submit_result["obj_id"]
 
     def _elapsed() -> float | None:
-        resolved_at = resolve_result.get("resolved_at")
-        return time.time() - resolved_at if resolved_at is not None else None
+        submitted_at = chunk_submit_result.get("submitted_at")
+        return time.time() - submitted_at if submitted_at is not None else None
 
     try:
-        status = call_parse_status(
+        status = call_chunk_status(
             task_id=chunking_task_id,
             parsing_url=settings.PARSING_SERVICE_URL,
             timeout=settings.PARSING_STATUS_TIMEOUT,
@@ -603,7 +665,7 @@ def poll_resolve(
         )
     except pybreaker.CircuitBreakerError as exc:
         _poll_attempts.add(
-            1, {"poll_task": "poll_resolve", "outcome": "circuit_breaker_retry"}
+            1, {"poll_task": "poll_chunk", "outcome": "circuit_breaker_retry"}
         )
         jitter = random.uniform(0, parsing_breaker.reset_timeout * 0.25)
         raise self.retry(
@@ -613,33 +675,33 @@ def poll_resolve(
         )
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code >= 500:
-            _poll_attempts.add(1, {"poll_task": "poll_resolve", "outcome": "5xx_retry"})
+            _poll_attempts.add(1, {"poll_task": "poll_chunk", "outcome": "5xx_retry"})
             backoff = min(120, 2**self.request.retries)
             raise self.retry(
                 exc=exc,
                 countdown=backoff + random.uniform(0, backoff),
                 max_retries=1440,
             )
-        _poll_attempts.add(1, {"poll_task": "poll_resolve", "outcome": "4xx_error"})
+        _poll_attempts.add(1, {"poll_task": "poll_chunk", "outcome": "4xx_error"})
         elapsed = _elapsed()
         if elapsed is not None:
             _poll_elapsed.record(
-                elapsed, {"poll_task": "poll_resolve", "outcome": "4xx_error"}
+                elapsed, {"poll_task": "poll_chunk", "outcome": "4xx_error"}
             )
         raise
 
     if status["status"] == "processing":
-        _poll_attempts.add(1, {"poll_task": "poll_resolve", "outcome": "processing"})
+        _poll_attempts.add(1, {"poll_task": "poll_chunk", "outcome": "processing"})
         raise self.retry(
             countdown=60 + random.uniform(0, 15),
             max_retries=1440,
         )
     if status["status"] == "failure":
-        _poll_attempts.add(1, {"poll_task": "poll_resolve", "outcome": "failure"})
+        _poll_attempts.add(1, {"poll_task": "poll_chunk", "outcome": "failure"})
         elapsed = _elapsed()
         if elapsed is not None:
             _poll_elapsed.record(
-                elapsed, {"poll_task": "poll_resolve", "outcome": "failure"}
+                elapsed, {"poll_task": "poll_chunk", "outcome": "failure"}
             )
         raise DocumentChunkingError(
             f"docling-serve chunking failed for task {chunking_task_id}: "
@@ -647,8 +709,8 @@ def poll_resolve(
         )
 
     try:
-        blob_ref = call_parse_finalize(
-            resolve_result=resolve_result,
+        blob_ref = call_chunk_finalize(
+            chunk_submit_result=chunk_submit_result,
             metadata={"obj_id": obj_id},
             parsing_url=settings.PARSING_SERVICE_URL,
             timeout=settings.PARSING_FINALIZE_TIMEOUT,
@@ -657,7 +719,7 @@ def poll_resolve(
     except pybreaker.CircuitBreakerError as exc:
         _poll_attempts.add(
             1,
-            {"poll_task": "poll_resolve", "outcome": "finalize_circuit_breaker_retry"},
+            {"poll_task": "poll_chunk", "outcome": "finalize_circuit_breaker_retry"},
         )
         jitter = random.uniform(0, parsing_breaker.reset_timeout * 0.25)
         raise self.retry(
@@ -668,7 +730,7 @@ def poll_resolve(
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code >= 500:
             _poll_attempts.add(
-                1, {"poll_task": "poll_resolve", "outcome": "finalize_5xx_retry"}
+                1, {"poll_task": "poll_chunk", "outcome": "finalize_5xx_retry"}
             )
             backoff = min(120, 2**self.request.retries)
             raise self.retry(
@@ -677,22 +739,20 @@ def poll_resolve(
                 max_retries=1440,
             )
         _poll_attempts.add(
-            1, {"poll_task": "poll_resolve", "outcome": "finalize_4xx_error"}
+            1, {"poll_task": "poll_chunk", "outcome": "finalize_4xx_error"}
         )
         elapsed = _elapsed()
         if elapsed is not None:
             _poll_elapsed.record(
-                elapsed, {"poll_task": "poll_resolve", "outcome": "finalize_4xx_error"}
+                elapsed, {"poll_task": "poll_chunk", "outcome": "finalize_4xx_error"}
             )
         raise
 
-    _poll_attempts.add(1, {"poll_task": "poll_resolve", "outcome": "success"})
+    _poll_attempts.add(1, {"poll_task": "poll_chunk", "outcome": "success"})
     elapsed = _elapsed()
     if elapsed is not None:
-        _poll_elapsed.record(
-            elapsed, {"poll_task": "poll_resolve", "outcome": "success"}
-        )
-    logger.info("poll_resolve=finalized obj_id=%s key=%s", obj_id, blob_ref.get("key"))
+        _poll_elapsed.record(elapsed, {"poll_task": "poll_chunk", "outcome": "success"})
+    logger.info("poll_chunk=finalized obj_id=%s key=%s", obj_id, blob_ref.get("key"))
     return blob_ref
 
 

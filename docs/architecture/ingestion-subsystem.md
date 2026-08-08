@@ -47,18 +47,21 @@ block
 
 **Controller Worker** — Celery worker consuming from RabbitMQ. Owns the ingestion
 orchestration: receives the `ingest` task from the task queue, dispatches the
-`parse → index` chain (where `parse` self-replaces with a four-task async sub-chain),
+`parse → index` chain (where `parse` self-replaces with a five-task async sub-chain),
 and writes final task results (success or structured failure) to PostgreSQL via a custom
 result backend. Holds circuit breakers for both downstream services.
 
 **Parsing Service** — FastAPI service that converts a raw document into a structured parse
-artifact via an async submit/poll/resolve/finalize pipeline. Accepts a `BlobRef` (claim-check),
-submits a single async conversion to
-[Docling Serve](https://github.com/docling-project/docling-serve) regardless of document size
-— large PDFs are fanned out into page slices and converted concurrently server-side by
-Docling Serve's Ray engine (see TODOs.md Epic 21), not by this service — polls until complete,
-submits a chunk job, and writes the `ParseArtifact` and a lossless replay cache to MinIO.
-Returns only the artifact's `BlobRef`.
+artifact via an async submit/poll/resolve pipeline, followed by a fully decoupled
+chunk submit/poll/finalize pipeline (Epic 21 — chunking is orchestrated as its own stage,
+not bundled into conversion). Accepts a `BlobRef` (claim-check), submits a single async
+conversion to [Docling Serve](https://github.com/docling-project/docling-serve) regardless
+of document size — large PDFs are fanned out into page slices and converted concurrently
+server-side by Docling Serve's Ray engine (see TODOs.md Epic 21), not by this service —
+polls until complete, downloads and caches the result (replay JSON + derived pages), then
+separately submits a chunk job, polls it, and writes the `ParseArtifact` and a lossless
+replay cache to MinIO. Returns only the artifact's `BlobRef`. Remains the sole place in
+Artemis that imports Docling types or knows docling-serve's API surface.
 
 **Indexing Service** — FastAPI service (`POST /ingest`) that embeds and stores a parse
 artifact. Accepts a `BlobRef` to the artifact; reads it from MinIO, embeds each chunk
@@ -93,7 +96,7 @@ The controller worker declares two durable RabbitMQ queues with different scalin
 
 | Queue | Worker | Concurrency | Tasks | Scale driver |
 |-------|--------|-------------|-------|--------------|
-| `artemis.ingestion.parse` | `backend-controller-parse-worker` | 3 | `tasks.ingest`, `tasks.parse`, `tasks.submit_parse`, `tasks.poll_parse`, `tasks.resolve_parse`, `tasks.poll_resolve` | HTTP (Docling Serve async API) |
+| `artemis.ingestion.parse` | `backend-controller-parse-worker` | 3 | `tasks.ingest`, `tasks.parse`, `tasks.submit_parse`, `tasks.poll_parse`, `tasks.resolve_parse`, `tasks.submit_chunk`, `tasks.poll_chunk` | HTTP (Docling Serve async API) |
 | `artemis.ingestion.index` | `backend-controller-index-worker` | 1 | `tasks.index`, `tasks.delete_document`, `tasks.delete_namespace` | I/O (TEI + Qdrant + Postgres) |
 
 `tasks.ingest` (entry point dispatched by the RabbitMQ sink) lands on the `parse` queue
@@ -131,12 +134,15 @@ sequenceDiagram
         PS-->>CW: ParseStatus {processing|success|failure}
     end
     CW->>PS: POST /v1/parse/resolve
-    PS-->>CW: ResolveResult {chunking_task_id}
+    PS-->>CW: ResolveResult {obj_id}
+    note over CW,PS: Chunking is a fully decoupled stage (Epic 21) — resolve<br/>never submits a chunk job itself
+    CW->>PS: POST /v1/chunk/submit
+    PS-->>CW: ChunkSubmitResult {chunking_task_id}
     loop poll until success
-        CW->>PS: GET /v1/parse/status/{chunking_task_id}
+        CW->>PS: GET /v1/chunk/status/{chunking_task_id}
         PS-->>CW: ParseStatus {processing|success|failure}
     end
-    CW->>PS: POST /v1/parse/finalize
+    CW->>PS: POST /v1/chunk/finalize
     PS-->>CW: artifact BlobRef
 
     note over CW,IS: Task 2 — index (artemis.ingestion.index queue)
@@ -169,15 +175,23 @@ sequenceDiagram
     CW->>PS: POST /v1/parse/resolve
     PS->>Docling: GET /v1/result/{parsing_task_id}
     PS->>S3: write replay/{obj_id}.json
-    PS->>Docling: POST /v1/chunk/hybrid/file/async
-    PS-->>CW: ResolveResult {chunking_task_id}
+    PS->>PS: derive pages (split_pages)
+    PS->>S3: write pages/{obj_id}.json
+    PS-->>CW: ResolveResult {obj_id}
+
+    note over CW,PS: Chunking is a fully decoupled stage (Epic 21)
+
+    CW->>PS: POST /v1/chunk/submit
+    PS->>Docling: POST /v1/chunk/hybrid/source/async {S3 ref: replay/{obj_id}.json}
+    Docling-->>PS: task_id
+    PS-->>CW: ChunkSubmitResult {chunking_task_id}
 
     note over CW,PS: polling omitted for brevity
 
-    CW->>PS: POST /v1/parse/finalize
+    CW->>PS: POST /v1/chunk/finalize
     PS->>Docling: GET /v1/result/{chunking_task_id}
-    PS->>S3: read replay/{obj_id}.json
-    PS->>PS: build ParseArtifact (chunks + pages)
+    PS->>S3: read pages/{obj_id}.json
+    PS->>PS: build ParseArtifact (chunks + cached pages)
     PS->>S3: write parse/{obj_id}.json
     PS-->>CW: artifact BlobRef
 ```

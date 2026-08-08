@@ -17,31 +17,52 @@ It accepts a file reference (claim-check), calls Docling Serve, and writes a str
 | `POST` | `/v1/parse` | Parse a document synchronously; returns artifact `BlobRef` | `200 BlobRef` |
 | `POST` | `/v1/parse/submit` | Submit a conversion job to Docling Serve; returns immediately | `200 SubmitResult` |
 | `GET`  | `/v1/parse/status/{task_id}` | Single non-blocking status check (conversion or chunk task) | `200 ParseStatus` |
-| `POST` | `/v1/parse/resolve` | Download conversion result, submit chunk job | `200 ResolveResult` |
-| `POST` | `/v1/parse/finalize` | Fetch chunk result, build `ParseArtifact`, write to MinIO | `200 BlobRef` |
+| `POST` | `/v1/parse/resolve` | Download conversion result; cache replay JSON + derived pages | `200 ResolveResult` |
+| `POST` | `/v1/chunk/submit` | Submit the replay-cached document for hybrid chunking; returns immediately | `200 ChunkSubmitResult` |
+| `GET`  | `/v1/chunk/status/{task_id}` | Single non-blocking status check (chunk task) | `200 ParseStatus` |
+| `POST` | `/v1/chunk/finalize` | Fetch chunk result, merge with cached pages, build `ParseArtifact`, write to MinIO | `200 BlobRef` |
 | `GET`  | `/health` | Readiness probe (checks Docling reachability) | `200` or `503` |
 
 `POST /v1/parse` is the legacy synchronous endpoint retained for backward compatibility.
-The controller worker uses the async chain (`submit` → `status` → `resolve` → `status` → `finalize`).
+The controller worker uses the async chain (`submit` → `status` → `resolve` → `chunk/submit`
+→ `chunk/status` → `chunk/finalize`).
+
+Chunking is a fully decoupled stage from conversion (Epic 21): `/v1/parse/resolve` only
+downloads and caches the conversion result — it never submits a chunk job. `/v1/chunk/*`
+owns that separately, so the two stages can be orchestrated (retried, scheduled) independently
+by the controller worker. The `/v1/chunk/*` endpoints still live in this service rather than
+the worker or the indexing service — this service remains the *sole* place in Artemis that
+imports Docling types or knows docling-serve's API surface (the anti-corruption-layer
+property), it just no longer bundles chunking into the conversion request/response cycle.
+Named `/v1/chunk/*` rather than nested under `/v1/parse/` so the path doesn't imply chunking
+is owned by "parsing" as a concept — it isn't, this service just happens to be the sole
+Docling adapter for now. A future direction (not started) is retiring this shim altogether
+and having the controller worker call docling-serve directly, since most heavy lifting —
+including page-slice fan-out — now happens server-side; see TODOs.md Epic 21.
 
 ---
 
-## Async Parse Flow
+## Async Parse + Chunk Flow
 
-The controller worker drives a scatter-gather pipeline across two long-running phases so no
+The controller worker drives a scatter-gather pipeline across four long-running phases so no
 Celery thread is blocked during conversion or chunking.
 
 ```
-submit_endpoint        → Docling Serve /v1/convert/file/async
-                              ↓ polling via status_endpoint
-resolve_endpoint       → download conversion result
-                       → write replay cache
-                       → Docling Serve /v1/chunk/hybrid/file/async
-                              ↓ polling via status_endpoint
-finalize_endpoint      → fetch chunk result
-                       → build ParseArtifact from chunks + replay cache
-                       → write to parsed-chunks bucket
-                       → return BlobRef
+submit_endpoint         → Docling Serve /v1/convert/file/async (or .../source/async)
+                               ↓ polling via status_endpoint
+resolve_endpoint        → download conversion result
+                        → write replay cache (raw DoclingDocument JSON)
+                        → derive + cache pages (Markdown parents)
+                               ↓
+chunk_submit_endpoint   → Docling Serve /v1/chunk/hybrid/source/async
+                          (reads the replay cache directly from S3 — no bytes
+                          re-uploaded here, mirrors submit's source_ref path)
+                               ↓ polling via chunk_status_endpoint
+chunk_finalize_endpoint → fetch chunk result
+                        → read cached pages (never re-derives them)
+                        → build ParseArtifact from chunks + pages
+                        → write to parsed-chunks bucket
+                        → return BlobRef
 ```
 
 Every document takes this same single-submission path regardless of size — there is no
@@ -56,18 +77,18 @@ engine made it unnecessary, not kept as a fallback.
 
 Form fields identical to `POST /v1/parse`. Logic:
 
-1. Materialise document bytes: inline `file` bytes are read directly; `source_ref` claim-check
-   inputs are downloaded from MinIO into this service's memory, then forwarded the same way.
-   (An S3-direct handoff — letting Docling Serve fetch `source_ref` inputs itself via
-   `POST /v1/convert/source/async`, avoiding that download-then-forward round trip — was
-   prototyped and verified working, then deferred to a later session; see TODOs.md Epic 21.)
-2. `POST /v1/convert/file/async` → `parsing_task_id`.
-3. Return `{parsing_task_id, obj_id}`.
+1. Materialise document bytes: inline `file` bytes are read directly and forwarded to
+   `POST /v1/convert/file/async`; `source_ref` claim-check inputs are handed to docling-serve
+   as an S3 source via `POST /v1/convert/source/async` — docling-serve fetches the object
+   directly from MinIO/S3 itself, so this service never downloads the bytes into its own
+   memory (Epic 21 §21.3).
+2. Return `{parsing_task_id, obj_id}`.
 
-### Status (`GET /v1/parse/status/{task_id}`)
+### Status (`GET /v1/parse/status/{task_id}`, `GET /v1/chunk/status/{task_id}`)
 
-Proxies `GET /v1/status/poll/{task_id}?wait=0` to Docling Serve. Works for both
-conversion and chunk `task_id`s — Docling Serve uses a unified task namespace.
+Both proxy `GET /v1/status/poll/{task_id}?wait=0` to Docling Serve — identical proxy logic,
+since docling-serve uses one unified task namespace for every task type regardless of origin.
+The two routes exist so polling a chunk task doesn't read as polling a parse task.
 
 Returns `ParseStatus`:
 
@@ -96,21 +117,34 @@ Request body: `{parsing_task_id, obj_id}`.
 
 1. `GET /v1/result/{parsing_task_id}` → `DoclingDocument`.
 2. Write replay cache: `REPLAY_CACHE_BUCKET/replay/{obj_id}.json`.
-3. `POST /v1/chunk/hybrid/file/async` with `doc.json` → `chunking_task_id`.
-4. Return `{chunking_task_id, obj_id}`.
+3. Derive pages via `build_pages()` (`lib/artifact.py`, which calls `split_pages()` in
+   `lib/core/adapters/loaders/docling.py`): `dl_doc.export_to_markdown(page_break_placeholder=
+   "<!-- ARTEMIS_PAGE_BREAK -->")` once, then splits on the placeholder to produce
+   `(page_no, markdown)` tuples.
+4. Write pages cache: `REPLAY_CACHE_BUCKET/pages/{obj_id}.json`.
+5. Return `{obj_id}` — no chunk job submitted here.
 
-### Finalize (`POST /v1/parse/finalize`)
+### Chunk Submit (`POST /v1/chunk/submit`)
 
-Request body: `{chunking_task_id, obj_id, metadata}`.
+Request body: `{obj_id}`. Must only be called after `/v1/parse/resolve` has written the
+replay cache for this `obj_id`.
+
+1. `POST /v1/chunk/hybrid/source/async` pointing at `REPLAY_CACHE_BUCKET/replay/{obj_id}.json`
+   as an S3 source — docling-serve fetches the JSON directly, this service never re-reads or
+   re-uploads it.
+2. Return `{chunking_task_id, obj_id}`.
+
+### Chunk Finalize (`POST /v1/chunk/finalize`)
+
+Request body: `{chunking_task_id, obj_id, metadata}`. Must only be called after
+`GET /v1/chunk/status/{chunking_task_id}` returns `"success"`.
 
 1. `GET /v1/result/{chunking_task_id}` → chunk list.
-2. Read `REPLAY_CACHE_BUCKET/replay/{obj_id}.json` → `DoclingDocument` (for page extraction).
-3. Export `DoclingDocument` to Markdown via `split_pages()` (`lib/core/adapters/loaders/docling.py`):
-   calls `dl_doc.export_to_markdown(page_break_placeholder="<!-- ARTEMIS_PAGE_BREAK -->")` once,
-   then splits on the placeholder to produce `(page_no, markdown)` tuples.
-4. Map chunks → `ParsedChunk[]`, build `ParseArtifact`.
-5. Write to `PARSED_ARTIFACTS_BUCKET/parse/{obj_id}.json`.
-6. Return `BlobRef`.
+2. Read `REPLAY_CACHE_BUCKET/pages/{obj_id}.json` → cached `Page[]` (never re-fetches or
+   re-parses the `DoclingDocument`).
+3. Map chunks → `ParsedChunk[]`, build `ParseArtifact` from chunks + cached pages.
+4. Write to `PARSED_ARTIFACTS_BUCKET/parse/{obj_id}.json`.
+5. Return `BlobRef`.
 
 ---
 
@@ -152,11 +186,20 @@ The raw `DoclingDocument` JSON is written to the `docling-replay` bucket:
 replay/{obj_id}.json
 ```
 
-Written by `resolve_endpoint` (async flow) and by `POST /v1/parse` (sync flow).
-Read back by `finalize_endpoint` for page extraction — avoids re-fetching or passing
-the full document through the response body.
+Written by `resolve_endpoint` (async flow) and by `POST /v1/parse` (sync flow). Read back
+by `chunk_submit_endpoint`, which hands docling-serve this S3 location directly rather than
+re-uploading the JSON — chunking never re-fetches it into this service's own memory.
 
-This bucket is private to the parsing service; no other service reads from it.
+Derived page-level Markdown parents are cached alongside it, in the same bucket:
+```
+pages/{obj_id}.json
+```
+
+Written once by `resolve_endpoint` (right after conversion, while the `DoclingDocument` is
+already in memory) and read back by `chunk_finalize_endpoint` to build the final
+`ParseArtifact` — chunk finalization never re-derives pages or re-parses the `DoclingDocument`.
+
+Both keys are private to the parsing service; no other service reads from this bucket.
 
 ---
 
@@ -171,9 +214,9 @@ This bucket is private to the parsing service; no other service reads from it.
 | `S3_SECRET_KEY` | *(required)* | |
 | `PARSED_ARTIFACTS_BUCKET` | `parsed-chunks` | |
 | `REPLAY_CACHE_BUCKET` | `docling-replay` | |
-| `DOCLING_STATUS_TIMEOUT` | `30.0` | Seconds, for status proxy call |
-| `DOCLING_RESOLVE_TIMEOUT` | `120.0` | Seconds, for resolve (downloads + chunk submit) |
-| `DOCLING_FINALIZE_TIMEOUT` | `60.0` | Seconds, for finalize (chunk fetch + artifact write) |
+| `DOCLING_STATUS_TIMEOUT` | `30.0` | Seconds, for status proxy calls (parse and chunk) |
+| `DOCLING_RESOLVE_TIMEOUT` | `120.0` | Seconds, for resolve (conversion result download + replay/pages cache write) |
+| `DOCLING_FINALIZE_TIMEOUT` | `60.0` | Seconds, for chunk finalize (chunk result fetch + artifact write) |
 | `LOADER_TYPE` | `DOCLING` | `DOCLING` or `PYMUPDF4LLM` (dev fallback, no GPU) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | |
 | `OTEL_SERVICE_NAME` | `backend-parsing` | |

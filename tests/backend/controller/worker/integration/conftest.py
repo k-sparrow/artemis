@@ -6,11 +6,17 @@ Infrastructure (session-scoped):
   - MinIO testcontainer      — S3 source + parse-artifact (claim-check) intermediate
 
 HTTP service stubs — one WireMock container, two path-scoped views (session-scoped):
-  - parsing_stub   — stubs the 4-step async chain under /v1/parse/*:
-                     POST /v1/parse/submit → SubmitResult
+  - parsing_stub   — stubs the 6-step async chain under /v1/* (both /v1/parse/*
+                     and /v1/chunk/* — one facade, since PARSING_SERVICE_URL is a
+                     single target for both; chunking is a fully decoupled stage
+                     from conversion, Epic 21, but still served by this same host):
+                     POST /v1/parse/submit   → SubmitResult
                      GET  /v1/parse/status/* → ParseStatus "success"
-                     POST /v1/parse/resolve → ResolveResult
-                     POST /v1/parse/finalize → BlobRef (pre-seeded artifact in MinIO)
+                     POST /v1/parse/resolve  → ResolveResult (obj_id only — no
+                                                chunk job submitted here anymore)
+                     POST /v1/chunk/submit   → ChunkSubmitResult
+                     GET  /v1/chunk/status/* → ParseStatus "success"
+                     POST /v1/chunk/finalize → BlobRef (pre-seeded artifact in MinIO)
   - indexing_stub  — returns UpsertResult on POST /ingest, 204 on DELETE /ingest
   Each ``WireMockStub`` filters the shared WireMock request journal by its path,
   keeping the old StubServer surface (``requests``/``push_response``/``clear``).
@@ -94,7 +100,9 @@ _ARTIFACT_KEY = f"parse/{_STUB_OBJ_ID}.json"
 _PARSE_RESPONSE = {"bucket": _ARTIFACT_BUCKET, "key": _ARTIFACT_KEY}
 
 # Async-parse chain stubs:
-# submit → status (success) → resolve → status (success) → finalize
+# submit -> status (success) -> resolve -> chunk/submit -> chunk/status (success)
+# -> chunk/finalize. Chunking is a fully decoupled stage from conversion
+# (Epic 21) — resolve returns only obj_id, never a chunking_task_id.
 _SUBMIT_RESULT = {
     "parsing_task_id": _STUB_CONV_TASK_ID,
     "obj_id": _STUB_OBJ_ID,
@@ -106,6 +114,9 @@ _PARSE_STATUS_SUCCESS = {
     "error_message": None,
 }
 _RESOLVE_RESULT = {
+    "obj_id": _STUB_OBJ_ID,
+}
+_CHUNK_SUBMIT_RESULT = {
     "chunking_task_id": _STUB_CHUNK_TASK_ID,
     "obj_id": _STUB_OBJ_ID,
 }
@@ -253,11 +264,15 @@ def minio_container(request: pytest.FixtureRequest) -> MinioContainer:
 def wiremock(request: pytest.FixtureRequest) -> WireMockContainer:
     """One WireMock stubbing both HTTP deps of the chain, matched by path.
 
-    Parsing (async 4-step chain):
+    Parsing + chunking (async 6-step chain — one host, PARSING_SERVICE_URL,
+    since chunking is still proxied through the parsing service even though
+    it's a fully decoupled stage from conversion, Epic 21):
       POST /v1/parse/submit   → SubmitResult
       GET  /v1/parse/status/* → ParseStatus "success"
-      POST /v1/parse/resolve  → ResolveResult
-      POST /v1/parse/finalize → BlobRef (same as old /v1/parse claim-check)
+      POST /v1/parse/resolve  → ResolveResult (obj_id only)
+      POST /v1/chunk/submit   → ChunkSubmitResult
+      GET  /v1/chunk/status/* → ParseStatus "success"
+      POST /v1/chunk/finalize → BlobRef (same claim-check BlobRef as before)
 
     Indexing:
       POST   /ingest → UpsertResult
@@ -298,9 +313,31 @@ def wiremock(request: pytest.FixtureRequest) -> WireMockContainer:
         },
     )
     wm.with_mapping(
-        "parsing-finalize.json",
+        "chunk-submit.json",
         {
-            "request": {"method": "POST", "urlPath": "/v1/parse/finalize"},
+            "request": {"method": "POST", "urlPath": "/v1/chunk/submit"},
+            "response": {
+                "status": 200,
+                "headers": {"Content-Type": "application/json"},
+                "jsonBody": _CHUNK_SUBMIT_RESULT,
+            },
+        },
+    )
+    wm.with_mapping(
+        "chunk-status.json",
+        {
+            "request": {"method": "GET", "urlPattern": "/v1/chunk/status/.*"},
+            "response": {
+                "status": 200,
+                "headers": {"Content-Type": "application/json"},
+                "jsonBody": _PARSE_STATUS_SUCCESS,
+            },
+        },
+    )
+    wm.with_mapping(
+        "chunk-finalize.json",
+        {
+            "request": {"method": "POST", "urlPath": "/v1/chunk/finalize"},
             "response": {
                 "status": 200,
                 "headers": {"Content-Type": "application/json"},
@@ -340,7 +377,10 @@ def _wiremock_base_url(wiremock: WireMockContainer) -> str:
 
 @pytest.fixture(scope="session")
 def parsing_stub(_wiremock_base_url: str) -> WireMockStub:
-    return WireMockStub(_wiremock_base_url, "/v1/parse")
+    """Scoped to "/v1" (not just "/v1/parse") — it must also capture the
+    "/v1/chunk/*" calls, which are a separate stage (Epic 21) but still land
+    on the same PARSING_SERVICE_URL host."""
+    return WireMockStub(_wiremock_base_url, "/v1")
 
 
 @pytest.fixture(scope="session")

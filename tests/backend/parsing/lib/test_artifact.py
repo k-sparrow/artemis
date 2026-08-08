@@ -10,10 +10,10 @@ import uuid
 
 from src.backend.parsing.lib.artifact import (
     ParseStatus,
-    build_artifact,
+    build_pages,
     chunk_items_to_parsed,
 )
-from src.lib.core.ingestion.types import ChunkType, ParseArtifact
+from src.lib.core.ingestion.types import ChunkType, Page
 
 
 _OBJ_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
@@ -91,31 +91,24 @@ class TestChunkItemsToParsed:
         assert all(c.obj_id == _OBJ_ID for c in chunks)
 
 
-class TestBuildArtifact:
+class TestBuildPages:
     def _make_dl_doc(self):
-        """Return a minimal DoclingDocument with one page of content."""
+        """Return a minimal DoclingDocument with no pages (empty doc)."""
         from docling.datamodel.document import DoclingDocument
 
         doc = DoclingDocument(name="test")
         return doc
 
-    def test_returns_parse_artifact(self) -> None:
-        from src.backend.parsing.lib.artifact import chunk_items_to_parsed
-
-        items = [{"text": "hello world", "filename": "doc.pdf", "page_numbers": [1]}]
-        chunks = chunk_items_to_parsed(items, _OBJ_ID)
+    def test_returns_list_of_pages(self) -> None:
         dl_doc = self._make_dl_doc()
-        artifact = build_artifact(chunks, dl_doc, _OBJ_ID)
-        assert isinstance(artifact, ParseArtifact)
-        assert len(artifact.chunks) == 1
-        assert artifact.chunks[0].page_content == "hello world"
+        pages = build_pages(dl_doc, _OBJ_ID)
+        assert isinstance(pages, list)
+        assert all(isinstance(p, Page) for p in pages)
 
-    def test_chunks_have_obj_id_stamped(self) -> None:
-        items = [{"text": "x", "filename": "f", "page_numbers": []}]
-        chunks = chunk_items_to_parsed(items, _OBJ_ID)
+    def test_pages_have_obj_id_stamped(self) -> None:
         dl_doc = self._make_dl_doc()
-        artifact = build_artifact(chunks, dl_doc, _OBJ_ID)
-        assert artifact.chunks[0].obj_id == _OBJ_ID
+        pages = build_pages(dl_doc, _OBJ_ID)
+        assert all(p.obj_id == _OBJ_ID for p in pages)
 
 
 class TestParseStatus:

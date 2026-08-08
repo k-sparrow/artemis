@@ -15,13 +15,13 @@ service. It does not serve HTTP requests.
 
 | Queue | Worker | Concurrency | Tasks |
 |-------|--------|-------------|-------|
-| `artemis.ingestion.parse` | `backend-controller-parse-worker` | 3 | `tasks.ingest`, `tasks.parse`, `tasks.submit_parse`, `tasks.poll_parse`, `tasks.resolve_parse`, `tasks.poll_resolve` |
+| `artemis.ingestion.parse` | `backend-controller-parse-worker` | 3 | `tasks.ingest`, `tasks.parse`, `tasks.submit_parse`, `tasks.poll_parse`, `tasks.resolve_parse`, `tasks.submit_chunk`, `tasks.poll_chunk` |
 | `artemis.ingestion.index` | `backend-controller-index-worker` | 1 | `tasks.index`, `tasks.delete_document`, `tasks.delete_namespace` |
 
 The parse worker runs at `concurrency=3` with `prefetch_multiplier=1` — three Celery
 threads can each hold a task, but each thread either makes a single short HTTP call
-(submit, status, resolve, finalize) or is sleeping in `self.retry()`. No thread blocks
-for the full duration of a Docling job.
+(submit, status, resolve, chunk submit, chunk finalize) or is sleeping in `self.retry()`.
+No thread blocks for the full duration of a Docling job.
 
 The index worker remains serial (`concurrency=1`) because the indexing service calls
 the TEI embedding model, which is GPU-bound and not safely parallelised from a single host.
@@ -47,12 +47,18 @@ tasks.ingest(upload_action=CREATE|MODIFY)
 parse  →self.replace()→  chain(
                            submit_parse    → SubmitResult dict
                            poll_parse      → SubmitResult dict (pass-through after conversion terminal)
-                           resolve_parse   → ResolveResult dict {chunking_task_id, obj_id}
-                           poll_resolve    → calls finalize → BlobRef dict
+                           resolve_parse   → ResolveResult dict {obj_id}
+                           submit_chunk    → ChunkSubmitResult dict {chunking_task_id, obj_id}
+                           poll_chunk      → calls chunk finalize → BlobRef dict
                          )
 ```
 
-`index` receives the `BlobRef` dict from `poll_resolve` (via `self.replace()`) as its
+Chunking is a fully decoupled stage from conversion (Epic 21): `resolve_parse` only downloads
+and caches the conversion result — it never submits a chunk job itself. `submit_chunk` is a
+separate task, mirroring `submit_parse`'s retry structure, so the two stages can fail and
+retry independently instead of sharing one task's error handling.
+
+`index` receives the `BlobRef` dict from `poll_chunk` (via `self.replace()`) as its
 first positional argument — identical interface to the old `fetch_and_parse`.
 
 Every sub-task receives `task_id` as a kwarg so that `FailureRecordingTask.on_failure`
@@ -101,14 +107,22 @@ On `"success"` passes `SubmitResult` through unchanged to `resolve_parse`.
 ### `resolve_parse`
 
 Calls `POST /v1/parse/resolve`. The parsing service downloads the conversion result
-(`GET /v1/result/{parsing_task_id}`), writes the replay cache, and submits the chunk job to
-Docling Serve. Returns `ResolveResult {chunking_task_id, obj_id}`.
+(`GET /v1/result/{parsing_task_id}`), writes the replay cache, and derives + caches pages —
+it does not submit a chunk job. Returns `ResolveResult {obj_id}`.
 
-### `poll_resolve`
+### `submit_chunk`
 
-Calls `GET /v1/parse/status/{chunking_task_id}`. Same retry pattern as `poll_parse`.
-On `"success"` calls `POST /v1/parse/finalize`, which fetches the chunk result and writes
-the `ParseArtifact` to MinIO. Returns the `BlobRef` dict that `index` consumes.
+Calls `POST /v1/chunk/submit`. The parsing service hands docling-serve the replay-cache S3
+location directly (no document bytes cross this task or the parsing-service call). Same
+retry structure as `submit_parse` (`max_retries=20`). Returns
+`ChunkSubmitResult {chunking_task_id, obj_id}`.
+
+### `poll_chunk`
+
+Calls `GET /v1/chunk/status/{chunking_task_id}`. Same retry pattern as `poll_parse`.
+On `"success"` calls `POST /v1/chunk/finalize`, which fetches the chunk result, merges it
+with the pages `resolve_parse` already cached, and writes the `ParseArtifact` to MinIO.
+Returns the `BlobRef` dict that `index` consumes.
 
 ---
 
@@ -126,7 +140,7 @@ All tasks use manual `try/except` blocks. Each exception type has a different ba
 | `pybreaker.CircuitBreakerError` | Breaker open — wait for reset window | `reset_timeout + 5s + jitter([0, 30s])` = 125–155 s | same as above |
 | `httpx.HTTPStatusError` 4xx | Permanent failure — propagate | — | — |
 
-`poll_parse` and `poll_resolve` use `max_retries=1440` (≈ 24 h). All other parse tasks
+`poll_parse` and `poll_chunk` use `max_retries=1440` (≈ 24 h). All other parse tasks
 use `max_retries=20`.
 
 ### Layer 2 — Circuit breakers (second line of defence)
@@ -135,7 +149,7 @@ Two `pybreaker.CircuitBreaker` singletons guard outbound HTTP calls:
 
 | Breaker | Wraps | Opens after | Probes after |
 |---------|-------|-------------|--------------|
-| `parsing_breaker` | all `/v1/parse/*` calls | 3 consecutive failures | 120 s (HALF-OPEN) |
+| `parsing_breaker` | all `/v1/parse/*` and `/v1/chunk/*` calls | 3 consecutive failures | 120 s (HALF-OPEN) |
 | `indexing_breaker` | `call_indexing_service`, `call_delete_service` | 3 consecutive failures | 120 s (HALF-OPEN) |
 
 Once a downstream is known to be failing, the circuit breaker fast-fails subsequent calls
@@ -146,17 +160,18 @@ without making a network request. State transitions are logged at WARNING level 
 
 ## acks_late and GPU Serialisation
 
-`tasks.submit_parse` is decorated with `acks_late=True`. The RabbitMQ message is not
-acknowledged until `submit_parse` completes — if the worker crashes before the submission
-lands, the message is redelivered. The remaining poll and resolve tasks do not need
-`acks_late` because the Celery result backend tracks retry state.
+Every task in the parse sub-chain (`parse`, `submit_parse`, `poll_parse`, `resolve_parse`,
+`submit_chunk`, `poll_chunk`) is decorated with `acks_late=True`. Between retries a task is
+"parked" in the worker's in-memory timer waiting for its ETA, not sitting acked-and-forgotten
+in RabbitMQ — a worker crash during that park window leaves the message unacked so RabbitMQ
+redelivers it, rather than dropping it permanently.
 
 ---
 
 ## FailureRecordingTask
 
-`parse`, `submit_parse`, `poll_parse`, `resolve_parse`, `poll_resolve`, and `index`
-inherit from `FailureRecordingTask`. On terminal failure:
+`parse`, `submit_parse`, `poll_parse`, `resolve_parse`, `submit_chunk`, `poll_chunk`, and
+`index` inherit from `FailureRecordingTask`. On terminal failure:
 
 ```python
 def on_failure(self, exc, task_id, args, kwargs, einfo):
@@ -212,8 +227,9 @@ result backend that writes to `apollo_celery_taskmeta` (shared PostgreSQL) with
 | `INGESTION_SERVICE_URL` | `http://backend-indexing:10000` | |
 | `HTTPX_TIMEOUT` | `600` | For indexing/delete calls only; parse calls use per-endpoint timeouts |
 | `PARSING_SUBMIT_TIMEOUT` | `120.0` | Source download/forward + HTTP POST |
-| `PARSING_STATUS_TIMEOUT` | `30.0` | Single status GET |
-| `PARSING_RESOLVE_TIMEOUT` | `120.0` | S3 downloads + concatenate + chunk submit |
+| `PARSING_STATUS_TIMEOUT` | `30.0` | Single status GET (parse or chunk task) |
+| `PARSING_RESOLVE_TIMEOUT` | `120.0` | Conversion result fetch + replay/pages cache write |
+| `PARSING_CHUNK_SUBMIT_TIMEOUT` | `30.0` | Chunk job submission (S3-direct, no bytes) |
 | `PARSING_FINALIZE_TIMEOUT` | `60.0` | Chunk result fetch + artifact write |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | |
 | `OTEL_SERVICE_NAME` | `backend-controller-worker` | |

@@ -51,10 +51,15 @@ class WorkerSettings(BaseSettings):
     # httpx timeout (seconds) for indexing and delete service calls
     HTTPX_TIMEOUT: float = 1800.0
 
-    # Per-call timeouts for the new async parse endpoints
-    PARSING_SUBMIT_TIMEOUT: float = 120.0  # shard uploads + HTTP POST
-    PARSING_STATUS_TIMEOUT: float = 30.0  # single status GET
-    PARSING_RESOLVE_TIMEOUT: float = 120.0  # S3 downloads + concat + chunk submit
+    # Per-call timeouts for the async parse/chunk endpoints
+    PARSING_SUBMIT_TIMEOUT: float = 120.0  # source download/forward + HTTP POST
+    PARSING_STATUS_TIMEOUT: float = 30.0  # single status GET (parse or chunk task)
+    PARSING_RESOLVE_TIMEOUT: float = (
+        120.0  # conversion result fetch + replay/pages cache
+    )
+    PARSING_CHUNK_SUBMIT_TIMEOUT: float = (
+        30.0  # chunk job submission (S3-direct, no bytes)
+    )
     PARSING_FINALIZE_TIMEOUT: float = 60.0  # chunk result fetch + artifact write
 
     # Celery exchange name

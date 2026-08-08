@@ -74,7 +74,8 @@ app.conf.task_routes = {
     "tasks.submit_parse": _PARSE_ROUTE,
     "tasks.poll_parse": _PARSE_ROUTE,
     "tasks.resolve_parse": _PARSE_ROUTE,
-    "tasks.poll_resolve": _PARSE_ROUTE,
+    "tasks.submit_chunk": _PARSE_ROUTE,
+    "tasks.poll_chunk": _PARSE_ROUTE,
     # Indexing
     "tasks.index": _INDEX_ROUTE,
     "tasks.delete_document": _INDEX_ROUTE,

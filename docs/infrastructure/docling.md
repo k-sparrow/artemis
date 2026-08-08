@@ -69,15 +69,30 @@ values.
 
 ### Hybrid chunking
 
-```
-POST /v1/chunk/hybrid/file/async
-Content-Type: multipart/form-data
+Chunking is a fully decoupled stage from conversion in the parsing service (Epic 21) —
+it happens after `/v1/parse/resolve` has written the converted `DoclingDocument` to its
+replay cache, via a separate `/v1/chunk/submit` call. In production the parsing service
+always submits chunk jobs as an S3 source (mirroring conversion's `source_ref` path), not
+inline file bytes, so docling-serve fetches the JSON itself:
 
-files=("doc.json", <DoclingDocument bytes>, "application/json")
+```
+POST /v1/chunk/hybrid/source/async
+Content-Type: application/json
+
+{
+  "sources": [{"kind": "s3", "endpoint": ..., "bucket": ..., "key_prefix": "replay/{obj_id}.json", ...}],
+  "target": {"kind": "inbody"}
+}
 ```
 
-Returns `{"task_id": "<uuid>"}`. Fetch result with `GET /v1/result/{task_id}` →
+`POST /v1/chunk/hybrid/file/async` (multipart, inline bytes) also exists and is used only by
+callers with no S3 reference to hand off (e.g. `experiments/eval/runners/retrieval_eval.py`).
+
+Both return `{"task_id": "<uuid>"}`. Fetch result with `GET /v1/result/{task_id}` →
 `{"chunks": [...]}`.
+
+`target` for chunk endpoints always defaults to in-body (`InBodyTarget()`) — unlike convert's
+`target`, it isn't policy-configurable via `resolve_default_target`.
 
 ---
 

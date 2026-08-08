@@ -3,6 +3,7 @@ from typing import Any, List, Optional, Protocol, Tuple, runtime_checkable
 
 import httpx
 from langchain_core.documents import Document
+from pydantic import TypeAdapter
 
 from src.lib.core.adapters.loaders import LoaderError, LoaderFactory
 from src.lib.core.ingestion.exceptions import (
@@ -12,7 +13,17 @@ from src.lib.core.ingestion.exceptions import (
 from src.lib.core.ingestion.normalizer.metadata import MetadataFieldNormalizer
 from src.lib.core.ingestion.types import ChunkType, Page, ParseArtifact, ParsedChunk
 
-__all__ = ["a_parse", "encode_artifact", "artifact_key", "replay_key"]
+__all__ = [
+    "a_parse",
+    "encode_artifact",
+    "artifact_key",
+    "replay_key",
+    "pages_key",
+    "encode_pages",
+    "decode_pages",
+]
+
+_pages_adapter = TypeAdapter(List[Page])
 
 
 @runtime_checkable
@@ -92,6 +103,26 @@ def artifact_key(obj_id: str) -> str:
 def replay_key(obj_id: str) -> str:
     """Private replay-cache key for an object's lossless ``DoclingDocument``."""
     return f"replay/{obj_id}.json"
+
+
+def pages_key(obj_id: str) -> str:
+    """Private cache key for an object's page-level Markdown parents.
+
+    Computed once by /v1/parse/resolve and consumed by /v1/chunk/finalize —
+    chunking is a fully decoupled stage (Epic 21), so it never re-derives
+    pages from the replay-cached DoclingDocument itself.
+    """
+    return f"pages/{obj_id}.json"
+
+
+def encode_pages(pages: List[Page]) -> bytes:
+    """Serialise page parents to JSON bytes for the private pages cache."""
+    return _pages_adapter.dump_json(pages)
+
+
+def decode_pages(data: bytes) -> List[Page]:
+    """Deserialise page parents from the private pages cache."""
+    return _pages_adapter.validate_json(data)
 
 
 def _to_parsed_chunk(doc: Document) -> ParsedChunk:
