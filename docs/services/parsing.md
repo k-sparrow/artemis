@@ -6,7 +6,11 @@
 
 The parsing service is a stateless bridge between raw documents and the indexing pipeline.
 It accepts a file reference (claim-check), calls Docling Serve, and writes a structured
-`ParseArtifact` to MinIO. It never sends document bytes over HTTP to another service.
+`ParseArtifact` to MinIO. It downloads referenced document bytes itself and submits them to
+Docling Serve inline (multipart) — no docling-serve v1.29.0 endpoint can actually accept an S3
+source without either a schema-level `422` or hitting an upstream Ray-orchestrator bug that
+silently fails every document; see
+[docs/infrastructure/docling.md](../infrastructure/docling.md) for the full investigation.
 
 ---
 
@@ -48,15 +52,16 @@ The controller worker drives a scatter-gather pipeline across four long-running 
 Celery thread is blocked during conversion or chunking.
 
 ```
-submit_endpoint         → Docling Serve /v1/convert/file/async (or .../source/async)
+submit_endpoint         → downloads source_ref bytes if needed, then
+                          Docling Serve /v1/convert/file/async
                                ↓ polling via status_endpoint
 resolve_endpoint        → download conversion result
                         → write replay cache (raw DoclingDocument JSON)
                         → derive + cache pages (Markdown parents)
                                ↓
-chunk_submit_endpoint   → Docling Serve /v1/chunk/hybrid/source/async
-                          (reads the replay cache directly from S3 — no bytes
-                          re-uploaded here, mirrors submit's source_ref path)
+chunk_submit_endpoint   → reads replay cache from S3 itself, then
+                          Docling Serve /v1/chunk/hybrid/file/async
+                          (sent inline — no chunk endpoint takes an S3 source)
                                ↓ polling via chunk_status_endpoint
 chunk_finalize_endpoint → fetch chunk result
                         → read cached pages (never re-derives them)
@@ -71,17 +76,20 @@ and converts them concurrently across Ray actors **server-side**; this service h
 visibility into that and needs none (see [docs/infrastructure/docling.md](../infrastructure/docling.md)
 and TODOs.md Epic 21). A prior version of this service did its own client-side PDF sharding
 via a `/v1/convert/source/batch` S3 workflow — that path was retired outright once the Ray
-engine made it unnecessary, not kept as a fallback.
+engine made it unnecessary, not kept as a fallback. (`/v1/convert/source/batch` reappeared
+briefly and was reverted again for an unrelated reason — an upstream Ray-orchestrator bug; see
+[docs/infrastructure/docling.md](../infrastructure/docling.md).)
 
 ### Submit (`POST /v1/parse/submit`)
 
 Form fields identical to `POST /v1/parse`. Logic:
 
-1. Materialise document bytes: inline `file` bytes are read directly and forwarded to
-   `POST /v1/convert/file/async`; `source_ref` claim-check inputs are handed to docling-serve
-   as an S3 source via `POST /v1/convert/source/async` — docling-serve fetches the object
-   directly from MinIO/S3 itself, so this service never downloads the bytes into its own
-   memory (Epic 21 §21.3).
+1. Materialise document bytes: inline `file` bytes are read directly; `source_ref` claim-check
+   inputs are downloaded by this service itself first (`blob_store(ref.bucket).aget(ref.key)`).
+   Either way, the bytes are then forwarded to `POST /v1/convert/file/async` as multipart. No
+   docling-serve v1.29.0 endpoint can actually accept an S3 source (schema-level `422` on the
+   non-batch endpoint; an upstream Ray-orchestrator bug on the batch endpoint) — see
+   [docs/infrastructure/docling.md](../infrastructure/docling.md).
 2. Return `{parsing_task_id, obj_id}`.
 
 ### Status (`GET /v1/parse/status/{task_id}`, `GET /v1/chunk/status/{task_id}`)
@@ -129,10 +137,10 @@ Request body: `{parsing_task_id, obj_id}`.
 Request body: `{obj_id}`. Must only be called after `/v1/parse/resolve` has written the
 replay cache for this `obj_id`.
 
-1. `POST /v1/chunk/hybrid/source/async` pointing at `REPLAY_CACHE_BUCKET/replay/{obj_id}.json`
-   as an S3 source — docling-serve fetches the JSON directly, this service never re-reads or
-   re-uploads it.
-2. Return `{chunking_task_id, obj_id}`.
+1. Read `REPLAY_CACHE_BUCKET/replay/{obj_id}.json` into memory — no chunk endpoint accepts an
+   S3 source, so this service must fetch it itself.
+2. `POST /v1/chunk/hybrid/file/async` with those bytes as multipart.
+3. Return `{chunking_task_id, obj_id}`.
 
 ### Chunk Finalize (`POST /v1/chunk/finalize`)
 
@@ -187,8 +195,8 @@ replay/{obj_id}.json
 ```
 
 Written by `resolve_endpoint` (async flow) and by `POST /v1/parse` (sync flow). Read back
-by `chunk_submit_endpoint`, which hands docling-serve this S3 location directly rather than
-re-uploading the JSON — chunking never re-fetches it into this service's own memory.
+by `chunk_submit_endpoint`, which reads these bytes itself and submits them inline — no
+docling-serve v1.29.0 endpoint accepts an S3 reference for chunk sources.
 
 Derived page-level Markdown parents are cached alongside it, in the same bucket:
 ```

@@ -136,8 +136,13 @@ class TestFetchAndParseIndexChain:
         _dispatch_ingest(dispatch_app, s3_source_bucket, namespace_id)
         wait_until_stub_called(indexing_stub, timeout=60)
 
+        # Exact-match the path: both /v1/parse/submit and /v1/chunk/submit end in
+        # "/submit" and share this stub's view (Epic 21 §21.8), so an endswith()
+        # match is ambiguous — it previously picked whichever WireMock's request
+        # journal (newest-first) happened to return first, which is /v1/chunk/submit
+        # (JSON body, no filename), not /v1/parse/submit (multipart, has the filename).
         submit_req = next(
-            r for r in parsing_stub.requests if r["path"].endswith("/submit")
+            r for r in parsing_stub.requests if r["path"] == "/v1/parse/submit"
         )
         assert b"test.md" in submit_req["body"]
 

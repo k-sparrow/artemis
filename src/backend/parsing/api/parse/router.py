@@ -154,6 +154,7 @@ async def parse_endpoint(
 @router.post("/v1/parse/submit", response_model=SubmitResult)
 async def submit_endpoint(
     docling_client: docling_client_dependency,
+    blob_store: blob_store_factory_dependency,
     file: Optional[UploadFile] = File(None),
     source_ref: Optional[str] = Form(None),
     filename: Optional[str] = Form(None),
@@ -164,10 +165,18 @@ async def submit_endpoint(
 
     Large PDFs are fanned out into page slices and converted concurrently
     server-side by docling-serve's Ray engine (see TODOs.md Epic 21), so no
-    client-side splitting is needed. ``source_ref`` inputs are handed to
-    docling-serve as an S3 source — it fetches the object directly from
-    MinIO/S3 itself, so this service never downloads the bytes into its own
-    memory. ``file`` (inline multipart) inputs are forwarded as-is.
+    client-side splitting is needed.
+
+    Both ``file`` (inline multipart) and ``source_ref`` (S3 reference) inputs
+    are submitted to docling-serve as inline multipart bytes — this service
+    downloads ``source_ref`` content itself first. No docling-serve v1.29.0
+    endpoint can actually take an S3 source: the non-batch endpoint's schema
+    rejects S3 sources outright (422), and the batch endpoint's Ray-fanout
+    codepath has an upstream bug that silently fails every document it
+    receives (`docling_jobkit.orchestrators.ray.serve_deployment.
+    _is_s3_fanout_task`, confirmed via direct reproduction — see TODOs.md
+    Epic 21 §21.9). Downloading and submitting inline is the only combination
+    that actually works.
 
     Poll ``GET /v1/parse/status/{task_id}`` until "success" or "failure",
     then call ``POST /v1/parse/resolve``.
@@ -185,31 +194,26 @@ async def submit_endpoint(
         in_name = filename or file.filename or "upload"
         in_type = content_type or file.content_type or "application/octet-stream"
         logger.info("submit_started", obj_id=obj_id, filename=in_name, mode="file")
-        task_id = await docling_client.submit_file(
-            content=content,
-            filename=in_name,
-            content_type=in_type,
-            timeout=120.0,
-        )
     else:
         ref = BlobRef.model_validate_json(source_ref)
+        in_name = filename or ref.key.split("/")[-1]
+        in_type = content_type or "application/octet-stream"
         logger.info(
             "submit_started",
             obj_id=obj_id,
-            filename=filename or ref.key.split("/")[-1],
+            filename=in_name,
             mode="source",
             bucket=ref.bucket,
             key=ref.key,
         )
-        task_id = await docling_client.submit_source(
-            s3_endpoint=settings.S3_ENDPOINT,
-            s3_access_key=settings.S3_ACCESS_KEY,
-            s3_secret_key=settings.S3_SECRET_KEY,
-            s3_secure=settings.S3_SECURE,
-            bucket=ref.bucket,
-            key=ref.key,
-            timeout=120.0,
-        )
+        content = await blob_store(ref.bucket).aget(ref.key)
+
+    task_id = await docling_client.submit_file(
+        content=content,
+        filename=in_name,
+        content_type=in_type,
+        timeout=120.0,
+    )
 
     logger.info("submit_queued", obj_id=obj_id, parsing_task_id=task_id)
     return SubmitResult(parsing_task_id=task_id, obj_id=obj_id)
@@ -286,27 +290,24 @@ async def resolve_endpoint(
 async def chunk_submit_endpoint(
     request: ChunkSubmitRequest,
     docling_client: docling_client_dependency,
+    blob_store: blob_store_factory_dependency,
 ) -> ChunkSubmitResult:
     """Submit the replay-cached DoclingDocument for hybrid chunking.
 
     Must only be called after /v1/parse/resolve has written the replay cache
-    for this obj_id. docling-serve fetches the JSON directly from S3 — this
-    service never re-reads or re-uploads it (mirrors /v1/parse/submit's
-    source_ref path).
+    for this obj_id. No chunk endpoint in docling-serve v1.29.0 accepts an S3
+    source (same schema-level 422 as convert's non-batch endpoint, and there's
+    no batch variant for chunk to work around it with — see submit_endpoint's
+    docstring), so this service reads the replay-cached JSON itself and
+    submits it inline.
 
     Poll GET /v1/chunk/status/{task_id} until "success", then call
     POST /v1/chunk/finalize.
     """
     obj_id = request.obj_id
-    chunking_task_id = await docling_client.submit_chunk_source(
-        s3_endpoint=settings.S3_ENDPOINT,
-        s3_access_key=settings.S3_ACCESS_KEY,
-        s3_secret_key=settings.S3_SECRET_KEY,
-        s3_secure=settings.S3_SECURE,
-        bucket=settings.REPLAY_CACHE_BUCKET,
-        key=service.replay_key(obj_id),
-        timeout=120.0,
-    )
+    replay_store = blob_store(settings.REPLAY_CACHE_BUCKET)
+    replay_bytes = await replay_store.aget(service.replay_key(obj_id))
+    chunking_task_id = await docling_client.submit_chunk(replay_bytes, timeout=120.0)
     logger.info("chunk_submit_queued", obj_id=obj_id, chunking_task_id=chunking_task_id)
     return ChunkSubmitResult(chunking_task_id=chunking_task_id, obj_id=obj_id)
 

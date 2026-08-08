@@ -49,6 +49,7 @@ from wiremock.testing.testcontainer import WireMockContainer
 from tests.backend.controller.worker.integration.conftest import (  # noqa: PLC2701
     _ARTIFACT_BUCKET,
     _ARTIFACT_KEY,
+    _CHUNK_SUBMIT_RESULT,
     _IMAGE_TAG,
     _PARSE_RESPONSE,
     _PARSE_STATUS_SUCCESS,
@@ -106,11 +107,15 @@ def minio_client(minio_container):
 def wiremock(request: pytest.FixtureRequest) -> WireMockContainer:
     """One WireMock stubbing BOTH HTTP deps of the chain.
 
-    Parsing (async 4-step chain under /v1/parse/*):
+    Parsing + chunking (async 6-step chain under /v1/parse/* and /v1/chunk/* —
+    chunking is a fully decoupled stage from conversion, Epic 21 §21.8, but
+    still proxied through the same PARSING_SERVICE_URL host):
       POST /v1/parse/submit   → SubmitResult
       GET  /v1/parse/status/* → ParseStatus "success"
-      POST /v1/parse/resolve  → ResolveResult
-      POST /v1/parse/finalize → BlobRef claim-check
+      POST /v1/parse/resolve  → ResolveResult (obj_id only)
+      POST /v1/chunk/submit   → ChunkSubmitResult
+      GET  /v1/chunk/status/* → ParseStatus "success"
+      POST /v1/chunk/finalize → BlobRef claim-check
 
     Indexing:
       POST /ingest → UpsertResult
@@ -152,9 +157,31 @@ def wiremock(request: pytest.FixtureRequest) -> WireMockContainer:
         },
     )
     wm.with_mapping(
-        "parsing-finalize.json",
+        "chunk-submit.json",
         {
-            "request": {"method": "POST", "urlPath": "/v1/parse/finalize"},
+            "request": {"method": "POST", "urlPath": "/v1/chunk/submit"},
+            "response": {
+                "status": 200,
+                "headers": {"Content-Type": "application/json"},
+                "jsonBody": _CHUNK_SUBMIT_RESULT,
+            },
+        },
+    )
+    wm.with_mapping(
+        "chunk-status.json",
+        {
+            "request": {"method": "GET", "urlPattern": "/v1/chunk/status/.*"},
+            "response": {
+                "status": 200,
+                "headers": {"Content-Type": "application/json"},
+                "jsonBody": _PARSE_STATUS_SUCCESS,
+            },
+        },
+    )
+    wm.with_mapping(
+        "chunk-finalize.json",
+        {
+            "request": {"method": "POST", "urlPath": "/v1/chunk/finalize"},
             "response": {
                 "status": 200,
                 "headers": {"Content-Type": "application/json"},

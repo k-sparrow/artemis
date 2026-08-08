@@ -182,7 +182,10 @@ sequenceDiagram
     note over CW,PS: Chunking is a fully decoupled stage (Epic 21)
 
     CW->>PS: POST /v1/chunk/submit
-    PS->>Docling: POST /v1/chunk/hybrid/source/async {S3 ref: replay/{obj_id}.json}
+    PS->>S3: read replay/{obj_id}.json
+    S3-->>PS: DoclingDocument JSON
+    note over PS,Docling: No chunk endpoint accepts an S3 source — PS sends the bytes inline.
+    PS->>Docling: POST /v1/chunk/hybrid/file/async {files: <bytes>}
     Docling-->>PS: task_id
     PS-->>CW: ChunkSubmitResult {chunking_task_id}
 

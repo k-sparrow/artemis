@@ -51,6 +51,23 @@ Returns `{"task_id": "<uuid>"}` immediately. Poll
 `GET /v1/status/poll/{task_id}?wait=0` until `task_status` is terminal, then fetch
 the result with `GET /v1/result/{task_id}`.
 
+**No docling-serve v1.29.0 endpoint can actually take an S3 source.** This was tried (S3
+source_ref → S3-direct submission, avoiding the parsing service having to download bytes into
+its own memory) and doesn't work in this version, for two different reasons depending on the
+endpoint: `/v1/convert/source/async`'s `sources` field is typed `FileSourceRequest |
+HttpSourceRequest` only — an S3 source is a schema-level `422` there, confirmed directly against
+`docling.datamodel.service.requests.ConvertSourcesRequest`. `/v1/convert/source/batch`'s
+`sources` union does include `S3SourceRequest`, but any S3-sourced document submitted there is
+routed through the Ray orchestrator's `_is_s3_fanout_task` codepath
+(`docling_jobkit.orchestrators.ray.serve_deployment`), which has an upstream bug: the converter
+actor can't reconstruct its own source connector from the transported `S3Coordinates` object
+(`RuntimeError: No connector found for 'S3Coordinates'`), so every document fails silently in
+under 100ms with zero errors surfaced anywhere (task status still reports `"success"`). Confirmed
+by direct reproduction against the real image; not fixed in v1.30.0 either (checked its
+changelog); no matching upstream issue found filed. See TODOs.md Epic 21 §21.9 for the full
+investigation. The parsing service therefore always downloads `source_ref` bytes itself and
+submits them inline via this endpoint — same as an inline `file` upload.
+
 ### Large PDFs — server-side page-slice fan-out (Ray engine)
 
 Every document — regardless of size — goes through the exact same `/v1/convert/file/async`
@@ -71,24 +88,24 @@ values.
 
 Chunking is a fully decoupled stage from conversion in the parsing service (Epic 21) —
 it happens after `/v1/parse/resolve` has written the converted `DoclingDocument` to its
-replay cache, via a separate `/v1/chunk/submit` call. In production the parsing service
-always submits chunk jobs as an S3 source (mirroring conversion's `source_ref` path), not
-inline file bytes, so docling-serve fetches the JSON itself:
+replay cache, via a separate `/v1/chunk/submit` call. Like convert, no chunk endpoint can
+actually take an S3 source either (`BaseChunkDocumentsRequest.sources` has the identical
+`FileSourceRequest | HttpSourceRequest`-only restriction, and there's no batch variant of
+`/v1/chunk/*/source/async` to even attempt the Ray-fanout workaround with — this docling-serve
+version has no chunk batch endpoint at all). So the parsing service reads the replay-cached
+`DoclingDocument` itself and submits it inline:
 
 ```
-POST /v1/chunk/hybrid/source/async
-Content-Type: application/json
+POST /v1/chunk/hybrid/file/async
+Content-Type: multipart/form-data
 
-{
-  "sources": [{"kind": "s3", "endpoint": ..., "bucket": ..., "key_prefix": "replay/{obj_id}.json", ...}],
-  "target": {"kind": "inbody"}
-}
+files=@doc.json
 ```
 
-`POST /v1/chunk/hybrid/file/async` (multipart, inline bytes) also exists and is used only by
-callers with no S3 reference to hand off (e.g. `experiments/eval/runners/retrieval_eval.py`).
+This is the same endpoint non-production callers with no replay cache to read from use (e.g.
+`experiments/eval/runners/retrieval_eval.py`) — there's no separate "production" chunk path.
 
-Both return `{"task_id": "<uuid>"}`. Fetch result with `GET /v1/result/{task_id}` →
+Returns `{"task_id": "<uuid>"}`. Fetch result with `GET /v1/result/{task_id}` →
 `{"chunks": [...]}`.
 
 `target` for chunk endpoints always defaults to in-body (`InBodyTarget()`) — unlike convert's

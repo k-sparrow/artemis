@@ -8,9 +8,15 @@ document takes the same single-file submit/resolve path regardless of size.
 Chunking is a fully decoupled stage from conversion (Epic 21) — /v1/parse/resolve
 only downloads the conversion result, caches it (replay JSON + derived pages),
 and returns — it no longer submits a chunk job. /v1/chunk/submit, .../status,
-and .../finalize own that separately, submitting the replay-cached
-DoclingDocument to docling-serve directly from S3 (mirrors /v1/parse/submit's
-source_ref path) rather than re-uploading it.
+and .../finalize own that separately.
+
+Both convert and chunk submissions are always inline (multipart bytes for
+convert, JSON-multipart bytes for chunk) — no docling-serve v1.29.0 endpoint
+can actually take an S3 source: the non-batch endpoints reject S3 sources at
+the schema level (422), and the batch endpoint that *does* accept them hits
+an upstream Ray-orchestrator bug that silently fails every document (see
+TODOs.md Epic 21 §21.9). `source_ref` inputs are downloaded by this service
+via its own blob store before being forwarded.
 """
 
 from __future__ import annotations
@@ -55,17 +61,19 @@ def _empty_docling_doc():
     return DoclingDocument(name="test")
 
 
+def _docling_doc_json() -> bytes:
+    return _empty_docling_doc().model_dump_json().encode()
+
+
 def _mock_docling_client() -> MagicMock:
     """MagicMock for DoclingParseClient with AsyncMock methods."""
     client = MagicMock()
     client.submit_file = AsyncMock(return_value=CONV_TASK_ID)
-    client.submit_source = AsyncMock(return_value=CONV_TASK_ID)
     client.get_status = AsyncMock(
         return_value=ParseStatus(status="success", num_processed=1, num_total=1)
     )
     client.fetch_conversion_result = AsyncMock(return_value=_empty_docling_doc())
     client.submit_chunk = AsyncMock(return_value=CHUNK_TASK_ID)
-    client.submit_chunk_source = AsyncMock(return_value=CHUNK_TASK_ID)
     client.fetch_chunk_result = AsyncMock(return_value=[_CHUNK_ITEM])
     return client
 
@@ -135,16 +143,19 @@ class TestSubmitEndpoint:
         assert resp.json()["parsing_task_id"] == CONV_TASK_ID
         docling_client.submit_file.assert_awaited_once()
 
-    def test_source_ref_path_calls_submit_source(
+    def test_source_ref_path_downloads_then_submits_file(
         self,
         client: TestClient,
         docling_client: MagicMock,
+        store: InMemoryBlobStore,
     ) -> None:
         """
-        source_ref form field → docling_client.submit_source called with the
-        ref's bucket/key; docling-serve fetches directly from S3/MinIO, this
-        service never reads the bytes itself (Epic 21).
+        source_ref form field → this service downloads the referenced bytes
+        itself and calls docling_client.submit_file with them (no
+        docling-serve endpoint can actually take an S3 source in v1.29.0 —
+        see module docstring).
         """
+        store.put("ingest-source/doc.md", b"# Hello from source_ref")
         resp = client.post(
             "/v1/parse/submit",
             data={
@@ -157,16 +168,12 @@ class TestSubmitEndpoint:
             },
         )
         assert resp.status_code == 200
-        docling_client.submit_source.assert_awaited_once_with(
-            s3_endpoint=settings.S3_ENDPOINT,
-            s3_access_key=settings.S3_ACCESS_KEY,
-            s3_secret_key=settings.S3_SECRET_KEY,
-            s3_secure=settings.S3_SECURE,
-            bucket="ingest-source",
-            key="ingest-source/doc.md",
+        docling_client.submit_file.assert_awaited_once_with(
+            content=b"# Hello from source_ref",
+            filename="doc.md",
+            content_type="text/markdown",
             timeout=120.0,
         )
-        docling_client.submit_file.assert_not_awaited()
 
     def test_returns_422_when_neither_file_nor_source_ref(
         self, client: TestClient
@@ -253,7 +260,6 @@ class TestResolveEndpoint:
         assert resp.json() == {"obj_id": OBJ_ID_STR}
         assert store.exists(f"replay/{OBJ_ID_STR}.json")
         assert store.exists(f"pages/{OBJ_ID_STR}.json")
-        docling_client.submit_chunk_source.assert_not_awaited()
         docling_client.submit_chunk.assert_not_awaited()
 
 
@@ -263,13 +269,17 @@ class TestResolveEndpoint:
 
 
 class TestChunkSubmitEndpoint:
-    def test_submits_replay_cache_from_s3(
+    @pytest.fixture(autouse=True)
+    def seed_replay_cache(self, store: InMemoryBlobStore) -> None:
+        store.put(f"replay/{OBJ_ID_STR}.json", _docling_doc_json())
+
+    def test_submits_replay_cache_inline(
         self, client: TestClient, docling_client: MagicMock
     ) -> None:
         """
-        /v1/chunk/submit hands docling-serve the replay-cache S3 location —
-        it fetches the JSON itself, this service never re-reads or
-        re-uploads it (mirrors /v1/parse/submit's source_ref path).
+        /v1/chunk/submit reads the replay-cached DoclingDocument itself and
+        submits it inline — no docling-serve v1.29.0 endpoint can actually
+        take an S3 source (see module docstring).
         """
         resp = client.post("/v1/chunk/submit", json={"obj_id": OBJ_ID_STR})
         assert resp.status_code == 200
@@ -277,14 +287,8 @@ class TestChunkSubmitEndpoint:
             "chunking_task_id": CHUNK_TASK_ID,
             "obj_id": OBJ_ID_STR,
         }
-        docling_client.submit_chunk_source.assert_awaited_once_with(
-            s3_endpoint=settings.S3_ENDPOINT,
-            s3_access_key=settings.S3_ACCESS_KEY,
-            s3_secret_key=settings.S3_SECRET_KEY,
-            s3_secure=settings.S3_SECURE,
-            bucket=settings.REPLAY_CACHE_BUCKET,
-            key=f"replay/{OBJ_ID_STR}.json",
-            timeout=120.0,
+        docling_client.submit_chunk.assert_awaited_once_with(
+            _docling_doc_json(), timeout=120.0
         )
 
 

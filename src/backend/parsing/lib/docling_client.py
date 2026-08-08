@@ -48,49 +48,6 @@ class DoclingParseClient:
             resp.raise_for_status()
             return resp.json()["task_id"]
 
-    async def submit_source(
-        self,
-        *,
-        s3_endpoint: str,
-        s3_access_key: str,
-        s3_secret_key: str,
-        s3_secure: bool,
-        bucket: str,
-        key: str,
-        timeout: float = 120.0,
-    ) -> str:
-        """POST /v1/convert/source/async with a single S3 source → task_id.
-
-        docling-serve fetches the object directly from S3/MinIO server-side —
-        we never download the bytes ourselves. This is NOT the batch endpoint
-        (no docling-jobkit hash-subdirectory quirk applies): `target=inbody`
-        makes the result fetchable the same way as submit_file's, via
-        fetch_conversion_result. `key_prefix` is scoped to the exact object
-        key, matching a single object (S3 sources in this API are inherently
-        prefix/listing-based, not single-key lookups).
-        """
-        body = {
-            "options": {"to_formats": ["json"]},
-            "sources": [
-                {
-                    "kind": "s3",
-                    "endpoint": s3_endpoint,
-                    "access_key": s3_access_key,
-                    "secret_key": s3_secret_key,
-                    "verify_ssl": s3_secure,
-                    "bucket": bucket,
-                    "key_prefix": key,
-                }
-            ],
-            "target": {"kind": "inbody"},
-        }
-        async with httpx.AsyncClient(
-            base_url=self._base_url, timeout=timeout
-        ) as client:
-            resp = await client.post("/v1/convert/source/async", json=body)
-            resp.raise_for_status()
-            return resp.json()["task_id"]
-
     async def get_status(self, task_id: str, *, timeout: float = 30.0) -> ParseStatus:
         """
         Non-blocking single status check (wait=0). Works for conversion and chunk tasks.
@@ -155,10 +112,13 @@ class DoclingParseClient:
     ) -> str:
         """POST /v1/chunk/hybrid/file/async (JSON_DOCLING input) → task_id.
 
-        Uploads the DoclingDocument JSON inline. Kept for callers with no S3
-        reference to chunk from (e.g. experiments/eval/runners/retrieval_eval.py,
-        which parses in-memory with no MinIO in the loop). The production
-        parsing service path uses submit_chunk_source instead — see below.
+        Uploads the DoclingDocument JSON inline (target=inbody). This is the
+        only working option in docling-serve v1.29.0: no chunk endpoint
+        accepts an S3 source (`BaseChunkDocumentsRequest.sources` is
+        `FileSourceRequest | HttpSourceRequest` only — the same schema-level
+        422 as convert's non-batch endpoint — and there's no batch variant
+        for chunk to work around it with). The caller reads the
+        replay-cached DoclingDocument JSON itself and passes the bytes here.
         """
         async with httpx.AsyncClient(
             base_url=self._base_url, timeout=timeout
@@ -167,46 +127,6 @@ class DoclingParseClient:
                 "/v1/chunk/hybrid/file/async",
                 files={"files": ("doc.json", doc_json_bytes, "application/json")},
             )
-            resp.raise_for_status()
-            return resp.json()["task_id"]
-
-    async def submit_chunk_source(
-        self,
-        *,
-        s3_endpoint: str,
-        s3_access_key: str,
-        s3_secret_key: str,
-        s3_secure: bool,
-        bucket: str,
-        key: str,
-        timeout: float = 120.0,
-    ) -> str:
-        """POST /v1/chunk/hybrid/source/async with a single S3 source → task_id.
-
-        Chunks a previously-converted DoclingDocument JSON directly from S3 —
-        mirrors submit_source: docling-serve fetches the object itself, no
-        re-upload. Unlike the convert endpoint, the chunk request model's
-        `target` already defaults to inbody (not deployment-policy-configurable
-        the way convert's default is) — set explicitly anyway for clarity.
-        """
-        body = {
-            "sources": [
-                {
-                    "kind": "s3",
-                    "endpoint": s3_endpoint,
-                    "access_key": s3_access_key,
-                    "secret_key": s3_secret_key,
-                    "verify_ssl": s3_secure,
-                    "bucket": bucket,
-                    "key_prefix": key,
-                }
-            ],
-            "target": {"kind": "inbody"},
-        }
-        async with httpx.AsyncClient(
-            base_url=self._base_url, timeout=timeout
-        ) as client:
-            resp = await client.post("/v1/chunk/hybrid/source/async", json=body)
             resp.raise_for_status()
             return resp.json()["task_id"]
 
