@@ -163,39 +163,33 @@ sequenceDiagram
     participant S3 as MinIO S3
 
     CW->>PS: POST /v1/parse/submit {source_ref: BlobRef}
-    note over PS,Docling: Same single-submission path regardless of document size —<br/>large PDFs are fanned into page slices and converted<br/>concurrently server-side by Docling Serve's Ray engine (Epic 21).<br/>source AND target are both S3 (Epic 21 §21.9) — PS never touches document bytes.
-    PS->>Docling: POST /v1/convert/source/async {source: S3, target: S3 docling-out/convert/{obj_id}/}
-    Docling->>S3: fetch source directly
+    PS->>S3: read input file
+    S3-->>PS: raw bytes
+    note over PS,Docling: Same single-submission path regardless of document size —<br/>large PDFs are fanned into page slices and converted<br/>concurrently server-side by Docling Serve's Ray engine (Epic 21)
+    PS->>Docling: POST /v1/convert/file/async
     Docling-->>PS: task_id
     PS-->>CW: SubmitResult {parsing_task_id}
 
-    note over CW,PS: polling omitted for brevity — by "success", Docling has already<br/>written the converted JSON to S3
+    note over CW,PS: polling omitted for brevity
 
     CW->>PS: POST /v1/parse/resolve
-    PS->>S3: list docling-out/convert/{obj_id}/, filter *.json
-    S3-->>PS: discovered key
-    PS->>S3: read discovered key
-    S3-->>PS: DoclingDocument JSON
-    PS->>S3: write replay/{obj_id}.json (copy) + delete scratch key
+    PS->>Docling: GET /v1/result/{parsing_task_id}
+    PS->>S3: write replay/{obj_id}.json
     PS->>PS: derive pages (split_pages)
     PS->>S3: write pages/{obj_id}.json
     PS-->>CW: ResolveResult {obj_id}
 
-    note over CW,PS: Chunking is a fully decoupled stage (Epic 21 §21.8)
+    note over CW,PS: Chunking is a fully decoupled stage (Epic 21)
 
     CW->>PS: POST /v1/chunk/submit
-    PS->>Docling: POST /v1/chunk/hybrid/source/async {source: S3 replay/{obj_id}.json, target: S3 docling-out/chunk/{obj_id}/}
-    Docling->>S3: fetch replay JSON directly
+    PS->>Docling: POST /v1/chunk/hybrid/source/async {S3 ref: replay/{obj_id}.json}
     Docling-->>PS: task_id
     PS-->>CW: ChunkSubmitResult {chunking_task_id}
 
-    note over CW,PS: polling omitted for brevity — by "success", Docling has already<br/>written the chunk JSONL to S3
+    note over CW,PS: polling omitted for brevity
 
     CW->>PS: POST /v1/chunk/finalize
-    PS->>S3: list docling-out/chunk/{obj_id}/, filter *.chunks.jsonl
-    S3-->>PS: discovered key
-    PS->>S3: read + delete discovered key
-    S3-->>PS: chunk JSONL
+    PS->>Docling: GET /v1/result/{chunking_task_id}
     PS->>S3: read pages/{obj_id}.json
     PS->>PS: build ParseArtifact (chunks + cached pages)
     PS->>S3: write parse/{obj_id}.json

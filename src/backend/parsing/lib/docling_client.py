@@ -57,28 +57,17 @@ class DoclingParseClient:
         s3_secure: bool,
         bucket: str,
         key: str,
-        target_bucket: str,
-        target_key_prefix: str,
         timeout: float = 120.0,
     ) -> str:
-        """POST /v1/convert/source/async with an S3 source AND S3 target → task_id.
+        """POST /v1/convert/source/async with a single S3 source → task_id.
 
-        docling-serve both fetches the source and writes the converted JSON
-        directly to S3 server-side — no document bytes cross this process in
-        either direction (Epic 21 §21.9). This avoids pulling a potentially
-        large `DoclingDocument` JSON payload through the HTTP response body
-        for large PDFs, at the cost of the caller needing to discover the
-        written key afterwards: docling-jobkit's S3Target may nest the
-        artifact under additional path segments (format-type folders, and on
-        some versions a hash-subdirectory) it doesn't expose an API knob to
-        disable — see `docs/infrastructure/docling.md` and
-        `router._discover_s3_result_key`, which absorbs this via a recursive
-        listing scoped to `target_key_prefix` rather than guessing the exact
-        key. `key_prefix` (source) is scoped to the exact object key, matching
-        a single object (S3 sources in this API are inherently
-        prefix/listing-based, not single-key lookups); `target_key_prefix`
-        should likewise be scoped per-object so concurrent conversions never
-        collide in the listing.
+        docling-serve fetches the object directly from S3/MinIO server-side —
+        we never download the bytes ourselves. This is NOT the batch endpoint
+        (no docling-jobkit hash-subdirectory quirk applies): `target=inbody`
+        makes the result fetchable the same way as submit_file's, via
+        fetch_conversion_result. `key_prefix` is scoped to the exact object
+        key, matching a single object (S3 sources in this API are inherently
+        prefix/listing-based, not single-key lookups).
         """
         body = {
             "options": {"to_formats": ["json"]},
@@ -93,15 +82,7 @@ class DoclingParseClient:
                     "key_prefix": key,
                 }
             ],
-            "target": {
-                "kind": "s3",
-                "endpoint": s3_endpoint,
-                "access_key": s3_access_key,
-                "secret_key": s3_secret_key,
-                "verify_ssl": s3_secure,
-                "bucket": target_bucket,
-                "key_prefix": target_key_prefix,
-            },
+            "target": {"kind": "inbody"},
         }
         async with httpx.AsyncClient(
             base_url=self._base_url, timeout=timeout
@@ -198,28 +179,17 @@ class DoclingParseClient:
         s3_secure: bool,
         bucket: str,
         key: str,
-        target_bucket: str,
-        target_key_prefix: str,
         timeout: float = 120.0,
     ) -> str:
-        """POST /v1/chunk/hybrid/source/async with an S3 source AND S3 target → task_id.
+        """POST /v1/chunk/hybrid/source/async with a single S3 source → task_id.
 
         Chunks a previously-converted DoclingDocument JSON directly from S3 —
-        mirrors submit_source: docling-serve fetches the source itself and
-        writes the chunk JSONL directly to S3, no bytes cross this process in
-        either direction (Epic 21 §21.9). `presigned_url` is not an option
-        here — docling-serve rejects it outright for chunk endpoints — so
-        plain S3Target is used for both convert and chunk rather than mixing
-        target kinds. `convert_options.to_formats: []` suppresses the
-        incidental json/md/html/etc. uploads `ResultsProcessor` would
-        otherwise also write alongside the chunks file, keeping only the
-        chunks JSONL under `target_key_prefix`. Caller discovers the written
-        key via a recursive listing — see `submit_source`'s docstring and
-        `router._discover_s3_result_key` for why guessing the exact key isn't
-        safe.
+        mirrors submit_source: docling-serve fetches the object itself, no
+        re-upload. Unlike the convert endpoint, the chunk request model's
+        `target` already defaults to inbody (not deployment-policy-configurable
+        the way convert's default is) — set explicitly anyway for clarity.
         """
         body = {
-            "convert_options": {"to_formats": []},
             "sources": [
                 {
                     "kind": "s3",
@@ -231,15 +201,7 @@ class DoclingParseClient:
                     "key_prefix": key,
                 }
             ],
-            "target": {
-                "kind": "s3",
-                "endpoint": s3_endpoint,
-                "access_key": s3_access_key,
-                "secret_key": s3_secret_key,
-                "verify_ssl": s3_secure,
-                "bucket": target_bucket,
-                "key_prefix": target_key_prefix,
-            },
+            "target": {"kind": "inbody"},
         }
         async with httpx.AsyncClient(
             base_url=self._base_url, timeout=timeout

@@ -1,25 +1,16 @@
-"""
-Unit tests for POST /v1/parse/submit|status|resolve and
-/v1/chunk/submit|status|finalize.
+"""Unit tests for POST /v1/parse/submit|status|resolve and /v1/chunk/submit|status|finalize.
 
 Covers the async-path endpoints (Epic 18). Large-PDF handling is no longer a
 client-side concern here — docling-serve's Ray engine fans large PDFs into
 page slices and converts them concurrently server-side (Epic 21), so every
 document takes the same single-file submit/resolve path regardless of size.
 
-Chunking is a fully decoupled stage from conversion (Epic 21 §21.8):
-/v1/parse/resolve only caches the conversion result (replay JSON + derived
-pages) and returns — it no longer submits a chunk job. /v1/chunk/submit,
-.../status, and .../finalize own that separately, submitting the
-replay-cached DoclingDocument to docling-serve directly from S3.
-
-Both convert and chunk results now come back via an S3Target rather than
-inline in the HTTP response (Epic 21 §21.9) — docling-serve writes the
-artifact into our own bucket under a per-obj_id scratch prefix, and resolve/
-chunk-finalize discover the exact key via a recursive listing rather than
-guessing it (docling-jobkit nests the artifact under path segments we don't
-fully control). These tests fake the raw Minio client's list_objects() to
-exercise that discovery path without a real MinIO.
+Chunking is a fully decoupled stage from conversion (Epic 21) — /v1/parse/resolve
+only downloads the conversion result, caches it (replay JSON + derived pages),
+and returns — it no longer submits a chunk job. /v1/chunk/submit, .../status,
+and .../finalize own that separately, submitting the replay-cached
+DoclingDocument to docling-serve directly from S3 (mirrors /v1/parse/submit's
+source_ref path) rather than re-uploading it.
 """
 
 from __future__ import annotations
@@ -35,7 +26,6 @@ from src.backend.parsing.api.config import settings
 from src.backend.parsing.api.dependencies import (
     get_blob_store_factory,
     get_docling_client,
-    get_s3_client,
 )
 from src.backend.parsing.api.main import app
 from src.backend.parsing.api.parse import service as parse_service
@@ -65,10 +55,6 @@ def _empty_docling_doc():
     return DoclingDocument(name="test")
 
 
-def _docling_doc_json() -> bytes:
-    return _empty_docling_doc().model_dump_json().encode()
-
-
 def _mock_docling_client() -> MagicMock:
     """MagicMock for DoclingParseClient with AsyncMock methods."""
     client = MagicMock()
@@ -77,33 +63,15 @@ def _mock_docling_client() -> MagicMock:
     client.get_status = AsyncMock(
         return_value=ParseStatus(status="success", num_processed=1, num_total=1)
     )
+    client.fetch_conversion_result = AsyncMock(return_value=_empty_docling_doc())
     client.submit_chunk = AsyncMock(return_value=CHUNK_TASK_ID)
     client.submit_chunk_source = AsyncMock(return_value=CHUNK_TASK_ID)
+    client.fetch_chunk_result = AsyncMock(return_value=[_CHUNK_ITEM])
     return client
 
 
 def _metadata(obj_id: uuid.UUID = OBJ_ID) -> str:
     return json.dumps({"obj_id": str(obj_id)})
-
-
-class _FakeS3Object:
-    def __init__(self, object_name: str) -> None:
-        self.object_name = object_name
-
-
-class _FakeS3Client:
-    """Stands in for the raw Minio client's list_objects() — the only method
-    _discover_s3_result_key uses. Reads/writes go through the InMemoryBlobStore
-    `store` fixture instead; this only ever needs to answer "what keys exist
-    under this prefix" from that same backing dict."""
-
-    def __init__(self, store: InMemoryBlobStore) -> None:
-        self._store = store
-
-    def list_objects(self, bucket: str, prefix: str = "", recursive: bool = False):
-        return [
-            _FakeS3Object(key) for key in self._store._data if key.startswith(prefix)
-        ]
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +94,6 @@ def docling_client() -> MagicMock:
 def client(store: InMemoryBlobStore, docling_client: MagicMock) -> TestClient:
     app.dependency_overrides[get_docling_client] = lambda: docling_client
     app.dependency_overrides[get_blob_store_factory] = lambda: (lambda _b: store)
-    app.dependency_overrides[get_s3_client] = lambda: _FakeS3Client(store)
     try:
         with TestClient(app) as c:
             yield c
@@ -175,9 +142,8 @@ class TestSubmitEndpoint:
     ) -> None:
         """
         source_ref form field → docling_client.submit_source called with the
-        ref's bucket/key as source AND a per-obj_id scratch prefix as target
-        (Epic 21 §21.9 — docling-serve writes the result to S3 rather than
-        returning it inline).
+        ref's bucket/key; docling-serve fetches directly from S3/MinIO, this
+        service never reads the bytes itself (Epic 21).
         """
         resp = client.post(
             "/v1/parse/submit",
@@ -198,8 +164,6 @@ class TestSubmitEndpoint:
             s3_secure=settings.S3_SECURE,
             bucket="ingest-source",
             key="ingest-source/doc.md",
-            target_bucket=settings.REPLAY_CACHE_BUCKET,
-            target_key_prefix=parse_service.convert_scratch_prefix(OBJ_ID_STR),
             timeout=120.0,
         )
         docling_client.submit_file.assert_not_awaited()
@@ -264,14 +228,14 @@ class TestResolveEndpoint:
     def _resolve_body(self) -> dict:
         return {"parsing_task_id": CONV_TASK_ID, "obj_id": OBJ_ID_STR}
 
-    @pytest.fixture(autouse=True)
-    def seed_scratch_result(self, store: InMemoryBlobStore) -> str:
-        """docling-serve's S3Target write, stood in for directly — mirrors the
-        real json/{name}.json nesting under our scratch prefix."""
-        prefix = parse_service.convert_scratch_prefix(OBJ_ID_STR)
-        key = f"{prefix}json/{OBJ_ID_STR}.json"
-        store.put(key, _docling_doc_json())
-        return key
+    def test_fetches_conversion_result(
+        self, client: TestClient, docling_client: MagicMock
+    ) -> None:
+        resp = client.post("/v1/parse/resolve", json=self._resolve_body())
+        assert resp.status_code == 200
+        docling_client.fetch_conversion_result.assert_awaited_once_with(
+            CONV_TASK_ID, timeout=settings.DOCLING_RESOLVE_TIMEOUT
+        )
 
     def test_writes_replay_and_pages_cache_without_submitting_chunk(
         self,
@@ -281,8 +245,8 @@ class TestResolveEndpoint:
     ) -> None:
         """
         After resolve: replay cache AND pages cache written, response is just
-        the obj_id — chunking is a fully separate stage now (Epic 21 §21.8),
-        resolve never submits a chunk job itself.
+        the obj_id — chunking is a fully separate stage now (Epic 21), resolve
+        never submits a chunk job itself.
         """
         resp = client.post("/v1/parse/resolve", json=self._resolve_body())
         assert resp.status_code == 200
@@ -291,38 +255,6 @@ class TestResolveEndpoint:
         assert store.exists(f"pages/{OBJ_ID_STR}.json")
         docling_client.submit_chunk_source.assert_not_awaited()
         docling_client.submit_chunk.assert_not_awaited()
-
-    def test_scratch_key_deleted_after_resolve(
-        self,
-        client: TestClient,
-        store: InMemoryBlobStore,
-        seed_scratch_result: str,
-    ) -> None:
-        resp = client.post("/v1/parse/resolve", json=self._resolve_body())
-        assert resp.status_code == 200
-        assert not store.exists(seed_scratch_result)
-
-    def test_replay_cache_matches_discovered_bytes(
-        self,
-        client: TestClient,
-        store: InMemoryBlobStore,
-    ) -> None:
-        resp = client.post("/v1/parse/resolve", json=self._resolve_body())
-        assert resp.status_code == 200
-        assert store.get(f"replay/{OBJ_ID_STR}.json") == _docling_doc_json()
-
-    def test_missing_scratch_result_returns_502(
-        self,
-        client: TestClient,
-        store: InMemoryBlobStore,
-        seed_scratch_result: str,
-    ) -> None:
-        """If docling-serve reports success but never wrote the expected
-        artifact, resolve must surface a distinct upstream-failure status
-        rather than a confusing KeyError-shaped 500."""
-        store.delete(seed_scratch_result)
-        resp = client.post("/v1/parse/resolve", json=self._resolve_body())
-        assert resp.status_code == 502
 
 
 # ---------------------------------------------------------------------------
@@ -335,10 +267,9 @@ class TestChunkSubmitEndpoint:
         self, client: TestClient, docling_client: MagicMock
     ) -> None:
         """
-        /v1/chunk/submit hands docling-serve the replay-cache S3 location as
-        source AND a per-obj_id scratch prefix as target — it fetches the
-        JSON itself and writes the chunk result back to S3 rather than
-        returning it inline (Epic 21 §21.9).
+        /v1/chunk/submit hands docling-serve the replay-cache S3 location —
+        it fetches the JSON itself, this service never re-reads or
+        re-uploads it (mirrors /v1/parse/submit's source_ref path).
         """
         resp = client.post("/v1/chunk/submit", json={"obj_id": OBJ_ID_STR})
         assert resp.status_code == 200
@@ -353,8 +284,6 @@ class TestChunkSubmitEndpoint:
             s3_secure=settings.S3_SECURE,
             bucket=settings.REPLAY_CACHE_BUCKET,
             key=f"replay/{OBJ_ID_STR}.json",
-            target_bucket=settings.REPLAY_CACHE_BUCKET,
-            target_key_prefix=parse_service.chunk_scratch_prefix(OBJ_ID_STR),
             timeout=120.0,
         )
 
@@ -409,15 +338,6 @@ class TestChunkFinalizeEndpoint:
         pages = [Page(obj_id=OBJ_ID, page_no=1, markdown="# Seeded Page")]
         store.put(f"pages/{OBJ_ID_STR}.json", parse_service.encode_pages(pages))
 
-    @pytest.fixture(autouse=True)
-    def seed_scratch_chunks(self, store: InMemoryBlobStore) -> str:
-        """docling-serve's S3Target chunk write, stood in for directly —
-        newline-delimited JSON, mirroring write_chunks_jsonl's actual format."""
-        prefix = parse_service.chunk_scratch_prefix(OBJ_ID_STR)
-        key = f"{prefix}chunks/{OBJ_ID_STR}.chunks.jsonl"
-        store.put(key, (json.dumps(_CHUNK_ITEM) + "\n").encode())
-        return key
-
     def test_returns_artifact_blob_ref(
         self, client: TestClient, docling_client: MagicMock
     ) -> None:
@@ -443,42 +363,10 @@ class TestChunkFinalizeEndpoint:
         # Pages come from the cache seed_pages_cache wrote, not re-derived here.
         assert artifact["pages"][0]["markdown"] == "# Seeded Page"
 
-    def test_scratch_key_deleted_after_finalize(
-        self,
-        client: TestClient,
-        store: InMemoryBlobStore,
-        seed_scratch_chunks: str,
+    def test_fetch_chunk_result_called_with_correct_task_id(
+        self, client: TestClient, docling_client: MagicMock
     ) -> None:
-        resp = client.post("/v1/chunk/finalize", json=self._finalize_body())
-        assert resp.status_code == 200
-        assert not store.exists(seed_scratch_chunks)
-
-    def test_multiple_chunk_lines_all_parsed(
-        self,
-        client: TestClient,
-        store: InMemoryBlobStore,
-        seed_scratch_chunks: str,
-    ) -> None:
-        second_item = {
-            "text": "second chunk",
-            "filename": "doc.pdf",
-            "page_numbers": [2],
-        }
-        jsonl = (
-            json.dumps(_CHUNK_ITEM) + "\n" + json.dumps(second_item) + "\n"
-        ).encode()
-        store.put(seed_scratch_chunks, jsonl)
-        resp = client.post("/v1/chunk/finalize", json=self._finalize_body())
-        assert resp.status_code == 200
-        artifact = json.loads(store.get(f"parse/{OBJ_ID_STR}.json"))
-        assert len(artifact["chunks"]) == 2
-
-    def test_missing_scratch_result_returns_502(
-        self,
-        client: TestClient,
-        store: InMemoryBlobStore,
-        seed_scratch_chunks: str,
-    ) -> None:
-        store.delete(seed_scratch_chunks)
-        resp = client.post("/v1/chunk/finalize", json=self._finalize_body())
-        assert resp.status_code == 502
+        client.post("/v1/chunk/finalize", json=self._finalize_body())
+        docling_client.fetch_chunk_result.assert_awaited_once_with(
+            CHUNK_TASK_ID, timeout=settings.DOCLING_FINALIZE_TIMEOUT
+        )

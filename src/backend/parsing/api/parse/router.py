@@ -2,9 +2,7 @@ import json
 import uuid
 from typing import Annotated, Optional
 
-from docling.datamodel.document import DoclingDocument
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
-from minio import Minio
 from pydantic import BaseModel, BeforeValidator
 
 from src.backend.parsing.api.config import settings
@@ -12,7 +10,6 @@ from src.backend.parsing.api.dependencies import (
     blob_store_factory_dependency,
     docling_client_dependency,
     loader_factory_dependency,
-    s3_client_dependency,
 )
 from src.backend.parsing.api.parse import service
 from src.backend.parsing.lib.artifact import (
@@ -34,48 +31,6 @@ router = APIRouter(tags=["Parsing"])
 # Form fields are always strings on the wire; this validator JSON-parses the
 # raw string into dict[str, str] before Pydantic validates the type.
 _JsonDict = Annotated[dict[str, str], BeforeValidator(json.loads), Form()]
-
-
-def _discover_s3_result_key(
-    s3_client: Minio, bucket: str, prefix: str, suffix: str
-) -> str:
-    """Recursively list *bucket* under *prefix* and return the sole key ending
-    in *suffix*, sorted by basename for determinism (Epic 21 §21.9).
-
-    docling-serve's S3Target writes the requested artifact under a path we
-    don't fully control — a format-type subfolder always, and on some
-    docling-jobkit versions an extra hash-subdirectory with no API knob to
-    disable (see docs/infrastructure/docling.md). Recursive listing scoped to
-    the caller's own per-obj_id prefix absorbs any of that transparently
-    instead of guessing the exact key. Historical precedent: the retired
-    batch-mode endpoint needed the identical pattern for the same reason
-    (see git history on this file, commit d4a7c24).
-    """
-    keys = sorted(
-        (
-            obj.object_name
-            for obj in s3_client.list_objects(bucket, prefix=prefix, recursive=True)
-            if obj.object_name and obj.object_name.endswith(suffix)
-        ),
-        key=lambda k: k.rsplit("/", 1)[-1],
-    )
-    if not keys:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=(
-                f"docling-serve reported success but produced no {suffix!r} "
-                f"artifact under s3://{bucket}/{prefix}"
-            ),
-        )
-    if len(keys) > 1:
-        logger.warning(
-            "s3_result_discovery_multiple_matches",
-            bucket=bucket,
-            prefix=prefix,
-            suffix=suffix,
-            keys=keys,
-        )
-    return keys[0]
 
 
 # ---------------------------------------------------------------------------
@@ -253,8 +208,6 @@ async def submit_endpoint(
             s3_secure=settings.S3_SECURE,
             bucket=ref.bucket,
             key=ref.key,
-            target_bucket=settings.REPLAY_CACHE_BUCKET,
-            target_key_prefix=service.convert_scratch_prefix(obj_id),
             timeout=120.0,
         )
 
@@ -281,46 +234,32 @@ async def status_endpoint(
 @router.post("/v1/parse/resolve", response_model=ResolveResult)
 async def resolve_endpoint(
     request: ResolveRequest,
+    docling_client: docling_client_dependency,
     blob_store: blob_store_factory_dependency,
-    s3_client: s3_client_dependency,
 ) -> ResolveResult:
-    """
-    Discover the converted document docling-serve wrote to S3, cache it,
-    and derive its pages.
+    """Download a completed conversion, cache it, and derive its pages.
 
     Must only be called after /v1/parse/status/{task_id} returns "success".
-    docling-serve writes the converted JSON directly to its S3Target scratch
-    prefix rather than returning it inline (Epic 21 §21.9 — avoids pulling a
-    potentially large DoclingDocument through the HTTP response body). This
-    discovers the exact written key via a recursive listing
-    (_discover_s3_result_key), reads it once, and copies those bytes to the
-    stable replay_key() location so downstream consumers (chunk/submit,
-    future re-chunk/citation tooling) never need to know about the scratch
-    prefix — then deletes the scratch object. Also derives page-level
-    Markdown parents right away, while the DoclingDocument is already in
-    hand. Chunking is a fully separate stage from here on (Epic 21 §21.8):
-    this endpoint never submits a chunk job itself.
+    Writes the lossless DoclingDocument JSON to the replay cache — used both
+    for citation/re-chunk lookups and as the source /v1/chunk/submit reads
+    directly from S3 — and derives page-level Markdown parents right away,
+    while the DoclingDocument is already in hand. Chunking is a fully
+    separate stage from here on (Epic 21): this endpoint never submits a
+    chunk job itself.
     """
     obj_id = request.obj_id
     replay_store = blob_store(settings.REPLAY_CACHE_BUCKET)
 
-    scratch_prefix = service.convert_scratch_prefix(obj_id)
-    scratch_key = _discover_s3_result_key(
-        s3_client, settings.REPLAY_CACHE_BUCKET, scratch_prefix, ".json"
+    dl_doc = await docling_client.fetch_conversion_result(
+        request.parsing_task_id,
+        timeout=settings.DOCLING_RESOLVE_TIMEOUT,
     )
-    replay_bytes = await replay_store.aget(scratch_key)
-    dl_doc = DoclingDocument.model_validate_json(replay_bytes)
 
+    replay_bytes = dl_doc.model_dump_json().encode()
     await replay_store.aput(
         service.replay_key(obj_id), replay_bytes, content_type="application/json"
     )
-    await replay_store.adelete(scratch_key)
-    logger.info(
-        "replay_cache_written",
-        obj_id=obj_id,
-        parsing_task_id=request.parsing_task_id,
-        discovered_key=scratch_key,
-    )
+    logger.info("replay_cache_written", obj_id=obj_id)
 
     pages = build_pages(dl_doc, uuid.UUID(obj_id))
     await replay_store.aput(
@@ -366,8 +305,6 @@ async def chunk_submit_endpoint(
         s3_secure=settings.S3_SECURE,
         bucket=settings.REPLAY_CACHE_BUCKET,
         key=service.replay_key(obj_id),
-        target_bucket=settings.REPLAY_CACHE_BUCKET,
-        target_key_prefix=service.chunk_scratch_prefix(obj_id),
         timeout=120.0,
     )
     logger.info("chunk_submit_queued", obj_id=obj_id, chunking_task_id=chunking_task_id)
@@ -393,40 +330,22 @@ async def chunk_status_endpoint(
 @router.post("/v1/chunk/finalize", response_model=BlobRef)
 async def chunk_finalize_endpoint(
     request: ChunkFinalizeRequest,
+    docling_client: docling_client_dependency,
     blob_store: blob_store_factory_dependency,
-    s3_client: s3_client_dependency,
 ) -> BlobRef:
-    """Discover the chunked JSONL docling-serve wrote to S3, merge with the
-    cached pages, write the final ParseArtifact.
+    """Fetch chunk result, merge with the cached pages, write the final ParseArtifact.
 
     Must only be called after /v1/chunk/status/{chunking_task_id} returns
-    "success". docling-serve writes the chunk list directly to its S3Target
-    scratch prefix as newline-delimited JSON rather than returning it inline
-    (Epic 21 §21.9); this discovers the exact written key via a recursive
-    listing (_discover_s3_result_key), reads and parses it once, then deletes
-    the scratch object. Reads back the pages /v1/parse/resolve already
-    derived — finalizing chunks never re-fetches or re-parses the
-    DoclingDocument itself.
+    "success". Reads back the pages /v1/parse/resolve already derived —
+    finalizing chunks never re-fetches or re-parses the DoclingDocument itself.
     """
     obj_id_str = request.obj_id
     obj_id = uuid.UUID(obj_id_str)
     replay_store = blob_store(settings.REPLAY_CACHE_BUCKET)
 
-    scratch_prefix = service.chunk_scratch_prefix(obj_id_str)
-    scratch_key = _discover_s3_result_key(
-        s3_client, settings.REPLAY_CACHE_BUCKET, scratch_prefix, ".chunks.jsonl"
-    )
-    jsonl_bytes = await replay_store.aget(scratch_key)
-    chunks = [
-        json.loads(line) for line in jsonl_bytes.decode().splitlines() if line.strip()
-    ]
-    await replay_store.adelete(scratch_key)
-    logger.info(
-        "chunk_result_discovered",
-        obj_id=obj_id_str,
-        chunking_task_id=request.chunking_task_id,
-        discovered_key=scratch_key,
-        num_chunks=len(chunks),
+    chunks = await docling_client.fetch_chunk_result(
+        request.chunking_task_id,
+        timeout=settings.DOCLING_FINALIZE_TIMEOUT,
     )
     parsed_chunks = chunk_items_to_parsed(chunks, obj_id)
 

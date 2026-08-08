@@ -21,8 +21,6 @@ __all__ = [
     "pages_key",
     "encode_pages",
     "decode_pages",
-    "convert_scratch_prefix",
-    "chunk_scratch_prefix",
 ]
 
 _pages_adapter = TypeAdapter(List[Page])
@@ -125,26 +123,6 @@ def encode_pages(pages: List[Page]) -> bytes:
 def decode_pages(data: bytes) -> List[Page]:
     """Deserialise page parents from the private pages cache."""
     return _pages_adapter.validate_json(data)
-
-
-def convert_scratch_prefix(obj_id: str) -> str:
-    """S3Target key_prefix docling-serve writes the converted JSON under.
-
-    Scoped per-obj_id so concurrent conversions never collide in the
-    recursive listing resolve_endpoint uses to discover the written key
-    (Epic 21 §21.9). Transient — the discovered bytes are copied to
-    replay_key() and this scratch key is deleted once resolve is done.
-    """
-    return f"docling-out/convert/{obj_id}/"
-
-
-def chunk_scratch_prefix(obj_id: str) -> str:
-    """S3Target key_prefix docling-serve writes the chunk JSONL under.
-
-    Scoped per-obj_id, same rationale as convert_scratch_prefix(). Transient —
-    deleted once chunk_finalize_endpoint has read the chunks.
-    """
-    return f"docling-out/chunk/{obj_id}/"
 
 
 def _to_parsed_chunk(doc: Document) -> ParsedChunk:

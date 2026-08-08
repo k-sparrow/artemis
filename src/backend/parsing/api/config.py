@@ -32,11 +32,10 @@ class ParsingSettings(BaseSettings):
     # without a GPU re-parse.
     REPLAY_CACHE_BUCKET: str = "docling-replay"
 
-    # Per-call HTTP timeouts for the new async parse endpoints. Resolve and chunk
-    # finalize no longer call docling-serve at all (Epic 21 §21.9 — results are
-    # discovered via S3 listing instead of an inline HTTP fetch), so there is no
-    # DOCLING_RESOLVE_TIMEOUT/DOCLING_FINALIZE_TIMEOUT HTTP call left to bound.
+    # Per-call HTTP timeouts for the new async parse endpoints.
     DOCLING_STATUS_TIMEOUT: float = 30.0
+    DOCLING_RESOLVE_TIMEOUT: float = 120.0
+    DOCLING_FINALIZE_TIMEOUT: float = 60.0
 
     @computed_field
     @property

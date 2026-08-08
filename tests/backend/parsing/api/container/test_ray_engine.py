@@ -51,7 +51,7 @@ def _dump_cluster_logs(cluster: DoclingServeRayCluster) -> None:
             continue
         if stdout.strip() or stderr.strip():
             print(
-                f"\n=== {service} stdout ===\n{stdout}\n=== {service} stderr ===\n{stderr}"  # noqa: E501
+                f"\n=== {service} stdout ===\n{stdout}\n=== {service} stderr ===\n{stderr}"
             )
 
 
