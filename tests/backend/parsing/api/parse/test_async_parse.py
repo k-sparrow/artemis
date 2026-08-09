@@ -1,4 +1,6 @@
-"""Unit tests for POST /v1/parse/submit|status|resolve and /v1/chunk/submit|status|finalize.
+"""
+Unit tests for POST /v1/parse/submit|status|resolve and
+/v1/chunk/submit|status|finalize.
 
 Covers the async-path endpoints (Epic 18). Large-PDF handling is no longer a
 client-side concern here — docling-serve's Ray engine fans large PDFs into

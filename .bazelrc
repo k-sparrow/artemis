@@ -1,5 +1,16 @@
 common --enable_bzlmod
 
+# Every package in this repo already has a real, hand-written __init__.py, so
+# Bazel's legacy auto-generation of empty __init__.py stubs (on by default)
+# is pure dead weight here — worse, it collides with the real files during
+# aspect_rules_py's venv construction (non-deterministic "last wins" pick
+# between the real file and the synthetic empty one), and for no-sandbox/local
+# tagged tests, whose runfiles trees symlink straight back to the real
+# git-tracked source, a bad pick silently wipes the real file to zero bytes.
+# This flag disables the auto-generation outright, removing the conflicting
+# source rather than working around the symptom.
+build --incompatible_default_to_explicit_init_py
+
 test --test_output=errors
 
 # Release version stamping (opt-in via --stamp). The status command always runs,
