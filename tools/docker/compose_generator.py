@@ -20,6 +20,11 @@ The template file uses {PLACEHOLDER} markers:
   {DOCLING_ENGINE_ENV_BLOCK}  Extra docling-serve `environment:` entries selecting the
                        Ray-backed engine (server-side PDF page-slice fan-out); set in
                        all three modes (Epic 21 §21.7)
+  {DOCLING_OTEL_ENTRYPOINT_BLOCK}  docling-serve `entrypoint:` override computing the
+                       OTel enable-flags via a real shell conditional; dev/release only,
+                       empty string in test mode (no collector is ever configured there)
+  {DOCLING_OTEL_ENV_BLOCK}  Companion `environment:` entries (OTEL_EXPORTER_OTLP_ENDPOINT,
+                       DOCLING_SERVE_OTEL_SERVICE_NAME); dev/release only, empty in test
   {ARTEMIS_TAG_DEV}    Tag for artemis app images that ship a :dev variant
   {ARTEMIS_TAG_LATEST} Tag for artemis images that ship a :latest variant
 
@@ -108,6 +113,33 @@ _DOCLING_RAY_ENGINE_ENV_BLOCK = (
     '      DOCLING_SERVE_ENG_RAY_MAX_PAGE_SLICE_SIZE: "10"'
 )
 
+# docling-serve OTel gating. compose interpolates every scalar in the file —
+# entrypoint included — before the container's shell ever sees it, and
+# compose's own ${VAR:+true} has no "else" branch: when OTEL_EXPORTER_OTLP_ENDPOINT
+# is unset that resolves to a literal empty string, which docling-serve's
+# pydantic settings (env_parse_none_str="") maps to None, failing bool
+# validation on its two *required* (non-Optional) otel_enable_* fields and
+# crash-looping the container. A real shell conditional fixes it, but only if
+# every `$` is escaped as `$$` so compose passes the ternary through literally
+# instead of resolving it itself (statically, against the host env). Dev/release
+# only — dropped in test mode, where no collector is ever configured and this
+# whole conditional is dead weight (see TODOs.md Epic 21 §21.9 postscript).
+_DOCLING_OTEL_ENTRYPOINT_BLOCK = (
+    "\n"
+    "    entrypoint:\n"
+    "      - /bin/bash\n"
+    "      - -c\n"
+    '      - \'export DOCLING_SERVE_OTEL_ENABLE_TRACES="$${OTEL_EXPORTER_OTLP_ENDPOINT:+true}"; '
+    'export DOCLING_SERVE_OTEL_ENABLE_TRACES="$${DOCLING_SERVE_OTEL_ENABLE_TRACES:-false}"; '
+    'export DOCLING_SERVE_OTEL_ENABLE_OTLP_METRICS="$$DOCLING_SERVE_OTEL_ENABLE_TRACES"; '
+    "exec docling-serve run'"
+)
+_DOCLING_OTEL_ENV_BLOCK = (
+    "\n"
+    '      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"\n'
+    '      DOCLING_SERVE_OTEL_SERVICE_NAME: "docling-serve"'
+)
+
 # Services whose published host ports survive in release mode (gateway ingress).
 _RELEASE_PORT_ALLOWLIST = frozenset({"apisix"})
 
@@ -132,6 +164,8 @@ _DEV_SUBS: dict[str, str] = {
     "DOCLING_IMAGE": "ghcr.io/docling-project/docling-serve-cu128:v1.29.0",
     "DOCLING_GPU_BLOCK": _GPU_DEPLOY_BLOCK,
     "DOCLING_ENGINE_ENV_BLOCK": _DOCLING_RAY_ENGINE_ENV_BLOCK,
+    "DOCLING_OTEL_ENTRYPOINT_BLOCK": _DOCLING_OTEL_ENTRYPOINT_BLOCK,
+    "DOCLING_OTEL_ENV_BLOCK": _DOCLING_OTEL_ENV_BLOCK,
     "TEI_IMAGE": "ghcr.io/huggingface/text-embeddings-inference:1.6",
     "TEI_MODEL": "Alibaba-NLP/gte-large-en-v1.5",
     "TEI_POOLING": "mean",
@@ -163,6 +197,11 @@ _TEST_SUBS: dict[str, str] = {
     "DOCLING_IMAGE": "ghcr.io/docling-project/docling-serve-cu128:v1.29.0",
     "DOCLING_GPU_BLOCK": "",
     "DOCLING_ENGINE_ENV_BLOCK": _DOCLING_RAY_ENGINE_ENV_BLOCK,
+    # No collector is ever configured for e2e/testcontainers runs, so the
+    # whole OTel-gating dance (see _DOCLING_OTEL_ENTRYPOINT_BLOCK) is dead
+    # weight here — drop it and let the image's own default entrypoint run.
+    "DOCLING_OTEL_ENTRYPOINT_BLOCK": "",
+    "DOCLING_OTEL_ENV_BLOCK": "",
     "TEI_IMAGE": "ghcr.io/huggingface/text-embeddings-inference:cpu-1.6",
     "TEI_MODEL": "BAAI/bge-small-en-v1.5",
     "TEI_POOLING": "cls",

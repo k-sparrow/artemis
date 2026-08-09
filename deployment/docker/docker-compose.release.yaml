@@ -648,11 +648,17 @@ services:
       start_period: 30s
     volumes:
       - docling-models:/mnt/models
+    entrypoint:
+      - /bin/bash
+      - -c
+      - 'export DOCLING_SERVE_OTEL_ENABLE_TRACES="$${OTEL_EXPORTER_OTLP_ENDPOINT:+true}"; export DOCLING_SERVE_OTEL_ENABLE_TRACES="$${DOCLING_SERVE_OTEL_ENABLE_TRACES:-false}"; export DOCLING_SERVE_OTEL_ENABLE_OTLP_METRICS="$$DOCLING_SERVE_OTEL_ENABLE_TRACES"; exec docling-serve run'
     environment:
       DOCLING_SERVE_ENABLE_UI: "true"
       DOCLING_SERVE_MAX_SYNC_WAIT: 12
       DOCLING_SERVE_ARTIFACTS_PATH: /mnt/models
-      HF_HUB_OFFLINE: "${IS_AIR_GAPPED:-0}"
+      HF_HUB_OFFLINE: "${IS_AIR_GAPPED:-0}" # OTel entries below: dev/release only
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+      DOCLING_SERVE_OTEL_SERVICE_NAME: "docling-serve"
       NVIDIA_VISIBLE_DEVICES: "all" # https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/docker-specialized.html
       DOCLING_SERVE_ENG_KIND: "ray"
       DOCLING_SERVE_ENG_RAY_ADDRESS: "ray://ray-head:10001"
@@ -935,6 +941,34 @@ configs:
               endpoint: 0.0.0.0:4317
             http:
               endpoint: 0.0.0.0:4318
+        # docling-serve's Ray-tenant task/queue metrics (ray_tenant_*, from its
+        # own RayCollector) are registered into prometheus_client's own global
+        # registry, not the OTel SDK MeterProvider — so they never reach us via
+        # the otlp receiver above, only via docling-serve's own /metrics
+        # endpoint. Scraped here (not by Prometheus directly) so Prometheus
+        # keeps a single scrape target and never needs to know docling-serve
+        # exists.
+        prometheus/docling-serve:
+          config:
+            scrape_configs:
+              - job_name: docling-serve
+                scrape_interval: 15s
+                metrics_path: /metrics
+                static_configs:
+                  - targets: ['docling-serve:5001']
+        # vLLM (colbert) has no OTLP metrics exporter at all — confirmed
+        # directly against its source (vllm/config/observability.py only has
+        # otlp_traces_endpoint, no metrics equivalent). Its entire metrics
+        # surface (request/token/latency, KV cache, CUDA graph stats, ...) is
+        # Prometheus-only, same reasoning as docling-serve above.
+        prometheus/colbert:
+          config:
+            scrape_configs:
+              - job_name: colbert
+                scrape_interval: 15s
+                metrics_path: /metrics
+                static_configs:
+                  - targets: ['colbert:8000']
       exporters:
         otlp_grpc/jaeger:
           endpoint: jaeger:4317
@@ -949,7 +983,7 @@ configs:
             receivers: [otlp]
             exporters: [otlp_grpc/jaeger]
           metrics:
-            receivers: [otlp]
+            receivers: [otlp, prometheus/docling-serve, prometheus/colbert]
             exporters: [prometheus]
   prometheus-config:
     content: |
