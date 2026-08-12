@@ -81,12 +81,18 @@ pip.parse(
 use_repo(pip, "pip")
 
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
+# amd64 only across every pull below: we don't build/deploy for arm64, and at
+# least two of these (cp-ksqldb-cli, docling-serve-cu128) don't even publish a
+# "linux/arm64/v8"-matching manifest variant (no `variant` field set on their
+# arm64 descriptor) — confirmed via `docker manifest inspect`, not transient.
+# A declared-but-unmatchable platform breaks eager whole-graph evaluation
+# (`bazel query`, `bazel build //...`) even though scoped single-target builds
+# never touched it.
 oci.pull(
     name = "ubuntu",
     digest = "sha256:b359f1067efa76f37863778f7b6d0e8d911e3ee8efa807ad01fbf5dc1ef9006b",
     image = "ubuntu",
     platforms = [
-        "linux/arm64/v8",
         "linux/amd64",
     ],
     tag = "latest",
@@ -105,7 +111,6 @@ oci.pull(
     digest = "sha256:93c0175e000ca49be814afe10cc42da281b475e937d20180e56c390667947636",
     image = "docker.io/confluentinc/cp-kafka-connect-base",
     platforms = [
-        "linux/arm64/v8",
         "linux/amd64",
     ],
     tag = "7.9.0",
@@ -115,7 +120,6 @@ oci.pull(
     digest = "sha256:68a87a469e577c6b5c02f1a39a80d901f5af35a5027609ee77d525d010ef8fa7",
     image = "index.docker.io/confluentinc/cp-ksqldb-cli",
     platforms = [
-        "linux/arm64/v8",
         "linux/amd64",
     ],
     tag = "7.9.1",
@@ -125,10 +129,18 @@ oci.pull(
     digest = "sha256:d43bdb28bae0be0998f3be83199bfb2b81e0a30b034b6d7586ce7e05de34c3fd",
     image = "index.docker.io/curlimages/curl",
     platforms = [
-        "linux/arm64/v8",
         "linux/amd64",
     ],
     tag = "8.13.0",
+)
+oci.pull(
+    name = "docling-serve-cu128",
+    digest = "sha256:6b27338eea4981a8c51c3cdccda83441a62053ce5cf708f4fdf70aad5f3c10e8",
+    image = "ghcr.io/docling-project/docling-serve-cu128",
+    platforms = [
+        "linux/amd64",
+    ],
+    tag = "v1.29.0",
 )
 
 # make images ready for use as third-party repos
@@ -137,6 +149,7 @@ use_repo(
     "cp-kafka-connect",
     "cp-ksqldb-cli",
     "curl",
+    "docling-serve-cu128",
     "postgres",
     "ubuntu",
 )

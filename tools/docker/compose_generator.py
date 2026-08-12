@@ -161,7 +161,13 @@ _DEV_SUBS: dict[str, str] = {
     # Pinned to the latest stable release (NOT a moving :main tag): the
     # parsing-service redesign depends on the /v1/chunk/hybrid response shape
     # (per-chunk page_numbers + documents[].md_content). cu128 GPU variant.
-    "DOCLING_IMAGE": "ghcr.io/docling-project/docling-serve-cu128:v1.29.0",
+    # Bazel-built on top of that pinned base (see //tools/oci/images/docling) —
+    # layers a one-line upstream docling-jobkit fix (SourceChunkConvertRequest.chunk
+    # was DocumentChunk[Any, Any], an unpicklable subscripted generic that broke
+    # every S3-source fan-out under Ray Serve; see docling/BUILD.bazel for the
+    # full root cause). Build+load via `bazel run //:load.images.dev` before
+    # `docker compose up` — same workflow as every other locally-built image.
+    "DOCLING_IMAGE": "artemis/docling-serve-ray-patched:latest",
     "DOCLING_GPU_BLOCK": _GPU_DEPLOY_BLOCK,
     "DOCLING_ENGINE_ENV_BLOCK": _DOCLING_RAY_ENGINE_ENV_BLOCK,
     "DOCLING_OTEL_ENTRYPOINT_BLOCK": _DOCLING_OTEL_ENTRYPOINT_BLOCK,
@@ -193,8 +199,11 @@ _TEST_SUBS: dict[str, str] = {
     # cu128, not the lighter :main CPU tag: the Ray engine's dependencies (Ray
     # runtime, redis client) are only proven present on cu128 — see TODOs.md
     # Epic 21. No GPU is reserved (DOCLING_GPU_BLOCK empty below), so this
-    # still runs CPU-only, just from the same image dev/release use.
-    "DOCLING_IMAGE": "ghcr.io/docling-project/docling-serve-cu128:v1.29.0",
+    # still runs CPU-only, just from the same image dev/release use. Same
+    # Bazel-built patched image as dev/release (see _DEV_SUBS) — dev/test/release
+    # parity, and the Ray-serde patch matters here too if S3-source submission is
+    # ever exercised in a test.
+    "DOCLING_IMAGE": "artemis/docling-serve-ray-patched:latest",
     "DOCLING_GPU_BLOCK": "",
     "DOCLING_ENGINE_ENV_BLOCK": _DOCLING_RAY_ENGINE_ENV_BLOCK,
     # No collector is ever configured for e2e/testcontainers runs, so the

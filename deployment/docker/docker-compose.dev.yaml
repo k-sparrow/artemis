@@ -530,7 +530,7 @@ services:
   # ---------------------------------------------------------------------------
   docling-model-downloader:
     profiles: [ai]
-    image: "ghcr.io/docling-project/docling-serve-cu128:v1.29.0"
+    image: "artemis/docling-serve-ray-patched:latest"
     container_name: docling-model-downloader
     user: "0"
     entrypoint: /opt/app-root/bin/docling-tools
@@ -603,7 +603,7 @@ services:
       - default
   ray-head:
     profiles: [ai]
-    image: "ghcr.io/docling-project/docling-serve-cu128:v1.29.0"
+    image: "artemis/docling-serve-ray-patched:latest"
     container_name: ray-head
     command: >
       ray start --head --port=6379 --dashboard-host=0.0.0.0 --num-cpus=0 --block
@@ -631,7 +631,7 @@ services:
       - default
   ray-worker:
     profiles: [ai]
-    image: "ghcr.io/docling-project/docling-serve-cu128:v1.29.0"
+    image: "artemis/docling-serve-ray-patched:latest"
     container_name: ray-worker
     command: >
       ray start --address=ray-head:6379 --num-cpus=4 --block
@@ -656,7 +656,7 @@ services:
       - default
   docling-serve:
     profiles: [ai]
-    image: "ghcr.io/docling-project/docling-serve-cu128:v1.29.0"
+    image: "artemis/docling-serve-ray-patched:latest"
     container_name: docling-serve
     ports:
       - "5001:5001"

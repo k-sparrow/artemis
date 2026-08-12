@@ -1,0 +1,47 @@
+"""Reproducible checks that the docling-jobkit Ray-serde patch is actually what
+ships, at three levels — see //tools/oci/images/docling for the image build
+itself and the full root-cause writeup.
+
+1. models.py_patch_test / models.py.pkg_test: cheap, instant checks that the
+   patch source is correct and the tar layer places it at the right path. Prove
+   our layer is correct in isolation.
+2. structure_test: the expensive one (~2-3 min — has to extract the real,
+   multi-GB merged tarball) but the one that actually matters. OCI images are a
+   manifest of ordered layer blobs, not one flat archive; neither
+   assert_contains nor assert_archive_contains can resolve cross-layer overlay
+   semantics, so (1) alone can't prove our layer *wins* once stacked on the
+   base. This runs via driver="tar" (reads the tarball directly, no Docker
+   daemon needed) against the real, merged image -- proof that our patched
+   file, not the base's original, is what a running container resolves to.
+"""
+
+load("@aspect_bazel_lib//lib:testing.bzl", "assert_archive_contains", "assert_contains")
+load("@container_structure_test//:defs.bzl", "container_structure_test")
+
+# Content check: "chunk: DocumentChunk = Field(" can only appear as a literal
+# substring if the field is the bare, unsubscripted class -- the broken upstream
+# form ("chunk: DocumentChunk[Any, Any] = Field(") breaks that exact adjacency,
+# so this fails loudly against a reverted/un-patched file.
+assert_contains(
+    name = "models.py_patch_test",
+    actual = "//tools/oci/images/docling:models.py",
+    expected = "chunk: DocumentChunk = Field(",
+)
+
+# Placement check: the tar layer actually lands the file at the real
+# site-packages path docling-serve's Python import machinery will read from.
+assert_archive_contains(
+    name = "models.py.pkg_test",
+    archive = "//tools/oci/images/docling:models.py.pkg",
+    type = "tar",
+    expected = [
+        "opt/app-root/lib64/python3.12/site-packages/docling_jobkit/orchestrators/ray/models.py",
+    ],
+)
+
+container_structure_test(
+    name = "structure_test",
+    configs = ["structure_test.yaml"],
+    driver = "tar",
+    image = "//tools/oci/images/docling:tarball",
+)

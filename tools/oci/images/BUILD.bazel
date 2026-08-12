@@ -912,6 +912,7 @@ filegroup(
         ]
     ] + [
         "//tools/oci/images/apisix:init_image",
+        "//tools/oci/images/docling:image",
     ] + [
         ":artemis-kafka-connect-init",
         ":kafka-connect",
@@ -942,6 +943,7 @@ multirun(
         ]
     ] + [
         "//tools/oci/images/apisix:init_tarball",
+        "//tools/oci/images/docling:tarball",
     ] + [
         # Flattened (NOT a nested ":load.all" multirun — that silently failed to
         # run, leaving ksqldb-init stale while SUCCESS-path tests still passed on
