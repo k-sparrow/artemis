@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import PurePosixPath
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,22 @@ from src.backend.storage.api.exceptions import (
     NamespaceNotFoundError,
 )
 from src.backend.storage.api.models import Namespace, NamespaceType
+
+
+def s3_key(namespace_id: uuid.UUID, obj_id: uuid.UUID, filename: str | None) -> str:
+    """Build the object's S3 key, carrying the source filename's extension.
+
+    docling-serve's S3-direct conversion path (`submit_source`) has no field to
+    hint the document's format independently of the S3 key — the connector's
+    format detection falls back to magic-byte sniffing when the key has no
+    extension, which only works for binary formats with strong signatures
+    (PDF, Office/ODF via ZIP). Plain-text formats like Markdown have no such
+    signature and silently fail to convert without an extension in the key.
+    Carrying the extension through fixes this at the source rather than
+    special-casing content types on the parsing-service side.
+    """
+    suffix = PurePosixPath(filename).suffix if filename else ""
+    return f"{namespace_id}/{obj_id}{suffix}"
 
 
 async def _fetch_namespace(

@@ -111,7 +111,7 @@ class TestObjectUpload:
             files=_pdf(),
             headers={"X-Owner-Id": _OWNER_ID},
         )
-        s3_key = f"{ns_id}/{uuid.uuid5(uuid.UUID(ns_id), 'report.pdf')}"
+        s3_key = f"{ns_id}/{uuid.uuid5(uuid.UUID(ns_id), 'report.pdf')}.pdf"
 
         obj = test_minio_client.stat_object("artemis", s3_key)
         assert obj.size > 0
@@ -126,7 +126,7 @@ class TestObjectUpload:
             files={"file": ("doc.pdf", content, "application/pdf")},
             headers={"X-Owner-Id": _OWNER_ID},
         )
-        s3_key = f"{ns_id}/{uuid.uuid5(uuid.UUID(ns_id), 'doc.pdf')}"
+        s3_key = f"{ns_id}/{uuid.uuid5(uuid.UUID(ns_id), 'doc.pdf')}.pdf"
 
         data = test_minio_client.get_object("artemis", s3_key).read()
         assert data == content
@@ -255,7 +255,7 @@ class TestKafkaNotification:
             files=_pdf(),
             headers={"X-Owner-Id": _OWNER_ID},
         )
-        s3_key = f"{ns_id}/{uuid.uuid5(uuid.UUID(ns_id), 'report.pdf')}"
+        s3_key = f"{ns_id}/{uuid.uuid5(uuid.UUID(ns_id), 'report.pdf')}.pdf"
 
         messages = list(kafka_consumer)
 

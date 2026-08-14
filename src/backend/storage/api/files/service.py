@@ -18,7 +18,7 @@ from src.backend.storage.api.models import (
     IngestionTask,
     IngestionTaskType,
 )
-from src.backend.storage.api.service import _fetch_namespace
+from src.backend.storage.api.service import _fetch_namespace, s3_key
 from src.backend.storage.api.tombstone import tombstone_objects
 from src.lib.core.ingestion.contract import (
     IngestionInfo,
@@ -26,10 +26,6 @@ from src.lib.core.ingestion.contract import (
     S3Details,
     SourceDetails,
 )
-
-
-def _s3_key(namespace_id: uuid.UUID, obj_id: uuid.UUID) -> str:
-    return f"{namespace_id}/{obj_id}"
 
 
 def _stamp_task_span(
@@ -82,12 +78,12 @@ async def upload_file(
     source_label = filename or str(uuid.uuid4())
     obj_id = uuid.uuid5(namespace_id, source_label)
     _stamp_task_span(task_id=task_id, namespace_id=namespace_id, obj_id=obj_id)
-    s3_key = _s3_key(namespace_id, obj_id)
+    key = s3_key(namespace_id, obj_id, filename)
     resolved_content_type = content_type or "application/octet-stream"
 
     details = IngestionTaskDetails(
         upload_action=IngestionTaskType.CREATE,
-        s3=S3Details(bucket=bucket, object=s3_key, size=len(data)),
+        s3=S3Details(bucket=bucket, object=key, size=len(data)),
         source=SourceDetails(
             source=source_label,
             content_type=resolved_content_type,
@@ -99,7 +95,7 @@ async def upload_file(
 
     minio.put_object(
         bucket_name=bucket,
-        object_name=s3_key,
+        object_name=key,
         data=io.BytesIO(data),
         length=len(data),
         content_type=resolved_content_type,
@@ -129,7 +125,7 @@ async def reingest_file(
         caller_owner_id=caller_owner_id,
         require_write=True,
     )
-    await _fetch_ingested_object(
+    existing = await _fetch_ingested_object(
         session=session, namespace_id=namespace_id, obj_id=obj_id
     )
     task_id = uuid.uuid4()
@@ -137,12 +133,15 @@ async def reingest_file(
     # Use the provided filename as the source label; fall back to str(obj_id)
     # if not supplied so source.source is always non-null.
     source_label = filename or str(obj_id)
-    s3_key = _s3_key(namespace_id, obj_id)
+    # Fall back to the existing object's filename (not source_label) for the
+    # key's extension so an un-supplied filename still resolves to the same
+    # key the original upload wrote to, rather than orphaning it.
+    key = s3_key(namespace_id, obj_id, filename or existing.source)
     resolved_content_type = content_type or "application/octet-stream"
 
     details = IngestionTaskDetails(
         upload_action=IngestionTaskType.MODIFY,
-        s3=S3Details(bucket=bucket, object=s3_key, size=len(data)),
+        s3=S3Details(bucket=bucket, object=key, size=len(data)),
         source=SourceDetails(
             source=source_label,
             content_type=resolved_content_type,
@@ -154,7 +153,7 @@ async def reingest_file(
 
     minio.put_object(
         bucket_name=bucket,
-        object_name=s3_key,
+        object_name=key,
         data=io.BytesIO(data),
         length=len(data),
         content_type=resolved_content_type,
@@ -190,11 +189,11 @@ async def delete_file(
         session=session, namespace_id=namespace_id, obj_id=obj_id
     )
     _stamp_task_span(task_id=task_id, namespace_id=namespace_id, obj_id=obj_id)
-    s3_key = _s3_key(namespace_id, obj_id)
+    key = s3_key(namespace_id, obj_id, ingested.source)
 
     details = IngestionTaskDetails(
         upload_action=IngestionTaskType.DELETE,
-        s3=S3Details(bucket=bucket, object=s3_key, size=0),
+        s3=S3Details(bucket=bucket, object=key, size=0),
         source=SourceDetails(
             source=ingested.source,
             content_type=ingested.content_type,
@@ -206,7 +205,7 @@ async def delete_file(
 
     minio.put_object(
         bucket_name=bucket,
-        object_name=s3_key,
+        object_name=key,
         data=io.BytesIO(b""),
         length=0,
         metadata={

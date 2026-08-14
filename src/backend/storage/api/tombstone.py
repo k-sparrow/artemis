@@ -16,17 +16,13 @@ from minio import Minio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.backend.storage.api.models import IngestedObject, IngestionTaskType
-from src.backend.storage.api.service import _fetch_namespace
+from src.backend.storage.api.service import _fetch_namespace, s3_key
 from src.lib.core.ingestion.contract import (
     IngestionInfo,
     IngestionTaskDetails,
     S3Details,
     SourceDetails,
 )
-
-
-def _s3_key(namespace_id: uuid.UUID, obj_id: uuid.UUID) -> str:
-    return f"{namespace_id}/{obj_id}"
 
 
 async def tombstone_objects(
@@ -58,10 +54,10 @@ async def tombstone_objects(
     task_ids = []
     for obj in objects:
         task_id = uuid.uuid4()
-        s3_key = _s3_key(namespace_id, obj.id)
+        key = s3_key(namespace_id, obj.id, obj.source)
         details = IngestionTaskDetails(
             upload_action=IngestionTaskType.DELETE,
-            s3=S3Details(bucket=bucket, object=s3_key, size=0),
+            s3=S3Details(bucket=bucket, object=key, size=0),
             source=SourceDetails(
                 source=obj.source,
                 content_type=obj.content_type,
@@ -75,7 +71,7 @@ async def tombstone_objects(
         )
         minio.put_object(
             bucket_name=bucket,
-            object_name=s3_key,
+            object_name=key,
             data=io.BytesIO(b""),
             length=0,
             metadata={

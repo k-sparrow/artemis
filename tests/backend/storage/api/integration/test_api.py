@@ -329,7 +329,7 @@ class TestUploadObjectIntegration:
         )
         assert response.status_code == 202
         task_id = response.json()["task_id"]
-        s3_key = f"{ns_id}/{uuid.uuid5(uuid.UUID(ns_id), 'report.pdf')}"
+        s3_key = f"{ns_id}/{uuid.uuid5(uuid.UUID(ns_id), 'report.pdf')}.pdf"
 
         import os
 
@@ -378,7 +378,7 @@ class TestReingestObjectIntegration:
             headers={"X-Owner-Id": owner_id},
         )
         assert response.status_code == 202
-        s3_key = f"{ns_id}/{obj_id}"
+        s3_key = f"{ns_id}/{obj_id}.pdf"
 
         import os
 
@@ -424,7 +424,7 @@ class TestDeleteObjectIntegration:
             ).json()["id"]
         )
         obj_id = _seed_ingested_object(storage_session_factory, ns_id)
-        s3_key = f"{ns_id}/{obj_id}"
+        s3_key = f"{ns_id}/{obj_id}.pdf"
 
         response = client.delete(
             f"/namespaces/{ns_id}/objects/{obj_id}",
@@ -602,7 +602,7 @@ class TestListObjectsIntegration:
             headers={"X-Owner-Id": owner_id},
         )
         assert response.status_code == 202
-        s3_key = f"{ns_id}/{uuid.uuid5(uuid.UUID(ns_id), 'report.pdf')}"
+        s3_key = f"{ns_id}/{uuid.uuid5(uuid.UUID(ns_id), 'report.pdf')}.pdf"
         stat = test_minio_client.stat_object(os.environ["S3_ARTEMIS_BUCKET"], s3_key)
         contract = json.loads(stat.metadata.get("x-amz-meta-contract"))
         assert contract["info"]["group_id"] == str(group_id)
