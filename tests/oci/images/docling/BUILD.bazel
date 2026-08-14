@@ -1,22 +1,21 @@
 """Reproducible checks that the docling-jobkit Ray-serde patch is actually what
-ships, at three levels — see //tools/oci/images/docling for the image build
-itself and the full root-cause writeup.
+ships — see //tools/oci/images/docling for the image build itself and the
+full root-cause writeup.
 
-1. models.py_patch_test / models.py.pkg_test: cheap, instant checks that the
-   patch source is correct and the tar layer places it at the right path. Prove
-   our layer is correct in isolation.
-2. structure_test: the expensive one (~2-3 min — has to extract the real,
-   multi-GB merged tarball) but the one that actually matters. OCI images are a
-   manifest of ordered layer blobs, not one flat archive; neither
-   assert_contains nor assert_archive_contains can resolve cross-layer overlay
-   semantics, so (1) alone can't prove our layer *wins* once stacked on the
-   base. This runs via driver="tar" (reads the tarball directly, no Docker
-   daemon needed) against the real, merged image -- proof that our patched
-   file, not the base's original, is what a running container resolves to.
+1. models.py_patch_test: cheap, instant check that the patch source itself is
+   correct. Doesn't prove anything about the built image.
+2. test_ray_serde_patch_is_live: the one that actually matters — runs a real
+   import inside a real container of the built image. File-existence/content
+   checks at a path alone can't catch the class of bug this is guarding
+   against (a `docker load` layer merge silently shadowing the real
+   `docling_jobkit` site-packages tree with a sparse, unpatched one — see
+   //tools/oci/images/docling for the full root-cause writeup); only an
+   actual import inside a real running container does.
 """
 
-load("@aspect_bazel_lib//lib:testing.bzl", "assert_archive_contains", "assert_contains")
-load("@container_structure_test//:defs.bzl", "container_structure_test")
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_bazel_lib//lib:testing.bzl", "assert_contains")
+load("@pip//:requirements.bzl", "requirement")
 
 # Content check: "chunk: DocumentChunk = Field(" can only appear as a literal
 # substring if the field is the bare, unsubscripted class -- the broken upstream
@@ -28,20 +27,13 @@ assert_contains(
     expected = "chunk: DocumentChunk = Field(",
 )
 
-# Placement check: the tar layer actually lands the file at the real
-# site-packages path docling-serve's Python import machinery will read from.
-assert_archive_contains(
-    name = "models.py.pkg_test",
-    archive = "//tools/oci/images/docling:models.py.pkg",
-    type = "tar",
-    expected = [
-        "opt/app-root/lib64/python3.12/site-packages/docling_jobkit/orchestrators/ray/models.py",
+# Prerequisite: bazel run //tools/oci/images/docling:tarball
+py_test(
+    name = "test_patched_image",
+    srcs = ["test_patched_image.py"],
+    tags = ["integration"],
+    deps = [
+        requirement("docker"),
+        requirement("pytest"),
     ],
-)
-
-container_structure_test(
-    name = "structure_test",
-    configs = ["structure_test.yaml"],
-    driver = "tar",
-    image = "//tools/oci/images/docling:tarball",
 )

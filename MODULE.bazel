@@ -81,6 +81,7 @@ pip.parse(
 use_repo(pip, "pip")
 
 oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
+
 # amd64 only across every pull below: we don't build/deploy for arm64, and at
 # least two of these (cp-ksqldb-cli, docling-serve-cu128) don't even publish a
 # "linux/arm64/v8"-matching manifest variant (no `variant` field set on their

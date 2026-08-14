@@ -12,6 +12,30 @@ runs. `models.py` here is that upstream file with the field un-subscripted; ever
 other byte of the base image is untouched (no entrypoint/cmd override -- this
 tar layer only overlays the one file, same as a plain `COPY` in a Dockerfile).
 
+This *is* a plain rules_oci `oci_image`/`oci_load` layer -- an earlier version of
+this target placed the tar layer's file under `.../lib64/...` and appeared to
+build correctly (byte-for-byte correct tar content, confirmed via
+container_structure_test's driver="tar") but then silently served the
+*unpatched* file at runtime. Root cause: `/opt/app-root/lib64` in the base image
+is a **symlink** to `/opt/app-root/lib`, not a second real tree. rules_oci's
+declarative tar layer synthesizes explicit `type=dir` entries for every parent
+path component of the file it's placing (via mtree_mutate's `package_dir`).
+When `docker load` merges a layer whose entry at `lib64` is a plain directory
+against a base layer where that same path is a symlink, the directory wins and
+*replaces* the symlink outright rather than traversing it -- silently turning
+`lib64` into a second, sparse `docling_jobkit` tree containing only this
+layer's one file (no `__init__.py`, no anything else). Python's PEP 420
+namespace-package resolution then discards that sparse tree in favor of the
+complete, unpatched package still sitting at the real `lib` path, so the patch
+never takes effect even though it's genuinely present in the image. Targeting
+`lib` directly (the real path, not the symlink) sidesteps this: the layer's
+synthetic directory entries merge with the base layer's already-real
+directories there, and only the leaf `models.py` file is replaced -- the
+ordinary, uncomplicated case. See //tests/oci/images/docling:test_patched_image
+for the regression test (a real import inside a real running container --
+the only check that actually distinguishes "patch file present somewhere in
+the image" from "patch file is what gets imported").
+
 Root cause + fix pending upstream: https://github.com/docling-project/docling-jobkit
 """
 
@@ -20,7 +44,9 @@ load("@rules_oci//oci:defs.bzl", "oci_image", oci_load = "oci_tarball")
 load("//tools/oci:stamped_tags.bzl", "stamped_tags")
 
 # Real site-packages path inside docling-serve-cu128:v1.29.0 (UBI + Python 3.12).
-_JOBKIT_RAY_MODELS_DIR = "opt/app-root/lib64/python3.12/site-packages/docling_jobkit/orchestrators/ray"
+# NOT lib64 -- see the module docstring above for why that's a symlink, not a
+# real tree, and why targeting it silently drops the patch.
+_JOBKIT_RAY_MODELS_DIR = "opt/app-root/lib/python3.12/site-packages/docling_jobkit/orchestrators/ray"
 
 # Referenced cross-package by //tests/oci/images/docling's assert_contains check.
 exports_files(["models.py"])
@@ -32,7 +58,12 @@ mtree_spec(
 
 mtree_mutate(
     name = "models.py.mtree",
+    group = "0",
     mtree = ":models.py.spec",
+    # Match the base image's own ownership on this file -- uid 1001 (the
+    # app-root non-root user), gid 0/root -- confirmed via
+    # `docker run ghcr.io/.../docling-serve-cu128:v1.29.0 stat ...`.
+    owner = "1001",
     package_dir = _JOBKIT_RAY_MODELS_DIR,
     strip_prefix = package_name(),
 )
@@ -41,9 +72,6 @@ tar(
     name = "models.py.pkg",
     srcs = [":models.py"],
     mtree = ":models.py.mtree",
-    # Referenced cross-package by //tests/oci/images/docling's assert_archive_contains
-    # (tar-placement) check.
-    visibility = ["//tests/oci/images/docling:__pkg__"],
 )
 
 oci_image(
@@ -70,7 +98,3 @@ oci_load(
         "//tools/oci/images:__pkg__",
     ],
 )
-
-# Reproducible checks that the patch is actually what ships live in
-# //tests/oci/images/docling, not here — see that package for the
-# assert_contains / assert_archive_contains / container_structure_test targets.
