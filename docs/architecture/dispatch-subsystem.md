@@ -92,7 +92,7 @@ sequenceDiagram
     C->>SS: POST /namespaces/{id}/objects (file)
     SS->>PG: verify namespace + ownership
     PG-->>SS: ok
-    SS->>S3: PUT {namespace_id}/{obj_id} + metadata{task_id, contract}
+    SS->>S3: PUT {namespace_id}/{obj_id}{ext} + metadata{task_id, contract}
     SS-->>C: 202 Accepted {task_id}
 
     S3->>K: bucket notification (artemis.ingestion.storage.s3)
@@ -168,8 +168,10 @@ Celery v2 task message (artemis.ingestion.celery.tasks.routed)
 
 `obj_id` is derived deterministically: `uuid5(namespace_id, filename)`. Re-uploading
 the same filename to the same namespace produces the same `obj_id`, which lets the
-indexing service's RecordManager skip unchanged content. The S3 key is always
-`{namespace_id}/{obj_id}`.
+indexing service's RecordManager skip unchanged content. The S3 key is
+`{namespace_id}/{obj_id}{ext}`, where `ext` is the source filename's suffix (e.g. `.pdf`) —
+carried through so docling-serve's S3-direct conversion path can detect the document's format
+from the key alone; empty when no filename was supplied.
 
 ---
 

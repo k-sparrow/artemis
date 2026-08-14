@@ -69,7 +69,12 @@ Violations raise `HTTP_403_FORBIDDEN`. A non-existent or soft-deleted namespace 
    - Re-upload (same filename) → `upload_action = MODIFY`
 4. Generate `task_id` (UUID4)
 5. Construct `IngestionTaskDetails` with all upload metadata
-6. PUT file to MinIO at key `{namespace_id}/{obj_id}` with:
+6. PUT file to MinIO at key `{namespace_id}/{obj_id}{ext}`, where `ext` is the source filename's
+   suffix (e.g. `.pdf`, `.md`) — carried through so docling-serve's S3-direct conversion path can
+   detect the document's format from the key alone (see `docs/infrastructure/docling.md`); empty
+   when no filename was supplied. `delete`/`reingest`/tombstone paths derive `ext` from the
+   already-persisted `ingested_objects.source` rather than fresh input, so they always resolve to
+   the same key the original upload wrote to. With:
    - `Metadata["task_id"] = task_id`
    - `Metadata["contract"] = IngestionTaskDetails.model_dump_json()`
 7. MinIO fires an S3 event notification to Kafka; ksqlDB Topology A picks it up

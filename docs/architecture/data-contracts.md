@@ -22,7 +22,7 @@ ksqlDB.
   "upload_action": "create" | "modify" | "delete",
   "s3": {
     "bucket": str,      // MinIO bucket name
-    "object": str,      // object key = "{namespace_id}/{obj_id}"
+    "object": str,      // object key = "{namespace_id}/{obj_id}{ext}" (ext = source filename's suffix, e.g. ".pdf"; empty if none)
     "size":   int       // bytes
   },
   "source": {

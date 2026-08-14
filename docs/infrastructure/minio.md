@@ -11,7 +11,7 @@ bucket event notifications to Kafka.
 
 | Bucket | Written by | Read by | Contents |
 |--------|-----------|---------|----------|
-| `artemis` | Storage service | Controller worker | Raw uploaded files. Key pattern: `{namespace_id}/{obj_id}` |
+| `artemis` | Storage service | Controller worker | Raw uploaded files. Key pattern: `{namespace_id}/{obj_id}{ext}` (`ext` = source filename's suffix, e.g. `.pdf`; empty if none supplied) |
 | `parsed-chunks` | Parsing service | Indexing service | ParseArtifact JSON. Key pattern: `{uuid4}.json` |
 | `docling-replay` | Parsing service | Parsing service (replay) | Raw `DoclingDocument` JSON. Not in any inter-service contract |
 | `parent-pages` | Indexing service | Indexing service (retrieval) | Page markdown. Key pattern: `{namespace_id}/{obj_id}/p{page_no}` |
@@ -93,12 +93,15 @@ contract JSON from the `userMetadata` field:
 
 **Raw uploads** (`artemis` bucket):
 ```
-{namespace_id}/{obj_id}
+{namespace_id}/{obj_id}{ext}
 ```
 
-`obj_id = uuid5(namespace_id, source)` — stable across re-uploads of the same file. A
-second upload of the same filename to the same namespace overwrites this key, triggering an
-`s3:ObjectCreated:Put` event with `upload_action=modify`.
+`obj_id = uuid5(namespace_id, source)` — stable across re-uploads of the same file. `ext` is
+the source filename's suffix (e.g. `.pdf`), empty when none was supplied — carried through so
+docling-serve's S3-direct conversion path can detect the document's format from the key alone
+(see `docs/infrastructure/docling.md`). A second upload of the same filename to the same
+namespace overwrites this key, triggering an `s3:ObjectCreated:Put` event with
+`upload_action=modify`.
 
 **Parse artifacts** (`parsed-chunks` bucket):
 ```

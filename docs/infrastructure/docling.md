@@ -82,6 +82,16 @@ The parsing service uses this path only for `source_ref` (S3 claim-check) inputs
 the object exists first (never reads it), then passes the bucket/key straight through. Inline
 `file` uploads still go through `/v1/convert/file/async` unchanged.
 
+**Object keys must carry the source file's extension.** `S3SourceRequest` has no
+filename/content-type field at all — docling-jobkit's S3 connector builds its `DocumentStream`
+using the raw S3 key as the document's "filename," which docling's format detection falls back
+on when magic-byte sniffing is inconclusive. PDF/Office formats survive an extension-less key
+because they have strong binary signatures; Markdown and other plain-text formats do not, and
+silently fail to convert (task reports `"success"`, nothing written) without an extension to
+fall back on. The storage service's `s3_key()` (`src/backend/storage/api/service.py`) appends
+the upload's filename suffix to every object key for exactly this reason — see
+`docs/services/storage.md`.
+
 ### Large PDFs — server-side page-slice fan-out (Ray engine)
 
 Every document — regardless of size — goes through the same single-submission call (`file` via
