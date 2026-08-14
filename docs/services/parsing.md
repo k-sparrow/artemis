@@ -6,11 +6,13 @@
 
 The parsing service is a stateless bridge between raw documents and the indexing pipeline.
 It accepts a file reference (claim-check), calls Docling Serve, and writes a structured
-`ParseArtifact` to MinIO. It downloads referenced document bytes itself and submits them to
-Docling Serve inline (multipart) — no docling-serve v1.29.0 endpoint can actually accept an S3
-source without either a schema-level `422` or hitting an upstream Ray-orchestrator bug that
-silently fails every document; see
-[docs/infrastructure/docling.md](../infrastructure/docling.md) for the full investigation.
+`ParseArtifact` to MinIO. Input dispatch branches on submission mode: inline `file` bytes are
+forwarded to Docling Serve as multipart; `source_ref` (S3 claim-check) inputs are dispatched
+S3-direct — this service only verifies the referenced object exists, never reads it, and
+passes the bucket/key straight through to Docling Serve, which fetches it itself. S3-direct
+submission requires Docling Serve's Ray-serde patch (`tools/oci/images/docling`) — see
+[docs/infrastructure/docling.md](../infrastructure/docling.md) for the full investigation and
+the upstream bug this patch fixes.
 
 ---
 
@@ -52,10 +54,13 @@ The controller worker drives a scatter-gather pipeline across four long-running 
 Celery thread is blocked during conversion or chunking.
 
 ```
-submit_endpoint         → downloads source_ref bytes if needed, then
-                          Docling Serve /v1/convert/file/async
+submit_endpoint         → file: Docling Serve /v1/convert/file/async (inline)
+                          source_ref: verify existence, then Docling Serve
+                          /v1/convert/source/batch (S3-direct, S3 source + target)
                                ↓ polling via status_endpoint
-resolve_endpoint        → download conversion result
+resolve_endpoint        → file: download conversion result inline
+                          source_ref: discover result under the S3Target
+                          scratch prefix (recursive listing), read, delete
                         → write replay cache (raw DoclingDocument JSON)
                         → derive + cache pages (Markdown parents)
                                ↓
@@ -74,23 +79,29 @@ Every document takes this same single-submission path regardless of size — the
 client-side splitting here. Docling Serve's Ray engine fans large PDFs out into page slices
 and converts them concurrently across Ray actors **server-side**; this service has no
 visibility into that and needs none (see [docs/infrastructure/docling.md](../infrastructure/docling.md)
-and TODOs.md Epic 21). A prior version of this service did its own client-side PDF sharding
-via a `/v1/convert/source/batch` S3 workflow — that path was retired outright once the Ray
-engine made it unnecessary, not kept as a fallback. (`/v1/convert/source/batch` reappeared
-briefly and was reverted again for an unrelated reason — an upstream Ray-orchestrator bug; see
-[docs/infrastructure/docling.md](../infrastructure/docling.md).)
+and TODOs.md Epic 21). `/v1/convert/source/batch` is now used for `source_ref` submissions —
+not for client-side PDF sharding (that was retired once the Ray engine made it unnecessary),
+but because it's the only docling-serve endpoint whose schema accepts an S3 source at all. It
+was tried once before and reverted for an unrelated reason (an upstream Ray-orchestrator bug
+that broke every S3-source submission); that bug is now fixed via a patched image — see
+[docs/infrastructure/docling.md](../infrastructure/docling.md).
 
 ### Submit (`POST /v1/parse/submit`)
 
 Form fields identical to `POST /v1/parse`. Logic:
 
-1. Materialise document bytes: inline `file` bytes are read directly; `source_ref` claim-check
-   inputs are downloaded by this service itself first (`blob_store(ref.bucket).aget(ref.key)`).
-   Either way, the bytes are then forwarded to `POST /v1/convert/file/async` as multipart. No
-   docling-serve v1.29.0 endpoint can actually accept an S3 source (schema-level `422` on the
-   non-batch endpoint; an upstream Ray-orchestrator bug on the batch endpoint) — see
-   [docs/infrastructure/docling.md](../infrastructure/docling.md).
-2. Return `{parsing_task_id, obj_id}`.
+1. `file`: forwarded to `POST /v1/convert/file/async` as multipart, unchanged.
+2. `source_ref`: this service verifies the referenced object exists
+   (`blob_store(ref.bucket).aexists(ref.key)`) — 422 if not, so a stale reference fails fast
+   instead of dispatching a job that would fail asynchronously and opaquely — then calls
+   `POST /v1/convert/source/batch` with the bucket/key passed through as an S3 source and a
+   per-`obj_id` scratch prefix as an S3 target. `/v1/convert/source/async` (the non-batch
+   endpoint) still schema-rejects S3 sources; only the batch endpoint's schema accepts them,
+   and its target has no inbody option, which is why the result comes back via S3Target
+   instead of inline — see Resolve below.
+3. Return `{parsing_task_id, obj_id, mode}` — `mode` (`"file"` | `"source"`) records which
+   branch was taken so Resolve knows how to retrieve the result. The controller worker
+   forwards this dict unmodified as Resolve's request body.
 
 ### Status (`GET /v1/parse/status/{task_id}`, `GET /v1/chunk/status/{task_id}`)
 
@@ -121,9 +132,13 @@ Docling Serve's `ConversionStatus` is normalised as follows:
 
 ### Resolve (`POST /v1/parse/resolve`)
 
-Request body: `{parsing_task_id, obj_id}`.
+Request body: `{parsing_task_id, obj_id, mode}`.
 
-1. `GET /v1/result/{parsing_task_id}` → `DoclingDocument`.
+1. `mode="file"`: `GET /v1/result/{parsing_task_id}` → `DoclingDocument`, as before.
+   `mode="source"`: recursively list `REPLAY_CACHE_BUCKET` under the per-`obj_id` scratch
+   prefix (`convert_scratch_prefix`) for the `.json` docling-serve's S3Target wrote — the
+   nesting under that prefix isn't fully under our control, hence listing rather than guessing
+   the exact key — read it, then delete the scratch object.
 2. Write replay cache: `REPLAY_CACHE_BUCKET/replay/{obj_id}.json`.
 3. Derive pages via `build_pages()` (`lib/artifact.py`, which calls `split_pages()` in
    `lib/core/adapters/loaders/docling.py`): `dl_doc.export_to_markdown(page_break_placeholder=

@@ -7,18 +7,24 @@ client-side concern here — docling-serve's Ray engine fans large PDFs into
 page slices and converts them concurrently server-side (Epic 21), so every
 document takes the same single-file submit/resolve path regardless of size.
 
-Chunking is a fully decoupled stage from conversion (Epic 21) — /v1/parse/resolve
-only downloads the conversion result, caches it (replay JSON + derived pages),
-and returns — it no longer submits a chunk job. /v1/chunk/submit, .../status,
-and .../finalize own that separately.
+Chunking is a fully decoupled stage from conversion (Epic 21 §21.8) —
+/v1/parse/resolve only caches the conversion result (replay JSON + derived
+pages) and returns — it no longer submits a chunk job. /v1/chunk/submit,
+.../status, and .../finalize own that separately, and always stay inline
+(multipart bytes for the source, JSON body for chunk); no chunk endpoint in
+docling-serve v1.29.0 accepts an S3 source, batch or not.
 
-Both convert and chunk submissions are always inline (multipart bytes for
-convert, JSON-multipart bytes for chunk) — no docling-serve v1.29.0 endpoint
-can actually take an S3 source: the non-batch endpoints reject S3 sources at
-the schema level (422), and the batch endpoint that *does* accept them hits
-an upstream Ray-orchestrator bug that silently fails every document (see
-TODOs.md Epic 21 §21.9). `source_ref` inputs are downloaded by this service
-via its own blob store before being forwarded.
+Convert submission (/v1/parse/submit), however, branches on input: ``file``
+stays inline; ``source_ref`` is dispatched S3-direct — this service only
+verifies the referenced object exists (never reads it) and passes the
+bucket/key straight through docling-serve's `/v1/convert/source/batch`
+(requires the Ray-serde patch, see tools/oci/images/docling). That endpoint's
+target has no inbody option, so the result comes back via S3Target rather
+than inline; /v1/parse/resolve discovers the written key via a recursive
+listing. `SubmitResult.mode` ("file"/"source") threads through the worker's
+resolve call unmodified so resolve knows which retrieval path to use — these
+tests fake the raw Minio client's list_objects() to exercise that discovery
+without a real MinIO.
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ from src.backend.parsing.api.config import settings
 from src.backend.parsing.api.dependencies import (
     get_blob_store_factory,
     get_docling_client,
+    get_s3_client,
 )
 from src.backend.parsing.api.main import app
 from src.backend.parsing.api.parse import service as parse_service
@@ -71,6 +78,7 @@ def _mock_docling_client() -> MagicMock:
     """MagicMock for DoclingParseClient with AsyncMock methods."""
     client = MagicMock()
     client.submit_file = AsyncMock(return_value=CONV_TASK_ID)
+    client.submit_source = AsyncMock(return_value=CONV_TASK_ID)
     client.get_status = AsyncMock(
         return_value=ParseStatus(status="success", num_processed=1, num_total=1)
     )
@@ -82,6 +90,26 @@ def _mock_docling_client() -> MagicMock:
 
 def _metadata(obj_id: uuid.UUID = OBJ_ID) -> str:
     return json.dumps({"obj_id": str(obj_id)})
+
+
+class _FakeS3Object:
+    def __init__(self, object_name: str) -> None:
+        self.object_name = object_name
+
+
+class _FakeS3Client:
+    """Stands in for the raw Minio client's list_objects() — the only method
+    _discover_s3_result_key uses. Reads/writes go through the InMemoryBlobStore
+    `store` fixture instead; this only ever needs to answer "what keys exist
+    under this prefix" from that same backing dict."""
+
+    def __init__(self, store: InMemoryBlobStore) -> None:
+        self._store = store
+
+    def list_objects(self, bucket: str, prefix: str = "", recursive: bool = False):
+        return [
+            _FakeS3Object(key) for key in self._store._data if key.startswith(prefix)
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +132,7 @@ def docling_client() -> MagicMock:
 def client(store: InMemoryBlobStore, docling_client: MagicMock) -> TestClient:
     app.dependency_overrides[get_docling_client] = lambda: docling_client
     app.dependency_overrides[get_blob_store_factory] = lambda: (lambda _b: store)
+    app.dependency_overrides[get_s3_client] = lambda: _FakeS3Client(store)
     try:
         with TestClient(app) as c:
             yield c
@@ -145,17 +174,17 @@ class TestSubmitEndpoint:
         assert resp.json()["parsing_task_id"] == CONV_TASK_ID
         docling_client.submit_file.assert_awaited_once()
 
-    def test_source_ref_path_downloads_then_submits_file(
+    def test_source_ref_path_dispatches_s3_direct(
         self,
         client: TestClient,
         docling_client: MagicMock,
         store: InMemoryBlobStore,
     ) -> None:
         """
-        source_ref form field → this service downloads the referenced bytes
-        itself and calls docling_client.submit_file with them (no
-        docling-serve endpoint can actually take an S3 source in v1.29.0 —
-        see module docstring).
+        source_ref form field → this service verifies the object exists
+        (never reads it) and calls docling_client.submit_source with the
+        bucket/key untouched plus a per-obj_id scratch target — submit_file
+        is never called on this path.
         """
         store.put("ingest-source/doc.md", b"# Hello from source_ref")
         resp = client.post(
@@ -170,12 +199,41 @@ class TestSubmitEndpoint:
             },
         )
         assert resp.status_code == 200
-        docling_client.submit_file.assert_awaited_once_with(
-            content=b"# Hello from source_ref",
-            filename="doc.md",
-            content_type="text/markdown",
+        body = resp.json()
+        assert body["parsing_task_id"] == CONV_TASK_ID
+        assert body["mode"] == "source"
+        docling_client.submit_source.assert_awaited_once_with(
+            s3_endpoint=settings.S3_ENDPOINT,
+            s3_access_key=settings.S3_ACCESS_KEY,
+            s3_secret_key=settings.S3_SECRET_KEY,
+            s3_secure=settings.S3_SECURE,
+            bucket="ingest-source",
+            key="ingest-source/doc.md",
+            target_bucket=settings.REPLAY_CACHE_BUCKET,
+            target_key_prefix=parse_service.convert_scratch_prefix(OBJ_ID_STR),
             timeout=120.0,
         )
+        docling_client.submit_file.assert_not_awaited()
+
+    def test_source_ref_nonexistent_returns_422(
+        self,
+        client: TestClient,
+        docling_client: MagicMock,
+    ) -> None:
+        """A stale/invalid source_ref fails fast with 422 rather than
+        dispatching a job to docling-serve that would fail asynchronously."""
+        resp = client.post(
+            "/v1/parse/submit",
+            data={
+                "source_ref": json.dumps(
+                    {"bucket": "ingest-source", "key": "does-not-exist.pdf"}
+                ),
+                "metadata": _metadata(),
+            },
+        )
+        assert resp.status_code == 422
+        docling_client.submit_source.assert_not_awaited()
+        docling_client.submit_file.assert_not_awaited()
 
     def test_returns_422_when_neither_file_nor_source_ref(
         self, client: TestClient
@@ -234,13 +292,13 @@ class TestStatusEndpoint:
 
 
 class TestResolveEndpoint:
-    def _resolve_body(self) -> dict:
-        return {"parsing_task_id": CONV_TASK_ID, "obj_id": OBJ_ID_STR}
+    def _resolve_body(self, mode: str = "file") -> dict:
+        return {"parsing_task_id": CONV_TASK_ID, "obj_id": OBJ_ID_STR, "mode": mode}
 
     def test_fetches_conversion_result(
         self, client: TestClient, docling_client: MagicMock
     ) -> None:
-        resp = client.post("/v1/parse/resolve", json=self._resolve_body())
+        resp = client.post("/v1/parse/resolve", json=self._resolve_body(mode="file"))
         assert resp.status_code == 200
         docling_client.fetch_conversion_result.assert_awaited_once_with(
             CONV_TASK_ID, timeout=settings.DOCLING_RESOLVE_TIMEOUT
@@ -257,12 +315,44 @@ class TestResolveEndpoint:
         the obj_id — chunking is a fully separate stage now (Epic 21), resolve
         never submits a chunk job itself.
         """
-        resp = client.post("/v1/parse/resolve", json=self._resolve_body())
+        resp = client.post("/v1/parse/resolve", json=self._resolve_body(mode="file"))
         assert resp.status_code == 200
         assert resp.json() == {"obj_id": OBJ_ID_STR}
         assert store.exists(f"replay/{OBJ_ID_STR}.json")
         assert store.exists(f"pages/{OBJ_ID_STR}.json")
         docling_client.submit_chunk.assert_not_awaited()
+
+    def test_source_mode_discovers_result_from_s3_scratch_prefix(
+        self,
+        client: TestClient,
+        docling_client: MagicMock,
+        store: InMemoryBlobStore,
+    ) -> None:
+        """
+        mode="source" (the S3-direct convert path) never calls
+        fetch_conversion_result — docling-serve wrote the result to the
+        S3Target scratch prefix instead (batch endpoint has no inbody
+        target). Resolve discovers it via listing, copies it to the stable
+        replay key, and deletes the scratch object.
+        """
+        scratch_prefix = parse_service.convert_scratch_prefix(OBJ_ID_STR)
+        scratch_key = f"{scratch_prefix}json/doc.json"
+        store.put(scratch_key, _docling_doc_json())
+
+        resp = client.post("/v1/parse/resolve", json=self._resolve_body(mode="source"))
+
+        assert resp.status_code == 200
+        assert resp.json() == {"obj_id": OBJ_ID_STR}
+        assert store.get(f"replay/{OBJ_ID_STR}.json") == _docling_doc_json()
+        assert not store.exists(scratch_key)
+        assert store.exists(f"pages/{OBJ_ID_STR}.json")
+        docling_client.fetch_conversion_result.assert_not_awaited()
+
+    def test_source_mode_missing_result_returns_502(self, client: TestClient) -> None:
+        """No object under the scratch prefix — docling-serve claimed success
+        but wrote nothing — surfaces as a clear 502, not a silent empty artifact."""
+        resp = client.post("/v1/parse/resolve", json=self._resolve_body(mode="source"))
+        assert resp.status_code == 502
 
 
 # ---------------------------------------------------------------------------

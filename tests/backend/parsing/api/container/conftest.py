@@ -11,7 +11,12 @@ from testcontainers.core.network import Network
 from testcontainers.core.wait_strategies import HttpWaitStrategy
 from testcontainers.minio import MinioContainer
 
-_DOCLING_IMAGE = "ghcr.io/docling-project/docling-serve-cu128:v1.29.0"
+# Bazel-built layer on top of the vanilla upstream image (see
+# tools/oci/images/docling) fixing an upstream docling-jobkit Ray-serde bug
+# that breaks every S3-source submission — required for the source_ref
+# (S3-direct) async-chain path below. Build+load via `bazel run
+# //:load.images.dev` before running these tests locally.
+_DOCLING_IMAGE = "artemis/docling-serve-ray-patched:latest"
 _DOCLING_PORT = 5001
 _APP_IMAGE = "artemis/backend-parsing:dev"
 _APP_PORT = 10001

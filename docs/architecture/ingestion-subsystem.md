@@ -163,17 +163,19 @@ sequenceDiagram
     participant S3 as MinIO S3
 
     CW->>PS: POST /v1/parse/submit {source_ref: BlobRef}
-    PS->>S3: read input file
-    S3-->>PS: raw bytes
+    PS->>S3: HEAD check — does source_ref exist?
+    S3-->>PS: yes (422 to CW if not — PS never reads the bytes)
     note over PS,Docling: Same single-submission path regardless of document size —<br/>large PDFs are fanned into page slices and converted<br/>concurrently server-side by Docling Serve's Ray engine (Epic 21)
-    PS->>Docling: POST /v1/convert/file/async
+    PS->>Docling: POST /v1/convert/source/batch {source: S3, target: S3 scratch prefix}
+    note over Docling,S3: Docling Serve fetches the input directly from S3 —<br/>PS never touches the bytes (requires the Ray-serde patch, tools/oci/images/docling)
     Docling-->>PS: task_id
-    PS-->>CW: SubmitResult {parsing_task_id}
+    PS-->>CW: SubmitResult {parsing_task_id, mode: "source"}
 
     note over CW,PS: polling omitted for brevity
 
-    CW->>PS: POST /v1/parse/resolve
-    PS->>Docling: GET /v1/result/{parsing_task_id}
+    CW->>PS: POST /v1/parse/resolve {mode: "source"}
+    PS->>S3: list scratch prefix, read discovered key, delete it
+    note over Docling,S3: Docling Serve already wrote the result to S3 (S3Target)<br/>— /v1/convert/source/batch has no inbody target option
     PS->>S3: write replay/{obj_id}.json
     PS->>PS: derive pages (split_pages)
     PS->>S3: write pages/{obj_id}.json

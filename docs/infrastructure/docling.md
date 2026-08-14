@@ -51,30 +51,46 @@ Returns `{"task_id": "<uuid>"}` immediately. Poll
 `GET /v1/status/poll/{task_id}?wait=0` until `task_status` is terminal, then fetch
 the result with `GET /v1/result/{task_id}`.
 
-**No docling-serve v1.29.0 endpoint can actually take an S3 source.** This was tried (S3
-source_ref → S3-direct submission, avoiding the parsing service having to download bytes into
-its own memory) and doesn't work in this version, for two different reasons depending on the
-endpoint: `/v1/convert/source/async`'s `sources` field is typed `FileSourceRequest |
-HttpSourceRequest` only — an S3 source is a schema-level `422` there, confirmed directly against
-`docling.datamodel.service.requests.ConvertSourcesRequest`. `/v1/convert/source/batch`'s
-`sources` union does include `S3SourceRequest`, but any S3-sourced document submitted there is
-routed through the Ray orchestrator's `_is_s3_fanout_task` codepath
-(`docling_jobkit.orchestrators.ray.serve_deployment`), which has an upstream bug: the converter
-actor can't reconstruct its own source connector from the transported `S3Coordinates` object
-(`RuntimeError: No connector found for 'S3Coordinates'`), so every document fails silently in
-under 100ms with zero errors surfaced anywhere (task status still reports `"success"`). Confirmed
-by direct reproduction against the real image; not fixed in v1.30.0 either (checked its
-changelog); no matching upstream issue found filed. See TODOs.md Epic 21 §21.9 for the full
-investigation. The parsing service therefore always downloads `source_ref` bytes itself and
-submits them inline via this endpoint — same as an inline `file` upload.
+**Only `/v1/convert/source/batch` can take an S3 source, and only with the Ray-serde patch.**
+`/v1/convert/source/async`'s `sources` field is typed `FileSourceRequest | HttpSourceRequest`
+only — an S3 source is a schema-level `422` there, confirmed directly against
+`docling.datamodel.service.requests.ConvertSourcesRequest`. Only `/v1/convert/source/batch`'s
+`sources` union includes `S3SourceRequest` — despite the name, still a single-request, async,
+`task_id`-pollable call through the same orchestrator, not a real batch operation.
+
+S3-sourced documents submitted there are routed through the Ray orchestrator's
+`_is_s3_fanout_task` codepath (`docling_jobkit.orchestrators.ray.serve_deployment`), which used
+to fail every document instantly: `SourceChunkConvertRequest.chunk` was typed as the
+*subscripted* generic `DocumentChunk[Any, Any]` rather than the bare `DocumentChunk` class.
+Pydantic coerces the field's value into a dynamically-created parameterized class with no
+stable, importable qualname, which Ray Serve's cross-replica-process pickling of that value
+(coordinator → converter replica) can't reconstruct —
+`ray.exceptions.RaySystemError: System error: 'type'`, every document failing in under 100ms
+with the task status still reporting `"success"` at the top level. Root-caused and fixed with a
+one-line change (drop the `[Any, Any]`); see `tools/oci/images/docling/` for the patch, applied
+as a layer on top of the vanilla image and used across dev/test/release. Not fixed upstream as
+of v1.30.0; no matching issue filed yet.
+
+`/v1/convert/source/batch`'s `target` has no inbody option (`S3Target | AzureBlobTarget |
+GoogleCloudStorageTarget | GoogleDriveTarget | PresignedUrlTarget`) — `PresignedUrlTarget`
+doesn't work against locally-deployed S3 clusters, so using this endpoint at all means the
+result comes back via `S3Target` rather than inline; the parsing service discovers the written
+key via a recursive listing scoped to a per-`obj_id` scratch prefix, since docling-jobkit nests
+the artifact under path segments not fully under its control.
+
+The parsing service uses this path only for `source_ref` (S3 claim-check) inputs — it verifies
+the object exists first (never reads it), then passes the bucket/key straight through. Inline
+`file` uploads still go through `/v1/convert/file/async` unchanged.
 
 ### Large PDFs — server-side page-slice fan-out (Ray engine)
 
-Every document — regardless of size — goes through the exact same `/v1/convert/file/async`
-call above. There is no separate large-PDF code path on the client side any more (a prior
-version of this doc described one: client-side PDF sharding + a `/v1/convert/source/batch`
-S3 workflow. That was retired outright once the Ray engine made it unnecessary — see
-TODOs.md Epic 21).
+Every document — regardless of size — goes through the same single-submission call (`file` via
+`/v1/convert/file/async`, `source_ref` via `/v1/convert/source/batch` — see above). There is no
+separate large-PDF code path on the client side any more; a prior version of this doc described
+client-side PDF sharding via `/v1/convert/source/batch`, which was retired once the Ray engine
+made it unnecessary — see TODOs.md Epic 21. `/v1/convert/source/batch` is back in use, but for
+an unrelated reason (it's the only endpoint whose schema accepts an S3 source), not for
+client-side sharding.
 
 With `DOCLING_SERVE_ENG_KIND=ray` (all three compose modes), Docling Serve itself splits large
 PDFs into page slices and converts them concurrently across Ray actors on `ray-worker`, entirely

@@ -58,3 +58,18 @@ py_test(
         requirement("pytest-asyncio"),
     ],
 )
+
+py_test(
+    name = "test_ray_s3_direct",
+    srcs = ["test_ray_s3_direct.py"],
+    data = ["//tools/fixtures/docs:all_fixtures"],
+    env = {"TC_MAX_TRIES": "1000000000"},
+    deps = [
+        "//src/lib/core/ingestion:types",
+        "//tests/lib/testcontainers/docling:pkg",
+        requirement("httpx"),
+        requirement("minio"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+    ],
+)

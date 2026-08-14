@@ -1,0 +1,149 @@
+# Ray-backed docling-serve cluster + the real parsing-service app container +
+# MinIO, all in one compose stack — proves the S3-direct dispatch path
+# (source_ref -> DoclingParseClient.submit_source -> /v1/convert/source/batch)
+# end-to-end against a real, Ray-engine docling-serve. See docker-compose.ray.yaml
+# for the plain Ray-cluster-only fixture (no S3, no app container) used to test
+# page-slice fan-out in isolation; this file exists because that combination
+# doesn't cover S3-direct submission at all — it never touches the batch/S3
+# source codepath docling-serve's Ray-serde patch fixes (see
+# tools/oci/images/docling), so a container test actually exercising that fix
+# needs the Ray engine, not the default/local engine test_async_chain.yaml uses.
+#
+# All three Ray-cluster roles (ray-head, ray-worker, docling-serve) use the
+# patched image — Ray requires code parity across coordinator/converter
+# replicas, so the fix must be present on every one of them, not just the
+# API-facing docling-serve container.
+services:
+  minio:
+    image: "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "9000"
+  redis:
+    image: "redis:7-alpine"
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  ray-head:
+    image: "artemis/docling-serve-ray-patched:latest"
+    command: >
+      ray start --head --port=6379 --dashboard-host=0.0.0.0 --num-cpus=0 --block
+
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "all"
+      RAY_LOG_TO_STDERR: "1"
+    deploy: # This section is for compatibility with Swarm
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    runtime: nvidia
+    healthcheck:
+      test: ["CMD", "ray", "health-check", "--address=127.0.0.1:6379"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    depends_on:
+      redis:
+        condition: service_healthy
+  ray-worker:
+    image: "artemis/docling-serve-ray-patched:latest"
+    command: >
+      ray start --address=ray-head:6379 --num-cpus=4 --block
+
+    shm_size: "8gb"
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "all"
+      RAY_LOG_TO_STDERR: "1"
+      RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES: "1"
+    deploy: # This section is for compatibility with Swarm
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    runtime: nvidia
+    depends_on:
+      ray-head:
+        condition: service_healthy
+  docling-serve:
+    image: "artemis/docling-serve-ray-patched:latest"
+    ports:
+      - "5001"
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "all"
+      DOCLING_SERVE_ENABLE_UI: "true"
+      # See docker-compose.ray.yaml for why DOCLING_SERVE_ARTIFACTS_PATH is
+      # deliberately unset here (no model-downloader init step in this
+      # standalone fixture).
+      DOCLING_SERVE_ENG_KIND: "ray"
+      DOCLING_SERVE_ENG_RAY_ADDRESS: "ray://ray-head:10001"
+      DOCLING_SERVE_ENG_RAY_NAMESPACE: "docling"
+      DOCLING_SERVE_ENG_RAY_REDIS_URL: "redis://redis:6379/"
+      DOCLING_SERVE_ENG_RAY_MIN_ACTORS: "1"
+      DOCLING_SERVE_ENG_RAY_MAX_ACTORS: "1"
+      DOCLING_SERVE_ENG_RAY_CONVERTER_ACTOR_NUM_CPUS: "2"
+      DOCLING_SERVE_ENG_RAY_MAX_ONGOING_REQUESTS_PER_REPLICA: "2"
+      DOCLING_SERVE_ENG_RAY_MAX_CONCURRENT_TASKS: "2"
+      DOCLING_SERVE_ENG_RAY_ENABLE_PDF_PAGE_SLICE_FANOUT: "true"
+      DOCLING_SERVE_ENG_RAY_MAX_PAGE_SLICE_SIZE: "10"
+    volumes:
+      - docling-ray-app-models:/mnt/models
+    deploy: # This section is for compatibility with Swarm
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    runtime: nvidia
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    depends_on:
+      ray-head:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+  backend-parsing:
+    image: "artemis/backend-parsing:dev"
+    ports:
+      - "10001"
+    environment:
+      DOCLING_SERVE_URI: "http://docling-serve:5001"
+      LOADER_TYPE: "docling"
+      S3_ENDPOINT: "minio:9000"
+      S3_ACCESS_KEY: "minioadmin"
+      S3_SECRET_KEY: "minioadmin"
+      S3_SECURE: "false"
+      DEBUG: "true"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/10001 && printf 'GET /health/readiness HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q 'HTTP/1.1 200' <&3"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+    depends_on:
+      docling-serve:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+volumes:
+  docling-ray-app-models:

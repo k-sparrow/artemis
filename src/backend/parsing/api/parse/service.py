@@ -21,6 +21,7 @@ __all__ = [
     "pages_key",
     "encode_pages",
     "decode_pages",
+    "convert_scratch_prefix",
 ]
 
 _pages_adapter = TypeAdapter(List[Page])
@@ -103,6 +104,15 @@ def artifact_key(obj_id: str) -> str:
 def replay_key(obj_id: str) -> str:
     """Private replay-cache key for an object's lossless ``DoclingDocument``."""
     return f"replay/{obj_id}.json"
+
+
+def convert_scratch_prefix(obj_id: str) -> str:
+    """Per-object scratch prefix docling-serve's S3Target writes the converted
+    JSON under (submit_endpoint's source_ref path only). Read once by
+    /v1/parse/resolve via a recursive listing, then deleted — never part of
+    the parse->index contract.
+    """
+    return f"scratch/convert/{obj_id}/"
 
 
 def pages_key(obj_id: str) -> str:

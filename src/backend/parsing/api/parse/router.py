@@ -1,8 +1,10 @@
 import json
 import uuid
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 
+from docling.datamodel.document import DoclingDocument
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from minio import Minio
 from pydantic import BaseModel, BeforeValidator
 
 from src.backend.parsing.api.config import settings
@@ -10,6 +12,7 @@ from src.backend.parsing.api.dependencies import (
     blob_store_factory_dependency,
     docling_client_dependency,
     loader_factory_dependency,
+    s3_client_dependency,
 )
 from src.backend.parsing.api.parse import service
 from src.backend.parsing.lib.artifact import (
@@ -33,6 +36,46 @@ router = APIRouter(tags=["Parsing"])
 _JsonDict = Annotated[dict[str, str], BeforeValidator(json.loads), Form()]
 
 
+def _discover_s3_result_key(
+    s3_client: Minio, bucket: str, prefix: str, suffix: str
+) -> str:
+    """Recursively list *bucket* under *prefix* and return the sole key ending
+    in *suffix*, sorted by basename for determinism (Epic 21 §21.9).
+
+    docling-serve's S3Target writes the requested artifact under a path we
+    don't fully control — a format-type subfolder always, and on some
+    docling-jobkit versions an extra hash-subdirectory with no API knob to
+    disable (see docs/infrastructure/docling.md). Recursive listing scoped to
+    the caller's own per-obj_id prefix absorbs any of that transparently
+    instead of guessing the exact key.
+    """
+    keys = sorted(
+        (
+            obj.object_name
+            for obj in s3_client.list_objects(bucket, prefix=prefix, recursive=True)
+            if obj.object_name and obj.object_name.endswith(suffix)
+        ),
+        key=lambda k: k.rsplit("/", 1)[-1],
+    )
+    if not keys:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                f"docling-serve reported success but produced no {suffix!r} "
+                f"artifact under s3://{bucket}/{prefix}"
+            ),
+        )
+    if len(keys) > 1:
+        logger.warning(
+            "s3_result_discovery_multiple_matches",
+            bucket=bucket,
+            prefix=prefix,
+            suffix=suffix,
+            keys=keys,
+        )
+    return keys[0]
+
+
 # ---------------------------------------------------------------------------
 # Request / response models for the new async parse endpoints
 # ---------------------------------------------------------------------------
@@ -41,11 +84,19 @@ _JsonDict = Annotated[dict[str, str], BeforeValidator(json.loads), Form()]
 class SubmitResult(BaseModel):
     parsing_task_id: str
     obj_id: str
+    # Which submit_endpoint branch was taken — resolve_endpoint needs this to
+    # know whether to fetch the result inline (file) or discover it via S3
+    # (source; forced by /v1/convert/source/batch having no inbody target).
+    # The worker forwards this whole dict as resolve's request body
+    # unmodified (call_parse_resolve: `json=submit_result`), so this requires
+    # no worker-side changes.
+    mode: Literal["file", "source"]
 
 
 class ResolveRequest(BaseModel):
     parsing_task_id: str
     obj_id: str
+    mode: Literal["file", "source"]
 
 
 class ResolveResult(BaseModel):
@@ -167,16 +218,15 @@ async def submit_endpoint(
     server-side by docling-serve's Ray engine (see TODOs.md Epic 21), so no
     client-side splitting is needed.
 
-    Both ``file`` (inline multipart) and ``source_ref`` (S3 reference) inputs
-    are submitted to docling-serve as inline multipart bytes — this service
-    downloads ``source_ref`` content itself first. No docling-serve v1.29.0
-    endpoint can actually take an S3 source: the non-batch endpoint's schema
-    rejects S3 sources outright (422), and the batch endpoint's Ray-fanout
-    codepath has an upstream bug that silently fails every document it
-    receives (`docling_jobkit.orchestrators.ray.serve_deployment.
-    _is_s3_fanout_task`, confirmed via direct reproduction — see TODOs.md
-    Epic 21 §21.9). Downloading and submitting inline is the only combination
-    that actually works.
+    ``file`` (inline multipart) is submitted to docling-serve as-is.
+    ``source_ref`` (S3 reference) is submitted S3-direct: this service never
+    reads the bytes, only verifies the referenced object exists (fail fast
+    with 422 on a stale/invalid reference rather than dispatching a job that
+    would fail asynchronously and opaquely), then passes the bucket/key
+    straight through. Requires docling-serve's Ray-serde patch (see
+    `tools/oci/images/docling`) — see `DoclingParseClient.submit_source` for
+    why this needs `/v1/convert/source/batch` specifically and why the result
+    comes back via S3Target rather than inline.
 
     Poll ``GET /v1/parse/status/{task_id}`` until "success" or "failure",
     then call ``POST /v1/parse/resolve``.
@@ -190,33 +240,46 @@ async def submit_endpoint(
     obj_id = metadata["obj_id"]
 
     if file is not None:
+        mode = "file"
         content = await file.read()
         in_name = filename or file.filename or "upload"
         in_type = content_type or file.content_type or "application/octet-stream"
-        logger.info("submit_started", obj_id=obj_id, filename=in_name, mode="file")
+        logger.info("submit_started", obj_id=obj_id, filename=in_name, mode=mode)
+        task_id = await docling_client.submit_file(
+            content=content,
+            filename=in_name,
+            content_type=in_type,
+            timeout=120.0,
+        )
     else:
+        mode = "source"
         ref = BlobRef.model_validate_json(source_ref)
-        in_name = filename or ref.key.split("/")[-1]
-        in_type = content_type or "application/octet-stream"
         logger.info(
             "submit_started",
             obj_id=obj_id,
-            filename=in_name,
-            mode="source",
+            mode=mode,
             bucket=ref.bucket,
             key=ref.key,
         )
-        content = await blob_store(ref.bucket).aget(ref.key)
-
-    task_id = await docling_client.submit_file(
-        content=content,
-        filename=in_name,
-        content_type=in_type,
-        timeout=120.0,
-    )
+        if not await blob_store(ref.bucket).aexists(ref.key):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"source_ref does not exist: s3://{ref.bucket}/{ref.key}",
+            )
+        task_id = await docling_client.submit_source(
+            s3_endpoint=settings.S3_ENDPOINT,
+            s3_access_key=settings.S3_ACCESS_KEY,
+            s3_secret_key=settings.S3_SECRET_KEY,
+            s3_secure=settings.S3_SECURE,
+            bucket=ref.bucket,
+            key=ref.key,
+            target_bucket=settings.REPLAY_CACHE_BUCKET,
+            target_key_prefix=service.convert_scratch_prefix(obj_id),
+            timeout=120.0,
+        )
 
     logger.info("submit_queued", obj_id=obj_id, parsing_task_id=task_id)
-    return SubmitResult(parsing_task_id=task_id, obj_id=obj_id)
+    return SubmitResult(parsing_task_id=task_id, obj_id=obj_id, mode=mode)
 
 
 @router.get("/v1/parse/status/{task_id}", response_model=ParseStatus)
@@ -240,26 +303,46 @@ async def resolve_endpoint(
     request: ResolveRequest,
     docling_client: docling_client_dependency,
     blob_store: blob_store_factory_dependency,
+    s3_client: s3_client_dependency,
 ) -> ResolveResult:
-    """Download a completed conversion, cache it, and derive its pages.
+    """Fetch the completed conversion, cache it, and derive its pages.
 
     Must only be called after /v1/parse/status/{task_id} returns "success".
-    Writes the lossless DoclingDocument JSON to the replay cache — used both
-    for citation/re-chunk lookups and as the source /v1/chunk/submit reads
-    directly from S3 — and derives page-level Markdown parents right away,
-    while the DoclingDocument is already in hand. Chunking is a fully
-    separate stage from here on (Epic 21): this endpoint never submits a
-    chunk job itself.
+    ``request.mode`` (threaded through unchanged from /v1/parse/submit's
+    response via the worker) decides how the result is retrieved: "file"
+    submissions fetch it inline via GET /v1/result/{task_id}; "source"
+    submissions went through /v1/convert/source/batch, whose target has no
+    inbody option, so docling-serve wrote it to an S3Target scratch prefix
+    instead — this discovers the exact written key via a recursive listing
+    (_discover_s3_result_key, since docling-jobkit nests the artifact under
+    path segments not fully under our control), reads it once, copies it to
+    the stable replay_key() location, and deletes the scratch object.
+
+    Either way, writes the lossless DoclingDocument JSON to the replay cache
+    — used both for citation/re-chunk lookups and as the source
+    /v1/chunk/submit reads — and derives page-level Markdown parents right
+    away, while the DoclingDocument is already in hand. Chunking is a fully
+    separate stage from here on (Epic 21 §21.8): this endpoint never submits
+    a chunk job itself.
     """
     obj_id = request.obj_id
     replay_store = blob_store(settings.REPLAY_CACHE_BUCKET)
 
-    dl_doc = await docling_client.fetch_conversion_result(
-        request.parsing_task_id,
-        timeout=settings.DOCLING_RESOLVE_TIMEOUT,
-    )
+    if request.mode == "file":
+        dl_doc = await docling_client.fetch_conversion_result(
+            request.parsing_task_id,
+            timeout=settings.DOCLING_RESOLVE_TIMEOUT,
+        )
+        replay_bytes = dl_doc.model_dump_json().encode()
+    else:
+        scratch_prefix = service.convert_scratch_prefix(obj_id)
+        scratch_key = _discover_s3_result_key(
+            s3_client, settings.REPLAY_CACHE_BUCKET, scratch_prefix, ".json"
+        )
+        replay_bytes = await replay_store.aget(scratch_key)
+        await replay_store.adelete(scratch_key)
+        dl_doc = DoclingDocument.model_validate_json(replay_bytes)
 
-    replay_bytes = dl_doc.model_dump_json().encode()
     await replay_store.aput(
         service.replay_key(obj_id), replay_bytes, content_type="application/json"
     )

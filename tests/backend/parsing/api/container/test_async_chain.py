@@ -105,10 +105,10 @@ async def _drive_async_chain(
 
     resp = await client.post(
         "/v1/parse/resolve",
-        json={
-            "parsing_task_id": submit["parsing_task_id"],
-            "obj_id": submit["obj_id"],
-        },
+        # Forward the whole submit dict unmodified, same as the real worker
+        # (call_parse_resolve: `json=submit_result`) — SubmitResult.mode tells
+        # resolve whether to fetch inline or discover via S3.
+        json=submit,
     )
     assert resp.status_code == 200, resp.text
     resolve = resp.json()
