@@ -8,7 +8,7 @@ py_test(
     deps = [
         "//src/backend/parsing/lib:artifact",
         "//src/lib/core/ingestion:types",
-        requirement("docling"),
+        requirement("docling-slim"),
         requirement("pytest"),
     ],
 )

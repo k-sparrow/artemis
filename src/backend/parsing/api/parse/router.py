@@ -1,7 +1,9 @@
 import json
 import uuid
+from functools import wraps
 from typing import Annotated, Literal, Optional
 
+import httpx
 from docling.datamodel.document import DoclingDocument
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from minio import Minio
@@ -11,7 +13,6 @@ from src.backend.parsing.api.config import settings
 from src.backend.parsing.api.dependencies import (
     blob_store_factory_dependency,
     docling_client_dependency,
-    loader_factory_dependency,
     s3_client_dependency,
 )
 from src.backend.parsing.api.parse import service
@@ -22,6 +23,10 @@ from src.backend.parsing.lib.artifact import (
 )
 from src.lib.backend.logging import get_logger
 from src.lib.core.ingestion.contract import BlobRef
+from src.lib.core.ingestion.exceptions import (
+    DocumentProcessingException,
+    UpstreamServiceException,
+)
 from src.lib.core.ingestion.types import ParseArtifact
 
 __all__ = ["router"]
@@ -34,6 +39,47 @@ router = APIRouter(tags=["Parsing"])
 # Form fields are always strings on the wire; this validator JSON-parses the
 # raw string into dict[str, str] before Pydantic validates the type.
 _JsonDict = Annotated[dict[str, str], BeforeValidator(json.loads), Form()]
+
+
+def _translate_docling_errors(fn):
+    """Map a docling-serve HTTP failure to this service's domain exceptions.
+
+    ``DoclingParseClient`` is a thin httpx facade — it raises raw httpx
+    errors (see its module docstring) and leaves translation to the caller.
+    Without this, an unreachable/erroring docling-serve surfaced as a bare
+    500 here, which the worker's retry logic (branches on
+    ``status_code >= 500``, see controller/worker/tasks.py) can't distinguish
+    from a permanent failure.
+
+    Connection failures, timeouts, and docling-serve 5xx are upstream
+    problems — mapped to 503 (``UpstreamServiceException``) so the worker
+    retries. A docling-serve 4xx means *this* request was rejected (e.g. a
+    malformed submission) — mapped to 400 (``DocumentProcessingException``)
+    so the worker treats it as permanent instead of retrying something that
+    will never succeed. Content-level failures (e.g. an unsupported file
+    *format*) don't hit this path at all — docling-serve reports those via
+    task status ("failure"), not an HTTP error; see
+    ``DoclingParseClient.get_status``.
+    """
+
+    @wraps(fn)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await fn(*args, **kwargs)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code < 500:
+                raise DocumentProcessingException(
+                    f"docling-serve rejected the request: {exc.response.text}"
+                ) from exc
+            raise UpstreamServiceException(
+                service="docling-serve", message=str(exc)
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise UpstreamServiceException(
+                service="docling-serve", message=str(exc)
+            ) from exc
+
+    return wrapper
 
 
 def _discover_s3_result_key(
@@ -119,90 +165,12 @@ class ChunkFinalizeRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Existing synchronous endpoint (retained; becomes dead code after migration)
-# ---------------------------------------------------------------------------
-
-
-@router.post("/v1/parse", response_model=BlobRef)
-async def parse_endpoint(
-    loader_factory: loader_factory_dependency,
-    blob_store: blob_store_factory_dependency,
-    file: Optional[UploadFile] = File(None),
-    source_ref: Optional[str] = Form(None),
-    filename: Optional[str] = Form(None),
-    content_type: Optional[str] = Form(None),
-    metadata: _JsonDict = "{}",
-) -> BlobRef:
-    """Parse a document and write the artifact to object storage (claim-check).
-
-    Input is inline-or-reference: supply exactly one of ``file`` (multipart
-    bytes) or ``source_ref`` (a ``BlobRef`` JSON pointing at input bytes in
-    object storage). The artifact is written under ``parse/{obj_id}.json`` and
-    its location is returned as a ``BlobRef`` — the payload never crosses the wire.
-    """
-    if (file is None) == (source_ref is None):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="provide exactly one of 'file' or 'source_ref'",
-        )
-
-    if file is not None:
-        content = await file.read()
-        in_name = filename or file.filename
-        in_type = content_type or file.content_type
-        logger.info("parse_started", source="inline", filename=in_name)
-    else:
-        ref = BlobRef.model_validate_json(source_ref)
-        content = await blob_store(ref.bucket).aget(ref.key)
-        in_name, in_type = filename, content_type
-        logger.info(
-            "parse_started",
-            source="ref",
-            filename=in_name,
-            bucket=ref.bucket,
-            key=ref.key,
-        )
-
-    try:
-        artifact, replay = await service.a_parse(
-            content=content,
-            filename=in_name,
-            content_type=in_type,
-            loader_factory=loader_factory,
-            metadata=metadata,
-        )
-    except Exception as e:
-        logger.error("parse_failed", filename=in_name, error=str(e))
-        raise
-
-    obj_id = metadata["obj_id"]
-
-    # Private replay cache (lossless DoclingDocument) — best-effort, never in the
-    # contract; persist before the artifact so a write failure surfaces here.
-    await blob_store(settings.REPLAY_CACHE_BUCKET).aput(
-        service.replay_key(obj_id), replay, content_type="application/json"
-    )
-
-    key = service.artifact_key(obj_id)
-    await blob_store(settings.PARSED_ARTIFACTS_BUCKET).aput(
-        key, service.encode_artifact(artifact), content_type="application/json"
-    )
-    logger.info(
-        "parse_completed",
-        filename=in_name,
-        num_pages=len(artifact.pages),
-        num_chunks=len(artifact.chunks),
-        key=key,
-    )
-    return BlobRef(bucket=settings.PARSED_ARTIFACTS_BUCKET, key=key)
-
-
-# ---------------------------------------------------------------------------
 # Async parse endpoints — used by the new Celery parse sub-chain
 # ---------------------------------------------------------------------------
 
 
 @router.post("/v1/parse/submit", response_model=SubmitResult)
+@_translate_docling_errors
 async def submit_endpoint(
     docling_client: docling_client_dependency,
     blob_store: blob_store_factory_dependency,
@@ -283,6 +251,7 @@ async def submit_endpoint(
 
 
 @router.get("/v1/parse/status/{task_id}", response_model=ParseStatus)
+@_translate_docling_errors
 async def status_endpoint(
     task_id: str,
     docling_client: docling_client_dependency,
@@ -299,6 +268,7 @@ async def status_endpoint(
 
 
 @router.post("/v1/parse/resolve", response_model=ResolveResult)
+@_translate_docling_errors
 async def resolve_endpoint(
     request: ResolveRequest,
     docling_client: docling_client_dependency,
@@ -370,6 +340,7 @@ async def resolve_endpoint(
 
 
 @router.post("/v1/chunk/submit", response_model=ChunkSubmitResult)
+@_translate_docling_errors
 async def chunk_submit_endpoint(
     request: ChunkSubmitRequest,
     docling_client: docling_client_dependency,
@@ -396,6 +367,7 @@ async def chunk_submit_endpoint(
 
 
 @router.get("/v1/chunk/status/{task_id}", response_model=ParseStatus)
+@_translate_docling_errors
 async def chunk_status_endpoint(
     task_id: str,
     docling_client: docling_client_dependency,
@@ -412,6 +384,7 @@ async def chunk_status_endpoint(
 
 
 @router.post("/v1/chunk/finalize", response_model=BlobRef)
+@_translate_docling_errors
 async def chunk_finalize_endpoint(
     request: ChunkFinalizeRequest,
     docling_client: docling_client_dependency,

@@ -24,26 +24,8 @@ py_test(
         "//src/backend/parsing/api:main",
         "//src/backend/parsing/lib:artifact",
         "//src/lib/core/adapters/stores/memory:blob",
-        requirement("docling"),
-        requirement("pytest"),
-    ],
-)
-
-py_test(
-    name = "test_parse",
-    srcs = ["test_parse.py"],
-    deps = [
-        ":conftest",
-        "//src/backend/parsing/api:config",
-        "//src/backend/parsing/api:dependencies",
-        "//src/backend/parsing/api:main",
-        "//src/backend/parsing/api/parse:service",
-        "//src/lib/core/adapters/loaders:pkg",
-        "//src/lib/core/adapters/stores/memory:blob",
-        "//src/lib/core/ingestion:exceptions",
-        "//src/lib/core/ingestion:types",
+        requirement("docling-slim"),
         requirement("httpx"),
-        requirement("langchain-core"),
         requirement("pytest"),
     ],
 )

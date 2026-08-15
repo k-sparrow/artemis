@@ -16,7 +16,7 @@ py_library(
     deps = [
         "//src/lib/core/adapters/loaders:docling",
         "//src/lib/core/ingestion:types",
-        requirement("docling"),
+        requirement("docling-slim"),
         requirement("pydantic"),
     ],
 )
@@ -26,7 +26,7 @@ py_library(
     srcs = ["docling_client.py"],
     deps = [
         ":artifact",
-        requirement("docling"),
+        requirement("docling-slim"),
         requirement("httpx"),
     ],
 )

@@ -5,9 +5,7 @@
 """Unit tests for loader configuration and PyMuPDF4LLMLoader.
 
 All tests are pure unit tests — no external services, no filesystem side
-effects (to_markdown is mocked).  DoclingAPIServeLoader unit and integration
-tests live in ``test_docling_loader.py`` and
-``test_docling_loader_integration.py`` respectively.
+effects (to_markdown is mocked).
 """
 
 from __future__ import annotations
@@ -59,26 +57,16 @@ _FAKE_PAGES = [
 
 
 class TestLoaderConfig:
-    """LoaderConfig is a frozen dataclass — verify defaults and mutability."""
-
-    def test_default_docling_base_url(self) -> None:
-        cfg = LoaderConfig(loader_type=LoaderType.DOCLING)
-        assert cfg.docling_base_url == "http://localhost:5001"
-
-    def test_custom_docling_base_url(self) -> None:
-        cfg = LoaderConfig(
-            loader_type=LoaderType.DOCLING, docling_base_url="http://docling:5001"
-        )
-        assert cfg.docling_base_url == "http://docling:5001"
+    """LoaderConfig is a frozen dataclass — verify mutability and equality."""
 
     def test_frozen(self) -> None:
         cfg = LoaderConfig(loader_type=LoaderType.PYMUPDF4LLM)
         with pytest.raises((AttributeError, TypeError)):
-            cfg.loader_type = LoaderType.DOCLING  # type: ignore[misc]
+            cfg.loader_type = "other"  # type: ignore[misc]
 
     def test_equality(self) -> None:
-        a = LoaderConfig(loader_type=LoaderType.DOCLING, docling_base_url="http://x")
-        b = LoaderConfig(loader_type=LoaderType.DOCLING, docling_base_url="http://x")
+        a = LoaderConfig(loader_type=LoaderType.PYMUPDF4LLM)
+        b = LoaderConfig(loader_type=LoaderType.PYMUPDF4LLM)
         assert a == b
 
 
@@ -97,15 +85,6 @@ class TestCreateLoaderFactory:
         loader = factory(b"%PDF", "doc.pdf", "application/pdf")
         assert isinstance(loader, PyMuPDF4LLMLoader)
 
-    def test_docling_factory_returns_docling_loader(self) -> None:
-        """DOCLING config → factory constructs a DoclingAPIServeLoader."""
-        from src.lib.core.adapters.loaders.docling import DoclingAPIServeLoader
-
-        cfg = LoaderConfig(loader_type=LoaderType.DOCLING)
-        factory = create_loader_factory(cfg)
-        loader = factory(b"%PDF", "doc.pdf", "application/pdf")
-        assert isinstance(loader, DoclingAPIServeLoader)
-
     def test_unknown_loader_type_raises(self) -> None:
         """An unrecognised LoaderType raises ValueError."""
         cfg = LoaderConfig(loader_type="unknown_type")  # type: ignore[arg-type]
@@ -121,18 +100,6 @@ class TestCreateLoaderFactory:
         assert loader._file == b"bytes"
         assert loader._filename == "report.pdf"
         assert loader._content_type == "application/pdf"
-
-    def test_docling_factory_uses_configured_base_url(self) -> None:
-        """DoclingAPIServeLoader receives the base URL from LoaderConfig."""
-        from src.lib.core.adapters.loaders.docling import DoclingAPIServeLoader
-
-        cfg = LoaderConfig(
-            loader_type=LoaderType.DOCLING, docling_base_url="http://docling-host:9999"
-        )
-        factory = create_loader_factory(cfg)
-        loader = factory(b"data", "file.pdf", "application/pdf")
-        assert isinstance(loader, DoclingAPIServeLoader)
-        assert "docling-host:9999" in str(loader._converter.client.base_url)
 
 
 # ---------------------------------------------------------------------------

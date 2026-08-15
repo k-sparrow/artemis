@@ -17,14 +17,10 @@ py_library(
 py_test(
     name = "test_smoke",
     srcs = ["test_smoke.py"],
-    data = ["complex-tables.pdf"],
     env = {"TC_MAX_TRIES": "1000000000"},
     deps = [
         ":conftest",
-        "//src/lib/core/ingestion:types",
         requirement("httpx"),
-        requirement("minio"),
-        requirement("pydantic"),
         requirement("pytest"),
         requirement("pytest-asyncio"),
     ],

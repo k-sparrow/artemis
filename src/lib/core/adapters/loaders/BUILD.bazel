@@ -19,7 +19,6 @@ py_library(
     ],
     deps = [
         ":config",
-        ":docling",
         ":exceptions",
         ":pymupdf4llm",
     ],
@@ -38,7 +37,6 @@ py_library(
         "config.py",
     ],
     deps = [
-        ":docling",
         ":pymupdf4llm",
         requirement("langchain-core"),
     ],
@@ -50,10 +48,7 @@ py_library(
         "docling.py",
     ],
     deps = [
-        ":exceptions",
-        requirement("docling"),
-        requirement("httpx"),
-        requirement("langchain-core"),
+        requirement("docling-slim"),
     ],
 )
 

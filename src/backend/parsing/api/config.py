@@ -1,8 +1,6 @@
 from pydantic import computed_field
 from pydantic_settings import BaseSettings
 
-from src.lib.core.adapters.loaders import LoaderType
-
 __all__ = [
     "ParsingSettings",
     "settings",
@@ -13,7 +11,6 @@ class ParsingSettings(BaseSettings):
     DEBUG: bool = False
     OTEL_EXPORTER_OTLP_ENDPOINT: str = ""
     DOCLING_SERVE_URI: str
-    LOADER_TYPE: LoaderType = LoaderType.DOCLING
 
     # MinIO S3 client — used to read input by reference and write parse
     # artifacts (claim-check). Required (no defaults) so a misconfigured

@@ -31,7 +31,6 @@ LoaderFactory = Callable[[bytes, str, str], BaseLoader]
 class LoaderType(StrEnum):
     """Selects the document loader implementation."""
 
-    DOCLING = "docling"
     PYMUPDF4LLM = "pymupdf4llm"
 
 
@@ -41,12 +40,9 @@ class LoaderConfig:
 
     Attributes:
         loader_type: Which loader implementation to use.
-        docling_base_url: Base URL of the Docling Serve API.  Only
-            relevant when ``loader_type=DOCLING``.
     """
 
     loader_type: LoaderType
-    docling_base_url: str = "http://localhost:5001"
 
 
 def create_loader_factory(config: LoaderConfig) -> LoaderFactory:
@@ -63,23 +59,6 @@ def create_loader_factory(config: LoaderConfig) -> LoaderFactory:
         ValueError: If ``config.loader_type`` is not a recognised value.
     """
     match config.loader_type:
-        case LoaderType.DOCLING:
-            from src.lib.core.adapters.loaders.docling import (
-                DEFAULT_CONVERTER_KWARGS,
-                DoclingAPIServeLoader,
-                DoclingServeAPIDocumentConverter,
-            )
-
-            def factory(file: bytes, filename: str, content_type: str) -> BaseLoader:
-                return DoclingAPIServeLoader(
-                    source=(filename, file, content_type),
-                    converter=DoclingServeAPIDocumentConverter(
-                        base_url=config.docling_base_url,
-                        **DEFAULT_CONVERTER_KWARGS,
-                    ),
-                )
-
-            return factory
         case LoaderType.PYMUPDF4LLM:
             from src.lib.core.adapters.loaders.pymupdf4llm_ import PyMuPDF4LLMLoader
 

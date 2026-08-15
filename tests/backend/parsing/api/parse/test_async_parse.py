@@ -33,6 +33,7 @@ import json
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -90,6 +91,15 @@ def _mock_docling_client() -> MagicMock:
 
 def _metadata(obj_id: uuid.UUID = OBJ_ID) -> str:
     return json.dumps({"obj_id": str(obj_id)})
+
+
+def _docling_status_error(status_code: int) -> httpx.HTTPStatusError:
+    """An httpx error as raised by DoclingParseClient's raise_for_status()."""
+    request = httpx.Request("POST", "http://test-docling:5001/v1/convert/file/async")
+    response = httpx.Response(status_code, request=request, text="boom")
+    return httpx.HTTPStatusError(
+        f"{status_code} error", request=request, response=response
+    )
 
 
 class _FakeS3Object:
@@ -466,3 +476,145 @@ class TestChunkFinalizeEndpoint:
         docling_client.fetch_chunk_result.assert_awaited_once_with(
             CHUNK_TASK_ID, timeout=settings.DOCLING_FINALIZE_TIMEOUT
         )
+
+
+# ---------------------------------------------------------------------------
+# docling-serve failure mapping (_translate_docling_errors)
+# ---------------------------------------------------------------------------
+#
+# The worker's retry logic (controller/worker/tasks.py) branches on
+# ``status_code >= 500`` to decide retry-vs-permanent. These tests pin the
+# contract from this service's side: docling-serve unreachable or erroring
+# 5xx must surface as 503 (retryable); a docling-serve 4xx must surface as
+# 400 (permanent) rather than a raw exception turning into a generic 500 that
+# the worker can't classify.
+
+
+class TestSubmitEndpointDoclingErrorMapping:
+    """Exercised in full here; the sibling endpoints below only need one
+    representative case each to confirm the decorator is actually applied —
+    the mapping logic itself is shared and already covered exhaustively."""
+
+    def _post_file(self, client: TestClient) -> httpx.Response:
+        return client.post(
+            "/v1/parse/submit",
+            files={"file": ("report.md", b"# Hello", "text/markdown")},
+            data={"metadata": _metadata()},
+        )
+
+    def test_connect_error_returns_503(
+        self, client: TestClient, docling_client: MagicMock
+    ) -> None:
+        docling_client.submit_file.side_effect = httpx.ConnectError(
+            "connection refused"
+        )
+        resp = self._post_file(client)
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["type"] == "upstream_service_error"
+        assert body["service"] == "docling-serve"
+
+    def test_read_timeout_returns_503(
+        self, client: TestClient, docling_client: MagicMock
+    ) -> None:
+        docling_client.submit_file.side_effect = httpx.ReadTimeout("timed out")
+        resp = self._post_file(client)
+        assert resp.status_code == 503
+        assert resp.json()["type"] == "upstream_service_error"
+
+    def test_docling_serve_500_returns_503(
+        self, client: TestClient, docling_client: MagicMock
+    ) -> None:
+        docling_client.submit_file.side_effect = _docling_status_error(500)
+        resp = self._post_file(client)
+        assert resp.status_code == 503
+        assert resp.json()["type"] == "upstream_service_error"
+
+    def test_docling_serve_400_returns_400(
+        self, client: TestClient, docling_client: MagicMock
+    ) -> None:
+        docling_client.submit_file.side_effect = _docling_status_error(400)
+        resp = self._post_file(client)
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["type"] == "document_processing_error"
+        assert "boom" in body["detail"]
+
+    def test_docling_serve_422_returns_400(
+        self, client: TestClient, docling_client: MagicMock
+    ) -> None:
+        """Any docling-serve 4xx (not just 400) is a permanent, non-retryable
+        failure from the worker's perspective — all map to 400 here."""
+        docling_client.submit_file.side_effect = _docling_status_error(422)
+        resp = self._post_file(client)
+        assert resp.status_code == 400
+        assert resp.json()["type"] == "document_processing_error"
+
+
+class TestStatusEndpointDoclingErrorMapping:
+    def test_connect_error_returns_503(
+        self, client: TestClient, docling_client: MagicMock
+    ) -> None:
+        docling_client.get_status.side_effect = httpx.ConnectError("refused")
+        resp = client.get(f"/v1/parse/status/{CONV_TASK_ID}")
+        assert resp.status_code == 503
+        assert resp.json()["type"] == "upstream_service_error"
+
+
+class TestResolveEndpointDoclingErrorMapping:
+    def test_connect_error_returns_503(
+        self, client: TestClient, docling_client: MagicMock
+    ) -> None:
+        docling_client.fetch_conversion_result.side_effect = httpx.ConnectError(
+            "refused"
+        )
+        resp = client.post(
+            "/v1/parse/resolve",
+            json={
+                "parsing_task_id": CONV_TASK_ID,
+                "obj_id": OBJ_ID_STR,
+                "mode": "file",
+            },
+        )
+        assert resp.status_code == 503
+        assert resp.json()["type"] == "upstream_service_error"
+
+
+class TestChunkSubmitEndpointDoclingErrorMapping:
+    def test_docling_serve_400_returns_400(
+        self, client: TestClient, docling_client: MagicMock, store: InMemoryBlobStore
+    ) -> None:
+        store.put(f"replay/{OBJ_ID_STR}.json", _docling_doc_json())
+        docling_client.submit_chunk.side_effect = _docling_status_error(400)
+        resp = client.post("/v1/chunk/submit", json={"obj_id": OBJ_ID_STR})
+        assert resp.status_code == 400
+        assert resp.json()["type"] == "document_processing_error"
+
+
+class TestChunkStatusEndpointDoclingErrorMapping:
+    def test_connect_error_returns_503(
+        self, client: TestClient, docling_client: MagicMock
+    ) -> None:
+        docling_client.get_status.side_effect = httpx.ConnectError("refused")
+        resp = client.get(f"/v1/chunk/status/{CHUNK_TASK_ID}")
+        assert resp.status_code == 503
+        assert resp.json()["type"] == "upstream_service_error"
+
+
+class TestChunkFinalizeEndpointDoclingErrorMapping:
+    def test_connect_error_returns_503(
+        self, client: TestClient, docling_client: MagicMock, store: InMemoryBlobStore
+    ) -> None:
+        pages = [Page(obj_id=OBJ_ID, page_no=1, markdown="# Seeded Page")]
+        store.put(f"pages/{OBJ_ID_STR}.json", parse_service.encode_pages(pages))
+        docling_client.fetch_chunk_result.side_effect = httpx.ConnectError("refused")
+        resp = client.post(
+            "/v1/chunk/finalize",
+            json={
+                "chunking_task_id": CHUNK_TASK_ID,
+                "obj_id": OBJ_ID_STR,
+                "metadata": {"obj_id": OBJ_ID_STR},
+            },
+        )
+        assert resp.status_code == 503
+        assert resp.json()["type"] == "upstream_service_error"

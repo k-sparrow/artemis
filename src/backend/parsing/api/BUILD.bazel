@@ -32,7 +32,6 @@ py_library(
         "//tests/backend/parsing/api:__subpackages__",
     ],
     deps = [
-        "//src/lib/core/adapters/loaders:config",
         requirement("pydantic"),
         requirement("pydantic-settings"),
     ],
@@ -53,7 +52,6 @@ py_library(
     deps = [
         ":config",
         "//src/backend/parsing/lib:docling_client",
-        "//src/lib/core/adapters/loaders:pkg",
         "//src/lib/core/adapters/stores/base:blob",
         "//src/lib/core/adapters/stores/minio:blob",
         requirement("fastapi"),

@@ -9,7 +9,6 @@ manifest:
     Crypto: pycryptodome
     IPython: ipython
     PIL: pillow
-    accelerate: accelerate
     aiobotocore: aiobotocore
     aiohappyeyeballs: aiohappyeyeballs
     aiohttp: aiohttp
@@ -32,11 +31,11 @@ manifest:
     attrs: attrs
     babel: babel
     bcrypt: bcrypt
-    bidi: python_bidi
     billiard: billiard
     bleach: bleach
     botocore: botocore
     bs4: beautifulsoup4
+    cbor2: cbor2
     celery: celery
     certifi: certifi
     cffi: cffi
@@ -47,27 +46,25 @@ manifest:
     click_repl: click_repl
     cohere: cohere
     comm: comm
+    contourpy: contourpy
+    cramjam: cramjam
     cryptography: cryptography
     cuda.bindings: cuda_bindings
     cuda.pathfinder: cuda_pathfinder
-    cv2: opencv_python_headless
+    cycler: cycler
     dataclasses_json: dataclasses_json
     dateutil: python_dateutil
     debugpy: debugpy
     decorator: decorator
     defusedxml: defusedxml
-    dill: dill
     dns: dnspython
     docker: docker
-    docling: docling
+    doclang: doclang
+    docling: docling_slim
     docling_core: docling_core
-    docling_ibm_models: docling_ibm_models
-    docling_parse: docling_parse
-    docx: python_docx
     dotenv: python_dotenv
-    easyocr: easyocr
     email_validator: email_validator
-    et_xmlfile: et_xmlfile
+    examples.clirmatrix_example: ir_datasets
     executing: executing
     fastapi: fastapi
     fastapi_healthchecks: fastapi_healthchecks
@@ -76,12 +73,14 @@ manifest:
     fastavro: fastavro
     fastembed: fastembed
     fastjsonschema: fastjsonschema
+    fastparquet: fastparquet
     filelock: filelock
     filetype: filetype
     fitz: pymupdf
     flake8: flake8
     flatbuffers: flatbuffers
     flower: flower
+    fontTools: fonttools
     fqdn: fqdn
     frozenlist: frozenlist
     fsspec: fsspec
@@ -169,7 +168,6 @@ manifest:
     humanize: humanize
     hyperframe: hyperframe
     idna: idna
-    imageio: imageio
     importlib_metadata: importlib_metadata
     importlib_resources: importlib_resources
     iniconfig: iniconfig
@@ -177,13 +175,14 @@ manifest:
     ipykernel_launcher: ipykernel
     ipython_pygments_lexers: ipython_pygments_lexers
     ipywidgets: ipywidgets
+    ir_datasets: ir_datasets
     isoduration: isoduration
     isympy: sympy
     jedi: jedi
     jinja2: jinja2
     jmespath: jmespath
+    joblib: joblib
     json5: json5
-    jsonlines: jsonlines
     jsonpatch: jsonpatch
     jsonpointer: jsonpointer
     jsonref: jsonref
@@ -204,29 +203,30 @@ manifest:
     jwt: PyJWT
     kafka: kafka_python_ng
     kafka_connect: kafka_connect_py
+    kiwisolver: kiwisolver
     kombu: kombu
     langchain: langchain
     langchain_cohere: langchain_cohere
     langchain_community: langchain_community
     langchain_core: langchain_core
-    langchain_docling: langchain_docling
     langchain_qdrant: langchain_qdrant
     langchain_text_splitters: langchain_text_splitters
     langserve: langserve
     langsmith: langsmith
     lark: lark
     latex2mathml: latex2mathml
-    lazy_loader: lazy_loader
     linkify_it: linkify_it_py
+    llvmlite: llvmlite
     loguru: loguru
     lorem: lorem
     lxml: lxml
+    lz4: lz4
     makefun: makefun
     mako: mako
     markdown_it: markdown_it_py
-    marko: marko
     markupsafe: markupsafe
     marshmallow: marshmallow
+    matplotlib: matplotlib
     matplotlib_inline: matplotlib_inline
     mccabe: mccabe
     mcp: mcp
@@ -235,20 +235,22 @@ manifest:
     minio: minio
     mistune: mistune
     mmh3: mmh3
-    mpire: mpire
+    mpl_toolkits.axes_grid1: matplotlib
+    mpl_toolkits.axisartist: matplotlib
+    mpl_toolkits.mplot3d: matplotlib
     mpmath: mpmath
     multidict: multidict
     multipart: python_multipart
-    multiprocess: multiprocess
     mypy_extensions: mypy_extensions
+    narwhals: narwhals
     nbclient: nbclient
     nbconvert: nbconvert
     nbformat: nbformat
     nest_asyncio: nest_asyncio
     networkx: networkx
-    ninja: ninja
     notebook: notebook
     notebook_shim: notebook_shim
+    numba: numba
     numpy: numpy
     nvidia.cu13.lib.libcheckpoint: nvidia_cuda_cupti
     nvidia.cu13.lib.libnvperf_host: nvidia_cuda_cupti
@@ -256,8 +258,6 @@ manifest:
     nvidia.cu13.lib.libpcsamplingutil: nvidia_cuda_cupti
     onnxruntime: onnxruntime
     openapi_python_client: openapi_python_client
-    opencv_python_headless.libs.libopenblasp-r0-59ffcd50: opencv_python_headless
-    openpyxl: openpyxl
     opentelemetry.attributes: opentelemetry_api
     opentelemetry.baggage: opentelemetry_api
     opentelemetry.context: opentelemetry_api
@@ -310,7 +310,6 @@ manifest:
     platformdirs: platformdirs
     pluggy: pluggy
     portalocker: portalocker
-    pptx: python_pptx
     prometheus_client: prometheus_client
     prompt_toolkit: prompt_toolkit
     propcache: propcache
@@ -324,7 +323,6 @@ manifest:
     py: pytest
     py_rust_stemmers: py_rust_stemmers
     pybreaker: pybreaker
-    pyclipper: pyclipper
     pycodestyle: pycodestyle
     pycparser: pycparser
     pydantic: pydantic
@@ -332,18 +330,20 @@ manifest:
     pydantic_settings: pydantic_settings
     pyflakes: pyflakes
     pygments: pygments
+    pylab: matplotlib
     pymupdf: pymupdf
     pymupdf.features: pymupdf_layout
     pymupdf.layout: pymupdf_layout
     pymupdf4llm: pymupdf4llm
-    pypdfium2: pypdfium2
-    pypdfium2_raw: pypdfium2
+    pyparsing: pyparsing
+    pypdf: pypdf
     pytest: pytest
     pytest_asyncio: pytest_asyncio
     python_multipart: python_multipart
     pythonjsonlogger: python_json_logger
     pytz: pytz
     qdrant_client: qdrant_client
+    ranx: ranx
     redis: redis
     referencing: referencing
     regex: regex
@@ -355,18 +355,17 @@ manifest:
     rfc3987_syntax: rfc3987_syntax
     rich: rich
     rpds: rpds_py
-    rtree: rtree
     ruamel.yaml: ruamel_yaml
     ruff: ruff
     safetensors: safetensors
     scipy: scipy
-    semchunk: semchunk
+    seaborn: seaborn
     send2trash: send2trash
+    sentence_transformers: sentence_transformers
     setuptools: setuptools
-    shapely: shapely
     shellingham: shellingham
     six: six
-    skimage: scikit_image
+    sklearn: scikit_learn
     soupsieve: soupsieve
     sqlalchemy: SQLAlchemy
     sqlalchemy_utils: SQLAlchemy_Utils
@@ -379,6 +378,10 @@ manifest:
     tabulate: tabulate
     tenacity: tenacity
     terminado: terminado
+    test.formats: ir_datasets
+    test.indices: ir_datasets
+    test.integration: ir_datasets
+    test.util.docs: ir_datasets
     testcontainers.arangodb: testcontainers
     testcontainers.aws: testcontainers
     testcontainers.azurite: testcontainers
@@ -429,21 +432,15 @@ manifest:
     testcontainers.vault: testcontainers
     testcontainers.weaviate: testcontainers
     textual: textual
-    tifffile: tifffile
+    threadpoolctl: threadpoolctl
     tinycss2: tinycss2
     tokenizers: tokenizers
     torch: torch
     torchgen: torch
-    torchvision: torchvision
     tornado: tornado
     tqdm: tqdm
     traitlets: traitlets
     transformers: transformers
-    tree_sitter: tree_sitter
-    tree_sitter_c: tree_sitter_c
-    tree_sitter_javascript: tree_sitter_javascript
-    tree_sitter_python: tree_sitter_python
-    tree_sitter_typescript: tree_sitter_typescript
     triton: triton
     typer: typer
     typing_extensions: typing_extensions
@@ -461,10 +458,10 @@ manifest:
     webcolors: webcolors
     webencodings: webencodings
     websocket: websocket_client
+    websockets: websockets
     widgetsnbextension: widgetsnbextension
     wiremock: wiremock
     wrapt: wrapt
-    xlsxwriter: xlsxwriter
     yaml: pyyaml
     yarl: yarl
     zipp: zipp
@@ -472,4 +469,4 @@ manifest:
     zstandard: zstandard
   pip_repository:
     name: pip
-integrity: 04169ddc4e1a8cd02f14c6c9c3926e5d474b52e63e75814fc25443065d187760
+integrity: 9ff6a6e8930508d958924b168e9f56b57d74bce1303e120bf19a47f05f77dd6c
