@@ -136,6 +136,34 @@ async def _drive_async_chain(
     return resp.json()
 
 
+# ---------------------------------------------------------------------------
+# docling-serve unreachable — must surface as 503, not a bare 500. The
+# worker's retry logic (controller/worker/tasks.py) branches on
+# status_code >= 500 to decide retry-vs-permanent, so this status code is
+# load-bearing. test_async_parse.py covers the full status-code matrix
+# (connect error, timeout, docling-serve 4xx/5xx) against a mocked
+# docling_client; this exercises the same _translate_docling_errors path
+# against a real httpx.ConnectError from a genuinely unreachable host.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_submit_returns_503_when_docling_serve_is_unreachable(
+    client_no_docling: httpx.AsyncClient,
+) -> None:
+    obj_id = uuid.uuid4()
+    resp = await client_no_docling.post(
+        "/v1/parse/submit",
+        files={"file": ("test.md", b"# Hello", "text/markdown")},
+        data={"metadata": _metadata(obj_id)},
+    )
+    assert resp.status_code == 503, resp.text
+    body = resp.json()
+    assert body["type"] == "upstream_service_error"
+    assert body["service"] == "docling-serve"
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_async_chain_text_pdf_produces_artifact(
