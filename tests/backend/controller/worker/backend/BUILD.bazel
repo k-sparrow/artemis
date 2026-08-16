@@ -1,0 +1,28 @@
+load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "conftest",
+    testonly = True,
+    srcs = ["conftest.py"],
+    deps = [
+        requirement("psycopg"),
+        requirement("pytest"),
+        requirement("sqlalchemy"),
+        requirement("testcontainers"),
+    ],
+)
+
+py_test(
+    name = "test_claims",
+    srcs = ["test_claims.py"],
+    data = ["//src/backend/alembic:tarball.dev"],
+    tags = ["integration"],
+    deps = [
+        ":conftest",
+        "//src/backend/controller/worker/backend:claims",
+        requirement("pytest"),
+        requirement("sqlalchemy"),
+    ],
+)

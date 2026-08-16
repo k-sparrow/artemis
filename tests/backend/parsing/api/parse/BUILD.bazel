@@ -29,3 +29,16 @@ py_test(
         requirement("pytest"),
     ],
 )
+
+py_test(
+    name = "test_callback_endpoint",
+    srcs = ["test_callback_endpoint.py"],
+    tags = ["unit"],
+    deps = [
+        ":conftest",
+        "//src/backend/parsing/api:config",
+        "//src/backend/parsing/api:dependencies",
+        "//src/backend/parsing/api:main",
+        requirement("pytest"),
+    ],
+)

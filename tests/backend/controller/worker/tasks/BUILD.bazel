@@ -24,5 +24,6 @@ py_test(
         requirement("httpx"),
         requirement("pybreaker"),
         requirement("pytest"),
+        requirement("sqlalchemy"),
     ],
 )
