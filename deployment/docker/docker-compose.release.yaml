@@ -285,6 +285,8 @@ services:
     depends_on:
       docling-serve:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/10001 && printf 'GET /health/readiness HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q 'HTTP/1.1 200' <&3"]
       interval: 20s
@@ -299,6 +301,18 @@ services:
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
       S3_SECURE: false
+      # Self-address docling-serve's callback is POSTed to — same host:port
+      # the worker already reaches this service at via PARSING_SERVICE_URL.
+      PARSING_SERVICE_PUBLIC_URL: "http://backend-parsing:10001"
+      # This service is a Celery producer only (send_task by name for
+      # tasks.advance_from_callback) — same broker/exchange the controller
+      # worker uses, never a consumer, so no result backend config here.
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: artemis
+      RABBITMQ_PASSWORD: artemis
+      RABBITMQ_VHOST: artemis
+      EXCHANGE_NAME: ingestion_test0
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
     expose:
       - "10001"

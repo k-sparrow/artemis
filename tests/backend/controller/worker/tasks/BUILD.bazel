@@ -19,6 +19,7 @@ py_test(
     tags = ["unit"],
     deps = [
         "//src/backend/controller/worker:tasks",
+        "//src/backend/controller/worker/backend:claims",
         "//tests/backend/controller/worker:conftest",
         requirement("httpx"),
         requirement("pybreaker"),

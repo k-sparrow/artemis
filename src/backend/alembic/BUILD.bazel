@@ -16,6 +16,7 @@ py_binary(
         "script.py.mako",
     ] + glob(["versions/*.py"]),
     deps = [
+        "//src/backend/controller/worker/backend:claims",
         "//src/backend/controller/worker/backend:models",
         "//src/backend/enterprise/data_sources/api:models",
         "//src/backend/storage/api:models",

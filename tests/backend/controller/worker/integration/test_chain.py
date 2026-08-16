@@ -22,11 +22,11 @@ from minio import Minio
 from testcontainers.core.container import DockerContainer
 from testcontainers.postgres import PostgresContainer
 
-from tests.backend.controller.worker.integration.conftest import (
+from tests.backend.controller.worker.integration.conftest import (  # noqa: F401
     WireMockStub,
     upload_file,
-    wait_for_task,
-    wait_for_task_result,
+    wait_for_task,  # noqa: F401
+    wait_for_task_by_contract_id,
     wait_until_minio_empty,
     wait_until_stub_called,
     wait_until_stub_called_n_times,
@@ -229,14 +229,16 @@ class TestFetchAndParseIndexChain:
         upload_file(minio_client, s3_source_bucket, "test.md")
         outer_result = _dispatch_ingest(dispatch_app, s3_source_bucket, namespace_id)
 
-        # ingest's own return value ({"chain_id": ...}) carries index's task_id —
-        # chain(...).apply_async().id is the AsyncResult of the chain's LAST task.
-        chain_result = wait_for_task_result(
-            outer_result.id, postgres_container, timeout=30
+        # index is no longer chained under ingest (it's dispatched later,
+        # dynamically, by whichever of poll_parse / advance_from_callback
+        # wins the parse_stage_state claim) — its own Celery task id isn't
+        # knowable from ingest's dispatch call the way chain(...).apply_async()
+        # used to make it. Correlate by the contract task_id instead, the same
+        # way the real ksqlDB FAILURE fan-out does (EXTRACTJSONFIELD keyed by
+        # $.task_id — see wait_for_task_by_contract_id's docstring).
+        status = wait_for_task_by_contract_id(
+            outer_result.id, "tasks.index", postgres_container, timeout=30
         )
-        index_task_id = chain_result["chain_id"]
-
-        status = wait_for_task(index_task_id, postgres_container, timeout=30)
         assert status == "FAILURE"
 
         objects = list(minio_client.list_objects("parsed-chunks", recursive=True))

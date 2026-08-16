@@ -73,6 +73,7 @@ app.conf.task_routes = {
     "tasks.parse": _PARSE_ROUTE,
     "tasks.submit_parse": _PARSE_ROUTE,
     "tasks.poll_parse": _PARSE_ROUTE,
+    "tasks.advance_from_callback": _PARSE_ROUTE,
     "tasks.resolve_parse": _PARSE_ROUTE,
     "tasks.submit_chunk": _PARSE_ROUTE,
     "tasks.poll_chunk": _PARSE_ROUTE,

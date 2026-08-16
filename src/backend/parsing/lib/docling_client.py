@@ -11,6 +11,8 @@ handles.
 
 from __future__ import annotations
 
+import json
+
 import httpx
 from docling.datamodel.document import DoclingDocument
 
@@ -39,6 +41,7 @@ class DoclingParseClient:
         key: str,
         target_bucket: str,
         target_key_prefix: str,
+        callbacks: list[dict] | None = None,
         timeout: float = 120.0,
     ) -> str:
         """POST /v1/convert/source/batch with an S3 source AND S3 target → task_id.
@@ -100,6 +103,13 @@ class DoclingParseClient:
                 "key_prefix": target_key_prefix,
             },
         }
+        if callbacks:
+            # BatchConvertSourcesRequest.callbacks: list[CallbackSpec] — fires
+            # once with the terminal per-document result. Delivery is NOT
+            # reliable (docling-serve retries 3x over ~1-2s then drops it
+            # silently), so callers must keep polling as a safety net; this is
+            # a fast path only, never a replacement for the poll loop.
+            body["callbacks"] = callbacks
         async with httpx.AsyncClient(
             base_url=self._base_url, timeout=timeout
         ) as client:
@@ -113,16 +123,27 @@ class DoclingParseClient:
         filename: str,
         content_type: str,
         *,
+        callbacks: list[dict] | None = None,
         timeout: float = 120.0,
     ) -> str:
-        """POST /v1/convert/file/async → task_id (target=inbody, format=json)."""
+        """POST /v1/convert/file/async → task_id (target=inbody, format=json).
+
+        ``callbacks`` is a repeated ``callbacks`` form field on this endpoint
+        (confirmed against docling-serve's ``process_file_async``, pinned
+        commit ``69192d17``) — each value is either a bare URL or a
+        JSON-encoded ``CallbackSpec``; httpx repeats the field once per list
+        element when the ``data`` dict value is itself a list.
+        """
+        data: dict[str, object] = {"to_formats": "json"}
+        if callbacks:
+            data["callbacks"] = [json.dumps(cb) for cb in callbacks]
         async with httpx.AsyncClient(
             base_url=self._base_url, timeout=timeout
         ) as client:
             resp = await client.post(
                 "/v1/convert/file/async",
                 files={"files": (filename, content, content_type)},
-                data={"to_formats": "json"},
+                data=data,
             )
             resp.raise_for_status()
             return resp.json()["task_id"]

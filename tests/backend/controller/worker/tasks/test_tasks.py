@@ -34,6 +34,7 @@ from src.backend.controller.worker.tasks import (
     delete_namespace,
     index,
     ingest,
+    parse,
 )
 
 _NAMESPACE_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
@@ -67,27 +68,28 @@ class TestIngest:
     infrastructure itself.
 
     Key design constraints verified here:
-    - CREATE/UPDATE must dispatch a ``parse → index`` chain, with
-      Pydantic models serialised to plain dicts/strings so they survive the
-      JSON round-trip through the broker (regression: EncodeError was raised
-      when Pydantic models were passed directly).
+    - CREATE/UPDATE must dispatch ``parse`` standalone (NOT chained with
+      ``index`` — index is part of the tail chain that whichever of
+      poll_parse / advance_from_callback wins the parse_stage_state claim
+      builds and dispatches explicitly; see tasks.py's module docstring),
+      with Pydantic models serialised to plain dicts/strings so they survive
+      the JSON round-trip through the broker (regression: EncodeError was
+      raised when Pydantic models were passed directly).
     - DELETE/AUTO_DELETE must dispatch ``delete_document`` (not the chain) and
       must pass ``source`` as a dict so the broker can serialise it.
     """
 
-    def test_create_dispatches_chain(self) -> None:
-        """CREATE action must dispatch the parse → index chain.
+    def test_create_dispatches_parse_standalone(self) -> None:
+        """CREATE action must dispatch ``parse`` alone, not chained with index.
 
         Also verifies the serialisation boundary: ``parse`` must
         receive plain dicts/strings, not Pydantic model instances, so that
         kombu can JSON-encode them across the broker.
         """
-        mock_chain_result = MagicMock()
-        mock_chain_result.id = "chain-abc"
+        mock_result = MagicMock()
+        mock_result.id = "parse-abc"
 
-        with patch("src.backend.controller.worker.tasks.chain") as mock_chain:
-            mock_chain.return_value.apply_async.return_value = mock_chain_result
-
+        with patch.object(parse, "apply_async", return_value=mock_result) as mock_apply:
             result = ingest.run(
                 s3=_S3,
                 source=_SOURCE,
@@ -95,44 +97,29 @@ class TestIngest:
                 info=_INFO,
             )
 
-        assert "chain_id" in result
-        mock_chain.assert_called_once()
-        # First task (tasks.parse) must receive serialisable args. Identity is
-        # passed by KEYWORD so FailureRecordingTask.on_failure can recover it from
-        # kwargs; the contract task_id is propagated alongside.
-        first_sig = mock_chain.call_args[0][0]
-        assert first_sig.args == (_S3.model_dump(),)
-        propagated_task_id = first_sig.kwargs["task_id"]
+        assert result == {"task_id": "parse-abc"}
+        mock_apply.assert_called_once()
+        # parse must receive serialisable args. Identity is passed by KEYWORD
+        # so FailureRecordingTask.on_failure can recover it from kwargs; the
+        # contract task_id is propagated alongside.
+        call_kwargs = mock_apply.call_args.kwargs
+        propagated_task_id = call_kwargs["kwargs"]["task_id"]
         assert isinstance(propagated_task_id, str) and propagated_task_id
-        assert first_sig.kwargs == {
+        assert call_kwargs["args"] == (_S3.model_dump(),)
+        assert call_kwargs["kwargs"] == {
             "source": _SOURCE.model_dump(mode="json"),
             "namespace_id": str(_NAMESPACE_ID),
             "group_id": None,  # None when not set on IngestionInfo
             "task_id": propagated_task_id,
             "operation": "CREATE",
         }
-        # Second task: index must receive upload_action + source + s3 dicts for the
-        # JDBC sink result, plus the SAME contract task_id (artifact_ref is piped in
-        # by the chain as the leading positional arg).
-        second_sig = mock_chain.call_args[0][1]
-        assert second_sig.args == ()
-        assert second_sig.kwargs == {
-            "namespace_id": str(_NAMESPACE_ID),
-            "upload_action": "CREATE",
-            "group_id": None,
-            "source": _SOURCE.model_dump(mode="json"),
-            "s3": _S3.model_dump(mode="json"),
-            "task_id": propagated_task_id,  # same contract id across both subtasks
-        }
 
-    def test_update_dispatches_chain(self) -> None:
-        """UPDATE action must follow the same chain path as CREATE."""
-        mock_chain_result = MagicMock()
-        mock_chain_result.id = "chain-def"
+    def test_update_dispatches_parse_standalone(self) -> None:
+        """UPDATE action must follow the same dispatch path as CREATE."""
+        mock_result = MagicMock()
+        mock_result.id = "parse-def"
 
-        with patch("src.backend.controller.worker.tasks.chain") as mock_chain:
-            mock_chain.return_value.apply_async.return_value = mock_chain_result
-
+        with patch.object(parse, "apply_async", return_value=mock_result) as mock_apply:
             result = ingest.run(
                 s3=_S3,
                 source=_SOURCE,
@@ -140,8 +127,8 @@ class TestIngest:
                 info=_INFO,
             )
 
-        assert "chain_id" in result
-        mock_chain.assert_called_once()
+        assert result == {"task_id": "parse-def"}
+        mock_apply.assert_called_once()
 
     def test_delete_dispatches_delete_document(self) -> None:
         """DELETE action must dispatch ``delete_document`` with serialised kwargs.
@@ -212,10 +199,19 @@ class TestFailureRecordingTask:
     keyed by the contract ``task_id``, with the traceback column nulled."""
 
     def _invoke(self, exc: Exception, kwargs: dict) -> MagicMock:
-        """Call ``on_failure`` with a mock task; return the ``store_result`` mock."""
+        """Call ``on_failure`` with a mock task; return the ``store_result`` mock.
+
+        ``on_failure`` now delegates to ``record_failure`` (shared with
+        ``advance_from_callback``) — bind the REAL method onto the mock so
+        ``self.record_failure(...)`` inside ``on_failure`` still exercises it,
+        instead of silently no-op-ing on an auto-created Mock attribute.
+        """
         task = MagicMock()
         task.name = "tasks.index"
         task.request.id = "subtask-C-id"
+        task.record_failure = FailureRecordingTask.record_failure.__get__(
+            task, FailureRecordingTask
+        )
         FailureRecordingTask.on_failure(
             task, exc, "subtask-C-id", (), kwargs, einfo=None
         )

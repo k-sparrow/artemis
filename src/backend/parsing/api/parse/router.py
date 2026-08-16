@@ -4,7 +4,13 @@ from functools import wraps
 from typing import Annotated, Literal, Optional
 
 import httpx
+from docling.datamodel.base_models import ConversionStatus
 from docling.datamodel.document import DoclingDocument
+from docling.datamodel.service.callbacks import (
+    ProgressCallbackRequest,
+    ProgressCallbackResponse,
+    ProgressKind,
+)
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from minio import Minio
 from pydantic import BaseModel, BeforeValidator
@@ -12,6 +18,7 @@ from pydantic import BaseModel, BeforeValidator
 from src.backend.parsing.api.config import settings
 from src.backend.parsing.api.dependencies import (
     blob_store_factory_dependency,
+    celery_producer_dependency,
     docling_client_dependency,
     s3_client_dependency,
 )
@@ -206,6 +213,10 @@ async def submit_endpoint(
         )
 
     obj_id = metadata["obj_id"]
+    callback_url = (
+        f"{settings.PARSING_SERVICE_PUBLIC_URL.rstrip('/')}/v1/parse/callback/{obj_id}"
+    )
+    callbacks = [{"url": callback_url}]
 
     if file is not None:
         mode = "file"
@@ -217,6 +228,7 @@ async def submit_endpoint(
             content=content,
             filename=in_name,
             content_type=in_type,
+            callbacks=callbacks,
             timeout=120.0,
         )
     else:
@@ -243,11 +255,91 @@ async def submit_endpoint(
             key=ref.key,
             target_bucket=settings.REPLAY_CACHE_BUCKET,
             target_key_prefix=service.convert_scratch_prefix(obj_id),
+            callbacks=callbacks,
             timeout=120.0,
         )
 
     logger.info("submit_queued", obj_id=obj_id, parsing_task_id=task_id)
     return SubmitResult(parsing_task_id=task_id, obj_id=obj_id, mode=mode)
+
+
+@router.post("/v1/parse/callback/{obj_id}", response_model=ProgressCallbackResponse)
+async def parse_callback_endpoint(
+    obj_id: str,
+    callback: ProgressCallbackRequest,
+    producer: celery_producer_dependency,
+) -> ProgressCallbackResponse:
+    """Receive docling-serve's terminal conversion callback; hand it to Celery.
+
+    Registered as the callback URL on every /v1/parse/submit call (see
+    submit_endpoint). Delivery is fire-once, best-effort — docling-serve
+    retries this call 3x over ~1-2s then silently drops it — so poll_parse
+    keeps polling as a safety net regardless of whether this ever fires.
+    Races poll_parse for the same document; ``tasks.advance_from_callback``
+    is what actually arbitrates that race (see backend/claims.py), not
+    anything here.
+
+    The HTTP status here reflects ONLY whether the payload was successfully
+    handed off to Celery — never the document's conversion outcome. A 200 is
+    returned as soon as ``send_task`` succeeds, regardless of whether the
+    document itself converted successfully or failed; that outcome is
+    ``advance_from_callback``'s problem to resolve asynchronously. Only a
+    ``send_task`` failure (broker unreachable) returns non-2xx — the one case
+    docling-serve's ``CallbackInvoker`` does something useful with (it
+    retries redelivering the callback).
+    """
+    progress = callback.progress
+    if progress.kind != ProgressKind.DOCUMENT_COMPLETED:
+        # set_num_docs / update_processed — nothing to advance yet, ack only.
+        return ProgressCallbackResponse()
+
+    doc_status = progress.document.status
+    if doc_status == ConversionStatus.SUCCESS:
+        outcome = "success"
+        error_message = None
+    elif doc_status == ConversionStatus.PARTIAL_SUCCESS:
+        # Mirrors DoclingParseClient.get_status: some page slices failed
+        # server-side (Ray engine fan-out) — treat as failure so the retry
+        # re-submits the whole document rather than proceeding with a
+        # truncated DoclingDocument.
+        outcome = "failure"
+        error_message = (
+            f"partial_success: {progress.document.error}"
+            if progress.document.error
+            else "partial_success"
+        )
+    else:
+        outcome = "failure"
+        error_message = progress.document.error or f"status={doc_status.value}"
+
+    try:
+        producer.send_task(
+            "tasks.advance_from_callback",
+            args=[obj_id],
+            kwargs={
+                "stage": "convert",
+                "docling_task_id": callback.task_id,
+                "outcome": outcome,
+                "error_message": error_message,
+            },
+            queue="artemis.ingestion.parse",
+            exchange=settings.EXCHANGE_NAME,
+            routing_key="parse",
+        )
+    except Exception as exc:
+        logger.warning("parse_callback_enqueue_failed", obj_id=obj_id, error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="failed to enqueue advance_from_callback",
+        ) from exc
+
+    logger.info(
+        "parse_callback_received",
+        obj_id=obj_id,
+        docling_task_id=callback.task_id,
+        outcome=outcome,
+    )
+    return ProgressCallbackResponse()
 
 
 @router.get("/v1/parse/status/{task_id}", response_model=ParseStatus)

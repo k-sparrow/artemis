@@ -134,6 +134,18 @@ services:
       S3_SECRET_KEY: "minioadmin"
       S3_SECURE: "false"
       DEBUG: "true"
+      # This test never exercises the callback route (it's Ray/S3-direct
+      # conversion plumbing, not the callback flow) — but ParsingSettings has
+      # no defaults for these, so the service won't even start without them.
+      # No RabbitMQ container in this compose file; the value only needs to
+      # satisfy startup validation, never an actual broker connection.
+      PARSING_SERVICE_PUBLIC_URL: "http://backend-parsing:10001"
+      RABBITMQ_USER: "unused"
+      RABBITMQ_PASSWORD: "unused"
+      RABBITMQ_HOST: "rabbitmq.invalid"
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_VHOST: "unused"
+      EXCHANGE_NAME: "unused"
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/10001 && printf 'GET /health/readiness HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q 'HTTP/1.1 200' <&3"]
       interval: 5s

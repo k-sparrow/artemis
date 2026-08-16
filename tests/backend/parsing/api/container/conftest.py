@@ -32,6 +32,25 @@ def _with_s3_env(container: DockerContainer) -> DockerContainer:
     )
 
 
+def _with_callback_env(container: DockerContainer) -> DockerContainer:
+    """Satisfy ParsingSettings' required callback/broker fields.
+
+    These tests never hit /v1/parse/callback or exercise the Celery producer
+    (no RabbitMQ container in this suite's docker_network) — the values only
+    need to make ParsingSettings() validate at startup, since without them
+    the app never even gets past import and liveness never returns 200.
+    """
+    return (
+        container.with_env("PARSING_SERVICE_PUBLIC_URL", "http://backend-parsing:10001")
+        .with_env("RABBITMQ_USER", "unused")
+        .with_env("RABBITMQ_PASSWORD", "unused")
+        .with_env("RABBITMQ_HOST", "rabbitmq.invalid")
+        .with_env("RABBITMQ_PORT", "5672")
+        .with_env("RABBITMQ_VHOST", "unused")
+        .with_env("EXCHANGE_NAME", "unused")
+    )
+
+
 # ---------------------------------------------------------------------------
 # Docker network
 # ---------------------------------------------------------------------------
@@ -110,12 +129,14 @@ def app_container(
     request: pytest.FixtureRequest,
 ) -> DockerContainer:
     """The real parsing service image, wired to the Docling + MinIO testcontainers."""
-    container = _with_s3_env(
-        DockerContainer(_APP_IMAGE)
-        .with_network(docker_network)
-        .with_env("DOCLING_SERVE_URI", f"http://docling-serve:{_DOCLING_PORT}")
-        .with_env("DEBUG", "true")
-        .with_exposed_ports(_APP_PORT)
+    container = _with_callback_env(
+        _with_s3_env(
+            DockerContainer(_APP_IMAGE)
+            .with_network(docker_network)
+            .with_env("DOCLING_SERVE_URI", f"http://docling-serve:{_DOCLING_PORT}")
+            .with_env("DEBUG", "true")
+            .with_exposed_ports(_APP_PORT)
+        )
     )
     container.start()
     request.addfinalizer(container.stop)
@@ -155,12 +176,14 @@ def app_container_no_docling(
     Uses TEST-NET (192.0.2.x, RFC 5737) which is non-routable by definition,
     so any HTTP call to it will time-out or be refused without side effects.
     """
-    container = _with_s3_env(
-        DockerContainer(_APP_IMAGE)
-        .with_network(docker_network)
-        .with_env("DOCLING_SERVE_URI", "http://docling-does-not-exist.invalid:5001")
-        .with_env("DEBUG", "true")
-        .with_exposed_ports(_APP_PORT)
+    container = _with_callback_env(
+        _with_s3_env(
+            DockerContainer(_APP_IMAGE)
+            .with_network(docker_network)
+            .with_env("DOCLING_SERVE_URI", "http://docling-does-not-exist.invalid:5001")
+            .with_env("DEBUG", "true")
+            .with_exposed_ports(_APP_PORT)
+        )
     )
     container.start()
     request.addfinalizer(container.stop)

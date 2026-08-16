@@ -2,22 +2,40 @@
 
 Chain structure
 ---------------
-The Kafka RabbitMQ Sink Connector calls ``tasks.ingest``, which resolves the namespace
-UUID and dispatches the two-task outer chain:
+The Kafka RabbitMQ Sink Connector calls ``tasks.ingest``, which resolves the
+namespace UUID and dispatches ``tasks.parse`` standalone (NOT chained with
+``index`` — see below for why).
 
-    parse  →  index
+``parse`` replaces itself via ``self.replace`` with a short async sub-chain:
 
-``parse`` replaces itself via ``self.replace`` with the async sub-chain:
+    submit_parse  →  poll_parse
 
-    submit_parse  →  poll_parse  →  resolve_parse  →  submit_chunk  →  poll_chunk
+``submit_parse`` writes a ``parse_stage_state`` claim row (see
+``backend/claims.py``) BEFORE calling docling-serve, then submits the
+conversion job with an HTTP callback registered
+(``POST {parsing service}/v1/parse/callback/{obj_id}``). From here, TWO
+independent paths can observe the terminal conversion result:
 
-Chunking is a fully decoupled stage from conversion (Epic 21) — ``resolve_parse``
-only downloads the conversion result and caches it; ``submit_chunk`` is a separate
-task that submits the hybrid-chunk job. ``poll_chunk`` calls finalize on success
-and returns the artifact ``BlobRef``.
+    (A) poll_parse polling docling-serve's status endpoint (the pre-existing,
+        always-on safety net — callback delivery is not reliable), or
+    (B) docling-serve's callback → the parsing service → ``tasks.advance_from_callback``
+
+Both call ``claims.try_claim`` on the same row; the winner builds and
+dispatches the REST of the pipeline explicitly, exactly once:
+
+    resolve_parse  →  submit_chunk  →  poll_chunk  →  index
+
+This tail is NOT wired as a Celery chain/callback anywhere (a chain's cascade
+to the next task is unconditional on success and can't be made to respect the
+claim) — it only ever exists as a signature built at claim-resolution time in
+``_build_and_dispatch_tail_chain``. Chunking remains a fully decoupled stage
+from conversion (Epic 21) — ``resolve_parse`` only downloads the conversion
+result and caches it; ``submit_chunk`` is a separate task that submits the
+hybrid-chunk job. ``poll_chunk`` calls finalize on success and returns the
+artifact ``BlobRef``.
 
 ``index`` (index queue)
-    1. Receives the artifact ``BlobRef`` from the parse sub-chain
+    1. Receives the artifact ``BlobRef`` from the parse tail chain
     2. POSTs it to the indexing service, which reads the artifact from storage
     3. Deletes the artifact on success (leaves it on failure for replay)
     4. Returns the UpsertResult dict
@@ -42,6 +60,8 @@ from celery.utils.log import get_task_logger
 from opentelemetry import metrics, trace
 
 import pybreaker
+from sqlalchemy.exc import DatabaseError, InvalidRequestError
+from sqlalchemy.orm.exc import StaleDataError
 
 from src.backend.controller.lib.schemas import (
     BlobRef,
@@ -58,7 +78,11 @@ from src.backend.controller.lib.schemas import (
     SourceDetails,
     UploadAction,
 )
-from src.backend.controller.worker.backend.database import DatabaseBackend
+from src.backend.controller.worker.backend import claims
+from src.backend.controller.worker.backend.database import (
+    DatabaseBackend,
+    session_cleanup,
+)
 from src.backend.controller.worker.celery import app
 from src.backend.controller.worker.config import settings
 from src.backend.controller.worker.dependencies import get_s3_client
@@ -111,6 +135,9 @@ _db_backend = DatabaseBackend(
 # the result column / CDC payload — the full traceback still lives elsewhere.
 _FAILURE_REASON_MAX = 2000
 
+# The only parse_stage_state stage in use today (see backend/claims.py).
+_CONVERT_STAGE = "convert"
+
 
 class FailureRecordingTask(Task):
     """Base task that records a clean, CDC-readable FAILURE row on terminal failure.
@@ -133,19 +160,23 @@ class FailureRecordingTask(Task):
     ``self.app.AsyncResult``: this app has no app-level backend.
     """
 
-    def on_failure(self, exc, task_id, args, kwargs, einfo):
-        contract_task_id = kwargs.get("task_id")
-        namespace_id = kwargs.get("namespace_id")
-        if not contract_task_id or not namespace_id:
-            # Without the contract id + NOT-NULL namespace_id we cannot build a
-            # resolvable row — leave the native FAILURE row untouched.
-            return
+    def record_failure(
+        self,
+        *,
+        contract_task_id: str,
+        namespace_id: str,
+        obj_id: str | None,
+        operation: str,
+        failure_reason: str,
+    ) -> None:
+        """Overwrite this task's own result row with a CDC-readable FAILURE record.
 
-        source = kwargs.get("source") or {}
-        obj_id = source.get("obj_id") if isinstance(source, dict) else None
-        operation = kwargs.get("operation") or kwargs.get("upload_action") or ""
-        operation = getattr(operation, "value", operation)
-
+        Shared by ``on_failure`` (identity recovered from this task's own
+        invocation kwargs, below) and ``advance_from_callback`` (identity
+        recovered from a claimed ``parse_stage_state`` row's
+        ``resume_context`` instead — it has no chain kwargs of its own to
+        fall back on).
+        """
         payload = FailureRecord(
             task_id=str(contract_task_id),
             object=FailureObject(
@@ -153,7 +184,7 @@ class FailureRecordingTask(Task):
                 scope=FailureScope(namespace_id=namespace_id),
             ),
             operation=str(operation),
-            failure_reason=f"{type(exc).__name__}: {exc}"[:_FAILURE_REASON_MAX],
+            failure_reason=failure_reason[:_FAILURE_REASON_MAX],
         ).model_dump(mode="json")
 
         # Pass request= so the backend preserves the extended columns (name, args,
@@ -174,6 +205,27 @@ class FailureRecordingTask(Task):
             contract_task_id,
             obj_id,
             operation,
+        )
+
+    def on_failure(self, exc, task_id, args, kwargs, einfo):
+        contract_task_id = kwargs.get("task_id")
+        namespace_id = kwargs.get("namespace_id")
+        if not contract_task_id or not namespace_id:
+            # Without the contract id + NOT-NULL namespace_id we cannot build a
+            # resolvable row — leave the native FAILURE row untouched.
+            return
+
+        source = kwargs.get("source") or {}
+        obj_id = source.get("obj_id") if isinstance(source, dict) else None
+        operation = kwargs.get("operation") or kwargs.get("upload_action") or ""
+        operation = getattr(operation, "value", operation)
+
+        self.record_failure(
+            contract_task_id=contract_task_id,
+            namespace_id=namespace_id,
+            obj_id=obj_id,
+            operation=str(operation),
+            failure_reason=f"{type(exc).__name__}: {exc}",
         )
 
 
@@ -205,6 +257,145 @@ class DocumentConversionError(Exception):
 
 class DocumentChunkingError(Exception):
     """Raised when docling-serve reports a terminal failure for a chunk job."""
+
+
+# ---------------------------------------------------------------------------
+# parse_stage_state claim helpers — shared by poll_parse and
+# advance_from_callback, the two independent paths that can each observe a
+# terminal conversion outcome for the same document (docling-serve's HTTP
+# callback vs. poll_parse's own polling). See backend/claims.py for the
+# atomic UPDATE ... WHERE claimed_at IS NULL RETURNING that arbitrates them.
+# ---------------------------------------------------------------------------
+
+_DB_TRANSIENT_ERRORS = (DatabaseError, InvalidRequestError, StaleDataError)
+
+
+def _retry_on_db_error(self, op, *, max_retries: int):
+    """Run *op* (a zero-arg callable), retrying via self.retry on a transient
+    Postgres error. *max_retries* must match the CALLING task's own retry
+    budget (poll_parse: 1440, same as its polling budget — advance_from_callback:
+    20, a fresh one-shot task) — self.request.retries is a single counter shared
+    across every self.retry() call in a task's lifetime, so passing a smaller
+    max_retries than a task may have already reached (e.g. poll_parse mid-way
+    through its 1440-retry polling budget) would make Celery raise
+    MaxRetriesExceededError immediately instead of scheduling a genuine retry.
+    """
+    try:
+        return op()
+    except _DB_TRANSIENT_ERRORS as exc:
+        backoff = min(120, 2**self.request.retries)
+        raise self.retry(
+            exc=exc,
+            countdown=backoff + random.uniform(0, backoff),
+            max_retries=max_retries,
+        )
+
+
+def _backfill_docling_task_id(
+    self, *, obj_id: str, stage: str, docling_task_id: str, max_retries: int
+) -> None:
+    def _op() -> None:
+        session = _db_backend.ResultSession()
+        with session_cleanup(session):
+            claims.backfill_docling_task_id(
+                session, obj_id=obj_id, stage=stage, docling_task_id=docling_task_id
+            )
+
+    _retry_on_db_error(self, _op, max_retries=max_retries)
+
+
+def _try_claim(
+    self, *, obj_id: str, stage: str, max_retries: int
+) -> claims.ResumeContext | None:
+    """Returns the claimed row's ResumeContext, or None if not won.
+
+    Deliberately returns the validated model rather than a
+    claims.ParseStageState ORM instance — see claims.try_claim's own
+    docstring for why (an ORM instance returned here would be bound to a
+    session this function's own session_cleanup already closed by the time
+    the caller touches it).
+    """
+
+    def _op() -> claims.ResumeContext | None:
+        session = _db_backend.ResultSession()
+        with session_cleanup(session):
+            return claims.try_claim(
+                session, obj_id=obj_id, stage=stage, claimant=self.request.id
+            )
+
+    return _retry_on_db_error(self, _op, max_retries=max_retries)
+
+
+def _delete_claim_row(*, obj_id: str, stage: str) -> None:
+    """Delete the claim row after successfully acting on it.
+
+    Swallows transient DB errors rather than propagating them — by this point
+    the real work (tail-chain dispatch or failure record) already succeeded,
+    so a cleanup hiccup must never flip that outcome to FAILURE. A row left
+    behind here is caught by the periodic prune job instead.
+    """
+    try:
+        session = _db_backend.ResultSession()
+        with session_cleanup(session):
+            claims.delete_stage_row(session, obj_id=obj_id, stage=stage)
+    except _DB_TRANSIENT_ERRORS:
+        logger.warning(
+            "parse_stage_claim=delete_failed obj_id=%s stage=%s "
+            "(will be swept by the periodic prune job)",
+            obj_id,
+            stage,
+        )
+
+
+def _build_and_dispatch_tail_chain(
+    submit_result: dict, resume_context: claims.ResumeContext
+) -> None:
+    """Build resolve_parse → submit_chunk → poll_chunk → index and dispatch it.
+
+    Only ever called by whichever of poll_parse / advance_from_callback wins
+    the parse_stage_state claim — never linked automatically via a Celery
+    chain/callback (see parse()'s docstring for why).
+    """
+    namespace_id = resume_context.namespace_id
+    group_id = resume_context.group_id
+    task_id = resume_context.task_id
+    operation = resume_context.operation
+    # Back to plain JSON-safe dicts here: these cross the broker as task
+    # kwargs (Celery's json serializer doesn't know how to encode a Pydantic
+    # model), matching every other call site in this file.
+    source = resume_context.source.model_dump(mode="json")
+    s3 = resume_context.s3.model_dump(mode="json")
+
+    chain(
+        resolve_parse.s(
+            submit_result,
+            namespace_id=namespace_id,
+            group_id=group_id,
+            task_id=task_id,
+            operation=operation,
+        ),
+        submit_chunk.s(
+            namespace_id=namespace_id,
+            group_id=group_id,
+            task_id=task_id,
+            operation=operation,
+        ),
+        poll_chunk.s(
+            source=source,
+            namespace_id=namespace_id,
+            group_id=group_id,
+            task_id=task_id,
+            operation=operation,
+        ),
+        index.s(
+            namespace_id=namespace_id,
+            upload_action=operation,
+            group_id=group_id,
+            source=source,
+            s3=s3,
+            task_id=task_id,
+        ),
+    ).apply_async()
 
 
 # ---------------------------------------------------------------------------
@@ -255,25 +446,23 @@ def ingest(
     operation = getattr(upload_action, "value", upload_action)
     match upload_action:
         case UploadAction.CREATE | UploadAction.UPDATE:
-            result = chain(
-                parse.s(
-                    s3.model_dump(),
-                    source=source.model_dump(mode="json"),
-                    namespace_id=str(namespace_id),
-                    group_id=group_id,
-                    task_id=task_id,
-                    operation=operation,
-                ),
-                index.s(
-                    namespace_id=str(namespace_id),
-                    upload_action=operation,
-                    group_id=group_id,
-                    source=source.model_dump(mode="json"),
-                    s3=s3.model_dump(mode="json"),
-                    task_id=task_id,
-                ),
-            ).apply_async()
-            return {"chain_id": str(result.id)}
+            # `index` is NOT chained here — it's dispatched, along with the rest
+            # of the tail (resolve_parse -> submit_chunk -> poll_chunk -> index),
+            # by whichever of poll_parse / advance_from_callback wins the
+            # parse_stage_state claim for this document (see parse()'s
+            # docstring). Chaining it here would auto-fire it via
+            # self.replace()'s callback inheritance regardless of that claim.
+            result = parse.apply_async(
+                args=(s3.model_dump(),),
+                kwargs={
+                    "source": source.model_dump(mode="json"),
+                    "namespace_id": str(namespace_id),
+                    "group_id": group_id,
+                    "task_id": task_id,
+                    "operation": operation,
+                },
+            )
+            return {"task_id": str(result.id)}
 
         case UploadAction.DELETE | UploadAction.AUTO_DELETE:
             result = delete_document.apply_async(
@@ -329,10 +518,18 @@ def parse(
 ) -> None:
     """Dispatch point for the async parse sub-chain.
 
-    Uses self.replace() so Celery substitutes the internal sub-chain in place
-    and threads its final BlobRef result directly into index. All sub-tasks
-    receive task_id so FailureRecordingTask.on_failure can recover the contract
-    id for CDC records regardless of which sub-task fails.
+    Uses self.replace() so Celery substitutes the internal sub-chain in
+    place — but only submit_parse -> poll_parse are chained here. Unlike
+    before the docling-serve conversion-callback feature, this does NOT
+    include resolve_parse/submit_chunk/poll_chunk/index: a Celery chain's
+    cascade to the next task is unconditional on success, and can't be made
+    to respect the parse_stage_state claim that arbitrates between poll_parse
+    and the callback path (see backend/claims.py) — whichever of the two
+    observes the terminal outcome AND wins the claim builds and dispatches
+    that whole tail explicitly (_build_and_dispatch_tail_chain), exactly
+    once, itself. All sub-tasks still receive task_id so
+    FailureRecordingTask.on_failure can recover the contract id for CDC
+    records regardless of which sub-task fails.
     """
     return self.replace(
         chain(
@@ -345,25 +542,7 @@ def parse(
                 operation=operation,
             ),
             poll_parse.s(
-                namespace_id=namespace_id,
-                group_id=group_id,
-                task_id=task_id,
-                operation=operation,
-            ),
-            resolve_parse.s(
-                namespace_id=namespace_id,
-                group_id=group_id,
-                task_id=task_id,
-                operation=operation,
-            ),
-            submit_chunk.s(
-                namespace_id=namespace_id,
-                group_id=group_id,
-                task_id=task_id,
-                operation=operation,
-            ),
-            poll_chunk.s(
-                source=source,
+                obj_id=source["obj_id"],
                 namespace_id=namespace_id,
                 group_id=group_id,
                 task_id=task_id,
@@ -406,6 +585,42 @@ def submit_parse(
         if s3.size == 0:
             raise EmptyObjectError(str(source.obj_id))
 
+        obj_id = str(source.obj_id)
+        # Written BEFORE the docling-serve call, not after: a very fast
+        # document's callback could otherwise fire before this row exists.
+        # `mode` is always "source" from this task's own client (call_parse_submit
+        # always sends source_ref, never an inline file upload) — a worker-side
+        # constant, not something only docling-serve's response would reveal.
+        resume_context = claims.ResumeContext(
+            namespace_id=str(namespace_id),
+            group_id=group_id,
+            task_id=task_id,
+            operation=operation,
+            mode="source",
+            source=source,
+            s3=s3,
+        )
+
+        def _write_claim_row() -> None:
+            session = _db_backend.ResultSession()
+            with session_cleanup(session):
+                claims.ensure_stage_row(
+                    session,
+                    obj_id=obj_id,
+                    stage=_CONVERT_STAGE,
+                    resume_context=resume_context,
+                )
+
+        try:
+            _write_claim_row()
+        except (DatabaseError, InvalidRequestError, StaleDataError) as exc:
+            backoff = min(120, 2**self.request.retries)
+            raise self.retry(
+                exc=exc,
+                countdown=backoff + random.uniform(0, backoff),
+                max_retries=20,
+            )
+
         source_ref = BlobRef(bucket=s3.bucket, key=s3.object)
         try:
             result = call_parse_submit(
@@ -447,16 +662,25 @@ def poll_parse(
     self,
     submit_result: dict,
     *,
+    obj_id: str,
     namespace_id: str,
     group_id: str | None = None,
     task_id: str | None = None,
     operation: str | None = None,
 ) -> dict:
-    """Poll conversion status until terminal; pass SubmitResult through on success.
+    """Poll conversion status until terminal; claim + advance on a terminal result.
 
     Retries with a 60–75 s countdown while status is "processing".
     Transient HTTP errors (5xx, breaker) draw from the same max_retries=1440
     budget as in-progress polls (24 h ceiling at 60 s intervals).
+
+    Races docling-serve's HTTP callback (advance_from_callback) for a terminal
+    result on the same document — both call claims.try_claim on the same
+    parse_stage_state row; whichever wins dispatches the tail chain (success)
+    or records the failure (failure), the other is a silent no-op. This is the
+    safety net: callback delivery is not reliable (docling-serve retries 3x
+    over ~1-2s then silently drops it), so this poll loop still runs
+    regardless of whether the callback ever fires.
 
     acks_late=True: between retries this task is "parked" in the worker's
     in-memory timer waiting for its ETA, not sitting acked-and-forgotten in
@@ -465,6 +689,23 @@ def poll_parse(
     acks_late, the crash leaves it unacked and RabbitMQ redelivers it.
     """
     parsing_task_id = submit_result["parsing_task_id"]
+    # obj_id comes from this task's own kwarg (threaded from parse(), which
+    # got it from source — the worker's own already-known identity), NOT
+    # from submit_result["obj_id"] — that value is only the parsing
+    # service's OWN echo of what it received, an external round-trip this
+    # code shouldn't trust as a claims.py primary key.
+
+    # Belt-and-suspenders: submit_parse already wrote docling_task_id=None
+    # before its HTTP call. Backfilling here is purely observational (the
+    # callback path never reads this column) — same 1440-retry budget as the
+    # rest of this task on a transient DB error (see _retry_on_db_error).
+    _backfill_docling_task_id(
+        self,
+        obj_id=obj_id,
+        stage=_CONVERT_STAGE,
+        docling_task_id=parsing_task_id,
+        max_retries=1440,
+    )
 
     def _elapsed() -> float | None:
         submitted_at = submit_result.get("submitted_at")
@@ -517,6 +758,20 @@ def poll_parse(
             _poll_elapsed.record(
                 elapsed, {"poll_task": "poll_parse", "outcome": "failure"}
             )
+        claimed = _try_claim(
+            self, obj_id=obj_id, stage=_CONVERT_STAGE, max_retries=1440
+        )
+        if claimed is None:
+            # Lost the claim: the callback path already handled (or is about
+            # to handle) this outcome. Raising here too would double-record
+            # the failure (a second, separately-keyed FAILURE row via this
+            # task's own on_failure, since poll_parse's kwargs already carry
+            # task_id/namespace_id) — silently no-op instead.
+            return None
+        _delete_claim_row(obj_id=obj_id, stage=_CONVERT_STAGE)
+        # Won the claim: raise as before so this task's own on_failure fires
+        # (unchanged from before this feature — poll_parse's kwargs already
+        # carry everything on_failure needs).
         raise DocumentConversionError(
             f"docling-serve conversion failed for task {parsing_task_id}: "
             f"{status.get('error_message', 'no detail')}"
@@ -526,7 +781,87 @@ def poll_parse(
     elapsed = _elapsed()
     if elapsed is not None:
         _poll_elapsed.record(elapsed, {"poll_task": "poll_parse", "outcome": "success"})
+
+    resume_context = _try_claim(
+        self, obj_id=obj_id, stage=_CONVERT_STAGE, max_retries=1440
+    )
+    if resume_context is None:
+        # Lost the claim: the callback path already dispatched the tail chain.
+        return None
+    _build_and_dispatch_tail_chain(submit_result, resume_context)
+    _delete_claim_row(obj_id=obj_id, stage=_CONVERT_STAGE)
     return submit_result
+
+
+@app.task(
+    name="tasks.advance_from_callback",
+    base=FailureRecordingTask,
+    bind=True,
+    backend=_db_backend,
+    result_serializer="json",
+    acks_late=True,
+)
+def advance_from_callback(
+    self,
+    obj_id: str,
+    *,
+    stage: str,
+    docling_task_id: str,
+    outcome: str,
+    error_message: str | None = None,
+) -> dict:
+    """Advance the parse pipeline from docling-serve's HTTP callback.
+
+    Dispatched by the parsing service's callback endpoint the instant
+    docling-serve reports a terminal conversion result — the fast path that
+    lets poll_parse stop being the sole mechanism for detecting completion.
+    Races poll_parse for the same parse_stage_state claim; the loser is a
+    silent no-op (the other path already handled it, or will).
+
+    Unlike poll_parse, this task has no chain kwargs of its own to recover
+    namespace_id/task_id/etc from on failure — that's why the failure branch
+    calls self.record_failure(...) explicitly, using the claimed row's
+    resume_context, instead of relying on FailureRecordingTask.on_failure's
+    automatic kwargs-based recovery (which would silently no-op here).
+
+    DB errors during the claim itself use a short retry budget
+    (max_retries=20, a fresh one-shot task — not poll_parse's 1440/24h
+    polling budget): this task doesn't need to survive a long Postgres outage
+    on its own, poll_parse is independently polling regardless of what
+    happens here. If the claim's retries are exhausted, this task fails as a
+    plain Celery task WITHOUT calling record_failure — a DB outage means "we
+    don't know what happened to this document", not "conversion failed";
+    poll_parse remains the authoritative source of truth for the real outcome
+    either way.
+    """
+    resume_context = _try_claim(self, obj_id=obj_id, stage=stage, max_retries=20)
+    if resume_context is None:
+        return {"status": "not_claimed"}
+
+    if outcome == "success":
+        submit_result = {
+            "parsing_task_id": docling_task_id,
+            "obj_id": obj_id,
+            "mode": resume_context.mode,
+        }
+        _build_and_dispatch_tail_chain(submit_result, resume_context)
+        _delete_claim_row(obj_id=obj_id, stage=stage)
+        logger.info("advance_from_callback=dispatched obj_id=%s", obj_id)
+        return {"status": "dispatched"}
+
+    failure_reason = (
+        f"docling-serve conversion failed (via callback) for task "
+        f"{docling_task_id}: {error_message or 'no detail'}"
+    )
+    self.record_failure(
+        contract_task_id=resume_context.task_id,
+        namespace_id=resume_context.namespace_id,
+        obj_id=obj_id,
+        operation=resume_context.operation,
+        failure_reason=failure_reason,
+    )
+    _delete_claim_row(obj_id=obj_id, stage=stage)
+    raise DocumentConversionError(failure_reason)
 
 
 @app.task(

@@ -14,6 +14,7 @@ import pybreaker
 import pytest
 from celery.exceptions import MaxRetriesExceededError, Retry  # noqa: F401
 
+from src.backend.controller.worker.backend.claims import ResumeContext
 from src.backend.controller.worker.tasks import (
     DocumentChunkingError,
     DocumentConversionError,
@@ -53,12 +54,26 @@ _KWARGS = {
     "operation": "CREATE",
 }
 
+# poll_parse alone also takes obj_id (threaded from parse(), not read from
+# submit_result — see tasks.py's poll_parse docstring for why).
+_POLL_PARSE_KWARGS = {**_KWARGS, "obj_id": _SUBMIT_RESULT["obj_id"]}
+
 _SOURCE = {
     "source": "doc.pdf",
     "content_type": "application/pdf",
     "obj_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
     "object_type": "file",
 }
+
+_FAKE_RESUME_CONTEXT = ResumeContext(
+    namespace_id=_KWARGS["namespace_id"],
+    group_id=_KWARGS["group_id"],
+    task_id=_KWARGS["task_id"],
+    operation=_KWARGS["operation"],
+    mode="source",
+    source=_SOURCE,
+    s3={"bucket": "docs", "object": "files/doc.pdf", "size": 10},
+)
 
 
 def _make_status(status: str) -> dict:
@@ -82,11 +97,31 @@ def _make_http_error(status_code: int) -> httpx.HTTPStatusError:
 
 
 class TestPollParse:
-    def _run(self, mock_status: MagicMock) -> dict:
-        with patch(
-            "src.backend.controller.worker.tasks.call_parse_status", mock_status
+    """poll_parse's own HTTP-polling logic. The parse_stage_state claim it
+    races advance_from_callback for is stubbed here — defaults to "wins the
+    claim" so the pre-existing success/failure assertions still hold; claims
+    atomicity itself has its own dedicated tests (backend/claims.py), and the
+    "loses the claim" no-op path is covered explicitly below.
+    """
+
+    def _run(self, mock_status: MagicMock, *, won_claim: bool = True) -> dict:
+        resume_context = _FAKE_RESUME_CONTEXT if won_claim else None
+        with (
+            patch("src.backend.controller.worker.tasks.call_parse_status", mock_status),
+            patch(
+                "src.backend.controller.worker.tasks.claims.backfill_docling_task_id"
+            ),
+            patch(
+                "src.backend.controller.worker.tasks.claims.try_claim",
+                return_value=resume_context,
+            ),
+            patch(
+                "src.backend.controller.worker.tasks._db_backend.ResultSession",
+                return_value=MagicMock(),
+            ),
+            patch("src.backend.controller.worker.tasks._build_and_dispatch_tail_chain"),
         ):
-            return poll_parse.run(_SUBMIT_RESULT, **_KWARGS)
+            return poll_parse.run(_SUBMIT_RESULT, **_POLL_PARSE_KWARGS)
 
     def test_processing_raises_retry(self) -> None:
         """'processing' status must schedule a retry (poll again later)."""
@@ -105,6 +140,20 @@ class TestPollParse:
         mock = MagicMock(return_value=_make_status("success"))
         result = self._run(mock)
         assert result == _SUBMIT_RESULT
+
+    def test_lost_claim_on_success_is_a_silent_noop(self) -> None:
+        """Losing the claim (callback path already won it) must not raise or
+        dispatch — just return quietly."""
+        mock = MagicMock(return_value=_make_status("success"))
+        result = self._run(mock, won_claim=False)
+        assert result is None
+
+    def test_lost_claim_on_failure_is_a_silent_noop(self) -> None:
+        """Losing the claim on a failure outcome must not raise either — the
+        callback path already recorded (or will record) the FAILURE row."""
+        mock = MagicMock(return_value=_make_status("failure"))
+        result = self._run(mock, won_claim=False)
+        assert result is None
 
     def test_circuit_breaker_schedules_retry(self) -> None:
         """CircuitBreakerError must be re-raised (not swallowed) so the broker retries.
@@ -353,16 +402,38 @@ class TestPollParseRetryExhaustion:
     def test_processing_exhausts_max_retries(self) -> None:
         """The 1440th 'processing' retry attempt must give up, not retry forever."""
         mock = MagicMock(return_value=_make_status("processing"))
-        with patch("src.backend.controller.worker.tasks.call_parse_status", mock):
+        with (
+            patch("src.backend.controller.worker.tasks.call_parse_status", mock),
+            patch(
+                "src.backend.controller.worker.tasks.claims.backfill_docling_task_id"
+            ),
+            patch(
+                "src.backend.controller.worker.tasks._db_backend.ResultSession",
+                return_value=MagicMock(),
+            ),
+        ):
             with pytest.raises(MaxRetriesExceededError):
-                poll_parse.apply(args=(_SUBMIT_RESULT,), kwargs=_KWARGS, retries=1440)
+                poll_parse.apply(
+                    args=(_SUBMIT_RESULT,), kwargs=_POLL_PARSE_KWARGS, retries=1440
+                )
 
     def test_5xx_exhausts_max_retries(self) -> None:
         """Transient 5xx errors share the same 1440-retry budget as in-progress polls."""
         mock = MagicMock(side_effect=_make_http_error(503))
-        with patch("src.backend.controller.worker.tasks.call_parse_status", mock):
+        with (
+            patch("src.backend.controller.worker.tasks.call_parse_status", mock),
+            patch(
+                "src.backend.controller.worker.tasks.claims.backfill_docling_task_id"
+            ),
+            patch(
+                "src.backend.controller.worker.tasks._db_backend.ResultSession",
+                return_value=MagicMock(),
+            ),
+        ):
             with pytest.raises(httpx.HTTPStatusError) as exc_info:
-                poll_parse.apply(args=(_SUBMIT_RESULT,), kwargs=_KWARGS, retries=1440)
+                poll_parse.apply(
+                    args=(_SUBMIT_RESULT,), kwargs=_POLL_PARSE_KWARGS, retries=1440
+                )
         assert exc_info.value.response.status_code == 503
 
 

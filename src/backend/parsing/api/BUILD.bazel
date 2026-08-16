@@ -54,6 +54,7 @@ py_library(
         "//src/backend/parsing/lib:docling_client",
         "//src/lib/core/adapters/stores/base:blob",
         "//src/lib/core/adapters/stores/minio:blob",
+        requirement("celery"),
         requirement("fastapi"),
         requirement("minio"),
     ],

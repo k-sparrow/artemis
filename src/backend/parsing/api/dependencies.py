@@ -1,5 +1,7 @@
+import functools
 from typing import Annotated
 
+from celery import Celery
 from fastapi import Depends
 from minio import Minio
 
@@ -15,6 +17,8 @@ __all__ = [
     "get_docling_client",
     "docling_client_dependency",
     "s3_client_dependency",
+    "get_celery_producer",
+    "celery_producer_dependency",
 ]
 
 
@@ -40,8 +44,20 @@ def get_docling_client() -> DoclingParseClient:
     return DoclingParseClient(base_url=settings.DOCLING_SERVE_URI)
 
 
+@functools.lru_cache
+def get_celery_producer() -> Celery:
+    """A long-lived Celery producer app, unlike this module's other
+    per-request-constructed dependencies — a broker connection is meant to be
+    reused, not rebuilt on every callback delivery. This service only ever
+    publishes (tasks.advance_from_callback via send_task by name); it never
+    consumes, so it needs no result backend or worker configuration.
+    """
+    return Celery(broker=settings.MESSAGE_BROKER_URL)
+
+
 blob_store_factory_dependency = Annotated[
     BlobStoreFactory, Depends(get_blob_store_factory)
 ]
 docling_client_dependency = Annotated[DoclingParseClient, Depends(get_docling_client)]
 s3_client_dependency = Annotated[Minio, Depends(get_s3_client)]
+celery_producer_dependency = Annotated[Celery, Depends(get_celery_producer)]

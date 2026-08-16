@@ -9,6 +9,7 @@ EXPECTED_TABLES = {
     "ingestion_tasks",
     "namespace",
     "owner",
+    "parse_stage_state",
 }
 
 
@@ -21,7 +22,7 @@ def test_all_tables_exist(conn):
 
 def test_alembic_version(conn):
     row = conn.execute("SELECT version_num FROM alembic_version").fetchone()
-    assert row[0] == "0005"
+    assert row[0] == "0006"
 
 
 def test_debezium_and_celery_users_exist_with_replication(conn):
@@ -83,3 +84,21 @@ def test_debezium_has_select_on_taskmeta(conn):
         "SELECT has_table_privilege('debezium', 'public.apollo_celery_taskmeta', 'SELECT')"  # noqa: E501
     ).fetchone()
     assert row[0] is True
+
+
+def test_parse_stage_state_owned_by_celery(conn):
+    """The worker (SQL_DB_USER=celery in this test env) reads/writes this
+    table directly — unlike apollo_celery_taskmeta/tasksetmeta, it is not
+    Celery-internal, but 0006 still transfers ownership to the "celery" role
+    since migrations run as a different (schema-owning) user. Regression
+    test for a real bug: without this transfer, submit_parse fails with
+    "permission denied for table parse_stage_state" on every attempt.
+    """
+    row = conn.execute(
+        """
+        SELECT pg_get_userbyid(relowner)
+        FROM pg_class
+        WHERE relname = 'parse_stage_state' AND relkind = 'r'
+        """
+    ).fetchone()
+    assert row[0] == "celery"

@@ -11,6 +11,13 @@ os.environ.setdefault("S3_ENDPOINT", "test-minio:9000")
 os.environ.setdefault("S3_ACCESS_KEY", "test")
 os.environ.setdefault("S3_SECRET_KEY", "test")
 os.environ.setdefault("S3_SECURE", "false")
+os.environ.setdefault("PARSING_SERVICE_PUBLIC_URL", "http://test-backend-parsing:10001")
+os.environ.setdefault("RABBITMQ_USER", "test")
+os.environ.setdefault("RABBITMQ_PASSWORD", "test")
+os.environ.setdefault("RABBITMQ_HOST", "test-rabbitmq")
+os.environ.setdefault("RABBITMQ_PORT", "5672")
+os.environ.setdefault("RABBITMQ_VHOST", "test")
+os.environ.setdefault("EXCHANGE_NAME", "test-exchange")
 
 
 @pytest.fixture(autouse=True)

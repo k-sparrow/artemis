@@ -221,6 +221,12 @@ class TestSubmitEndpoint:
             key="ingest-source/doc.md",
             target_bucket=settings.REPLAY_CACHE_BUCKET,
             target_key_prefix=parse_service.convert_scratch_prefix(OBJ_ID_STR),
+            callbacks=[
+                {
+                    "url": f"{settings.PARSING_SERVICE_PUBLIC_URL}"
+                    f"/v1/parse/callback/{OBJ_ID_STR}"
+                }
+            ],
             timeout=120.0,
         )
         docling_client.submit_file.assert_not_awaited()

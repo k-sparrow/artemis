@@ -691,7 +691,7 @@ def wait_for_task_result(
     """Poll until *task_id* reaches SUCCESS; return its parsed JSON result.
 
     Used to read a dispatcher task's own return value (e.g. ``ingest``'s
-    ``{"chain_id": ...}``) — distinct from ``wait_for_task``, which only reports
+    ``{"task_id": ...}``) — distinct from ``wait_for_task``, which only reports
     the terminal status of a task whose result payload isn't needed.
     """
     connstr = _pg_connstr(postgres_container)
@@ -707,3 +707,39 @@ def wait_for_task_result(
         return None
 
     return poll_until(_result, timeout=timeout, interval=1.0)
+
+
+def wait_for_task_by_contract_id(
+    contract_task_id: str,
+    name: str,
+    postgres_container: PostgresContainer,
+    timeout: int = 60,
+) -> str:
+    """Poll for a terminal (SUCCESS/FAILURE) row named *name* whose ``result``
+    JSON carries ``task_id == contract_task_id``, and return its status.
+
+    Mirrors the real ksqlDB FAILURE/SUCCESS fan-out's own correlation
+    mechanism (``EXTRACTJSONFIELD(result, '$.task_id')`` keyed by the contract
+    id — see ``tools/oci/images/ksqldb/artemis_init.ksql``), rather than
+    Celery's own per-task-instance ``task_id`` column: since ``index`` is no
+    longer chained under ``ingest`` (it's dispatched later, dynamically, by
+    whichever of poll_parse / advance_from_callback wins the parse_stage_state
+    claim), its own Celery task id isn't knowable from ``ingest``'s dispatch
+    call the way ``chain(...).apply_async().id`` used to make it.
+    """
+    connstr = _pg_connstr(postgres_container)
+
+    def _terminal_status() -> str | None:
+        with psycopg.connect(connstr) as conn:
+            row = conn.execute(
+                """
+                SELECT status FROM apollo_celery_taskmeta
+                WHERE name = %s
+                  AND result::json->>'task_id' = %s
+                  AND status IN ('SUCCESS', 'FAILURE')
+                """,
+                (name, contract_task_id),
+            ).fetchone()
+        return row[0] if row else None
+
+    return poll_until(_terminal_status, timeout=timeout, interval=1.0)

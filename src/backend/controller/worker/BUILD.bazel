@@ -72,6 +72,7 @@ py_library(
         requirement("psycopg-binary"),
         requirement("celery"),
         requirement("pybreaker"),
+        requirement("sqlalchemy"),
     ],
 )
 
