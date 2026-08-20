@@ -7,8 +7,8 @@ from alembic import context
 
 # Import all models so their tables are registered with Base.metadata.
 import src.backend.storage.api.models  # noqa: F401
-import src.backend.controller.worker.backend.models  # noqa: F401
 import src.backend.controller.worker.backend.claims  # noqa: F401
+import src.backend.controller.worker.backend.outbox  # noqa: F401
 import src.backend.enterprise.data_sources.api.models  # noqa: F401
 
 from src.lib.backend.db.base import Base

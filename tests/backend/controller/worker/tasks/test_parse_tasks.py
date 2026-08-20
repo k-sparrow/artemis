@@ -138,7 +138,7 @@ class TestSubmitParse:
                 "src.backend.controller.worker.tasks.claims.ensure_stage_row"
             ) as mock_ensure,
             patch(
-                "src.backend.controller.worker.tasks._db_backend.ResultSession",
+                "src.backend.controller.worker.tasks.SessionLocal",
                 return_value=MagicMock(),
             ),
         ):
@@ -160,7 +160,7 @@ class TestSubmitParse:
                 side_effect=lambda *a, **k: call_order.append("ensure_stage_row"),
             ),
             patch(
-                "src.backend.controller.worker.tasks._db_backend.ResultSession",
+                "src.backend.controller.worker.tasks.SessionLocal",
                 return_value=MagicMock(),
             ),
         ):
@@ -193,7 +193,7 @@ class TestSubmitParse:
                 "src.backend.controller.worker.tasks.claims.ensure_stage_row"
             ) as mock_ensure,
             patch(
-                "src.backend.controller.worker.tasks._db_backend.ResultSession",
+                "src.backend.controller.worker.tasks.SessionLocal",
                 return_value=MagicMock(),
             ),
         ):
@@ -221,7 +221,7 @@ class TestSubmitParse:
                 side_effect=DatabaseError("stmt", {}, Exception("connection refused")),
             ),
             patch(
-                "src.backend.controller.worker.tasks._db_backend.ResultSession",
+                "src.backend.controller.worker.tasks.SessionLocal",
                 return_value=MagicMock(),
             ),
         ):
@@ -271,7 +271,7 @@ class TestPollParse:
                 return_value=resume_context,
             ),
             patch(
-                "src.backend.controller.worker.tasks._db_backend.ResultSession",
+                "src.backend.controller.worker.tasks.SessionLocal",
                 return_value=MagicMock(),
             ),
             patch("src.backend.controller.worker.tasks._build_and_dispatch_tail_chain"),
@@ -351,7 +351,7 @@ class TestPollParse:
                 side_effect=DatabaseError("stmt", {}, Exception("connection refused")),
             ),
             patch(
-                "src.backend.controller.worker.tasks._db_backend.ResultSession",
+                "src.backend.controller.worker.tasks.SessionLocal",
                 return_value=MagicMock(),
             ),
         ):
@@ -388,7 +388,7 @@ class TestAdvanceFromCallback:
                 return_value=claim_result,
             ),
             patch(
-                "src.backend.controller.worker.tasks._db_backend.ResultSession",
+                "src.backend.controller.worker.tasks.SessionLocal",
                 return_value=MagicMock(),
             ),
             patch(
@@ -459,9 +459,6 @@ class TestAdvanceFromCallback:
         mock_record.assert_called_once()
         call_kwargs = mock_record.call_args.kwargs
         assert call_kwargs["contract_task_id"] == _FAKE_RESUME_CONTEXT.task_id
-        assert call_kwargs["namespace_id"] == _FAKE_RESUME_CONTEXT.namespace_id
-        assert call_kwargs["obj_id"] == "obj-1"
-        assert call_kwargs["operation"] == _FAKE_RESUME_CONTEXT.operation
         assert "docling blew up" in call_kwargs["failure_reason"]
 
     def test_db_retry_exhaustion_does_not_call_record_failure(self) -> None:
@@ -481,7 +478,7 @@ class TestAdvanceFromCallback:
                 side_effect=db_error,
             ),
             patch(
-                "src.backend.controller.worker.tasks._db_backend.ResultSession",
+                "src.backend.controller.worker.tasks.SessionLocal",
                 return_value=MagicMock(),
             ),
             patch.object(advance_from_callback, "record_failure") as mock_record,
@@ -705,7 +702,7 @@ class TestPollChunk:
 #     *original* exception instead, per Task.retry()'s
 #     ``if exc: raise_with_context(exc)`` — MaxRetriesExceededError is only the
 #     default when no cause exception was supplied.
-# Both are legitimate "give up" outcomes; FailureRecordingTask's on_failure
+# Both are legitimate "give up" outcomes; OutboxTask's on_failure
 # hook must handle either.
 # ---------------------------------------------------------------------------
 
@@ -720,7 +717,7 @@ class TestPollParseRetryExhaustion:
                 "src.backend.controller.worker.tasks.claims.backfill_docling_task_id"
             ),
             patch(
-                "src.backend.controller.worker.tasks._db_backend.ResultSession",
+                "src.backend.controller.worker.tasks.SessionLocal",
                 return_value=MagicMock(),
             ),
         ):
@@ -738,7 +735,7 @@ class TestPollParseRetryExhaustion:
                 "src.backend.controller.worker.tasks.claims.backfill_docling_task_id"
             ),
             patch(
-                "src.backend.controller.worker.tasks._db_backend.ResultSession",
+                "src.backend.controller.worker.tasks.SessionLocal",
                 return_value=MagicMock(),
             ),
         ):

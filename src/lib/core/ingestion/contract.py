@@ -41,9 +41,6 @@ __all__ = [
     "ObjectMetadata",
     "IndexingOutcome",
     "IngestionResult",
-    "FailureScope",
-    "FailureObject",
-    "FailureRecord",
 ]
 
 
@@ -127,57 +124,22 @@ class IndexingOutcome(BaseModel):
 class IngestionResult(BaseModel):
     """Result of a completed ``tasks.index`` or ``tasks.delete_document`` task.
 
-    Serialised as JSON into ``apollo_celery_taskmeta.result``.
-    The ksqlDB CSAS reads this to populate ``ingested_objects`` and
-    ``ingestion_tasks`` via two JDBC sink connectors.
+    This is now purely Celery's own stock result-backend payload (informational
+    only — ``AsyncResult``, Flower, etc.) — CDC visibility for ``ingested_objects``
+    and ``ingestion_tasks`` comes from ``ingestion_status`` (the transactional
+    outbox, written directly by ``OutboxTask``/``TerminalOutboxTask`` — see
+    ``src/backend/controller/worker/backend/outbox.py``), not from this model.
 
     ``task_id`` is the **contract** task_id — the id the storage service returned
     to the caller (= the ``tasks.ingest`` entry task's id), propagated down the
-    chain. It is carried here so the ksqlDB ``ingestion_tasks`` fan-out can key the
-    row by it, instead of by the per-subtask Celery id that owns this result row.
-    Without it, ``GET /tasks/{task_id}`` for the caller's id finds nothing.
+    chain — carried here for the same informational purpose as the rest of the
+    model.
     """
 
     object: ObjectMetadata
     indexing: IndexingOutcome
     operation: str
     task_id: str | None = None
-
-
-class FailureScope(BaseModel):
-    """Tenancy context for a failure record (``namespace_id`` is NOT NULL in
-    ``ingestion_tasks``, so it must always be present)."""
-
-    namespace_id: UUID
-
-
-class FailureObject(BaseModel):
-    """Minimal object identity for a failure record. ``id`` (the obj_id) maps to
-    the nullable ``ingestion_tasks.obj_id`` — a task may fail before any object
-    identity is resolvable."""
-
-    id: UUID | None = None
-    scope: FailureScope
-
-
-class FailureRecord(BaseModel):
-    """Failure payload written by a task's ``on_failure`` hook over its OWN
-    ``apollo_celery_taskmeta.result`` column (replacing the exception encoding
-    Celery stores by default), so CDC can recover the contract id + identity.
-
-    On a native FAILURE row ``result`` holds ``{exc_type, exc_message,
-    exc_module}`` — it has no ``task_id``/``object``/``namespace_id``, so the
-    ksqlDB ``ingestion_tasks`` fan-out cannot key or populate a row from it. The
-    ``on_failure`` hook overwrites ``result`` with this record (and nulls the
-    traceback column); the JSON layout deliberately mirrors :class:`IngestionResult`
-    for the paths the fan-out extracts (``$.task_id``, ``$.object.id``,
-    ``$.object.scope.namespace_id``, ``$.operation``) plus ``$.failure_reason``.
-    """
-
-    task_id: str | None = None
-    object: FailureObject
-    operation: str
-    failure_reason: str
 
 
 class IngestionTaskDetails(BaseModel):

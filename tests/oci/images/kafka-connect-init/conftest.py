@@ -12,7 +12,7 @@ Stack:
 
 Alembic migrations create:
   - debezium user with REPLICATION privilege
-  - apollo_celery_taskmeta table + celery_results_publication
+  - ingestion_status table + ingestion_status_publication
   - all storage service tables (ingested_objects, ingestion_tasks, owner, namespace)
 
 Prerequisites:

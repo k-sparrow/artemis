@@ -1,12 +1,11 @@
 """Unit tests for the Celery task orchestration logic.
 
 Tasks are called via `.run()` which invokes the underlying function directly,
-bypassing all Celery machinery (broker, result backend, retries).  All external
-dependencies are patched so no infrastructure is required.
-
-The conftest at the parent level sets `database_create_tables_at_setup=False`
-before tasks.py is first imported, preventing DatabaseBackend from opening a
-real DB connection during module initialisation.
+bypassing all Celery machinery (broker, retries). Celery's own result
+backend is now the stock `db+` recipe (see celery.py) — nothing in this
+codebase blocks on `.get()`, so it's irrelevant to these tests either way.
+All external dependencies (including ingestion_status DB writes) are
+patched so no infrastructure is required.
 """
 
 from __future__ import annotations
@@ -17,7 +16,6 @@ from unittest.mock import ANY, MagicMock, patch
 import httpx
 import pybreaker
 import pytest
-from celery import states
 from celery.exceptions import Retry
 
 from src.backend.controller.lib.schemas import (
@@ -29,7 +27,8 @@ from src.backend.controller.lib.schemas import (
 )
 
 from src.backend.controller.worker.tasks import (
-    FailureRecordingTask,
+    OutboxTask,
+    TerminalOutboxTask,
     delete_document,
     delete_namespace,
     index,
@@ -63,9 +62,13 @@ _UPSERT_RESULT = {"num_added": 2, "num_updated": 0, "num_skipped": 0, "ids": ["x
 class TestIngest:
     """Tests for ``ingest`` — the Kafka HTTP Sink entry point.
 
-    ``ingest`` is a pure routing task: it inspects ``upload_action`` and
-    dispatches the appropriate downstream task(s) without touching any
-    infrastructure itself.
+    ``ingest`` inspects ``upload_action`` and dispatches the appropriate
+    downstream task(s) — but it does touch infrastructure directly now: it's
+    the sole INSERT for this run's ingestion_status row (see
+    backend/outbox.py), since it's the only point in the pipeline holding
+    every identity field at once. That DB write is mocked via the autouse
+    fixture below for every test in this class except the one that asserts
+    on it directly.
 
     Key design constraints verified here:
     - CREATE/UPDATE must dispatch ``parse`` standalone (NOT chained with
@@ -78,6 +81,37 @@ class TestIngest:
     - DELETE/AUTO_DELETE must dispatch ``delete_document`` (not the chain) and
       must pass ``source`` as a dict so the broker can serialise it.
     """
+
+    @pytest.fixture(autouse=True)
+    def _mock_outbox_row(self):
+        with (
+            patch(
+                "src.backend.controller.worker.tasks.SessionLocal",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "src.backend.controller.worker.tasks.outbox.create_status_row"
+            ) as mock_create,
+        ):
+            yield mock_create
+
+    def test_writes_ingestion_status_row_before_dispatch(
+        self, _mock_outbox_row
+    ) -> None:
+        with patch.object(parse, "apply_async", return_value=MagicMock(id="parse-abc")):
+            ingest.run(
+                s3=_S3, source=_SOURCE, upload_action=UploadAction.CREATE, info=_INFO
+            )
+
+        _mock_outbox_row.assert_called_once()
+        call_kwargs = _mock_outbox_row.call_args.kwargs
+        assert call_kwargs["namespace_id"] == _NAMESPACE_ID
+        assert call_kwargs["obj_id"] == _OBJ_ID
+        assert call_kwargs["source"] == _SOURCE.source
+        assert call_kwargs["object_type"] == _SOURCE.object_type
+        assert call_kwargs["content_type"] == _SOURCE.content_type
+        assert call_kwargs["size_bytes"] == _S3.size
+        assert call_kwargs["operation"] == "CREATE"
 
     def test_create_dispatches_parse_standalone(self) -> None:
         """CREATE action must dispatch ``parse`` alone, not chained with index.
@@ -100,7 +134,7 @@ class TestIngest:
         assert result == {"task_id": "parse-abc"}
         mock_apply.assert_called_once()
         # parse must receive serialisable args. Identity is passed by KEYWORD
-        # so FailureRecordingTask.on_failure can recover it from kwargs; the
+        # so OutboxTask.on_failure can recover it from kwargs; the
         # contract task_id is propagated alongside.
         call_kwargs = mock_apply.call_args.kwargs
         propagated_task_id = call_kwargs["kwargs"]["task_id"]
@@ -189,19 +223,19 @@ class TestIngest:
 
 
 # ---------------------------------------------------------------------------
-# FailureRecordingTask.on_failure
+# OutboxTask.before_start / on_failure / on_success
 # ---------------------------------------------------------------------------
 
 
-class TestFailureRecordingTask:
-    """``on_failure`` overwrites the failing task's own result row with a
-    CDC-readable ``FailureRecord`` (identity recovered from the task kwargs),
-    keyed by the contract ``task_id``, with the traceback column nulled."""
+class TestOutboxTaskOnFailure:
+    """``on_failure`` marks ``ingestion_status`` FAILURE for the contract
+    ``task_id`` recovered from this task's own invocation kwargs — see
+    backend/outbox.py."""
 
     def _invoke(self, exc: Exception, kwargs: dict) -> MagicMock:
-        """Call ``on_failure`` with a mock task; return the ``store_result`` mock.
+        """Call ``on_failure`` with a mock task; return the ``mark_failure`` mock.
 
-        ``on_failure`` now delegates to ``record_failure`` (shared with
+        ``on_failure`` delegates to ``record_failure`` (shared with
         ``advance_from_callback``) — bind the REAL method onto the mock so
         ``self.record_failure(...)`` inside ``on_failure`` still exercises it,
         instead of silently no-op-ing on an auto-created Mock attribute.
@@ -209,75 +243,68 @@ class TestFailureRecordingTask:
         task = MagicMock()
         task.name = "tasks.index"
         task.request.id = "subtask-C-id"
-        task.record_failure = FailureRecordingTask.record_failure.__get__(
-            task, FailureRecordingTask
-        )
-        FailureRecordingTask.on_failure(
-            task, exc, "subtask-C-id", (), kwargs, einfo=None
-        )
-        return task.backend.store_result
+        task.record_failure = OutboxTask.record_failure.__get__(task, OutboxTask)
+        with (
+            patch(
+                "src.backend.controller.worker.tasks.SessionLocal",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "src.backend.controller.worker.tasks.outbox.mark_failure"
+            ) as mock_mark_failure,
+        ):
+            OutboxTask.on_failure(task, exc, "subtask-C-id", (), kwargs, einfo=None)
+        return mock_mark_failure
 
-    def test_writes_failure_record_keyed_by_subtask_row(self) -> None:
-        store = self._invoke(
-            ValueError("boom"),
-            {
-                "task_id": "contract-A",
-                "namespace_id": str(_NAMESPACE_ID),
-                "source": {"obj_id": str(_OBJ_ID)},
-                "operation": "CREATE",
-            },
-        )
-        store.assert_called_once()
-        # Overwrites THIS subtask's own row (its id), carrying the contract id <A>.
-        assert store.call_args.args[0] == "subtask-C-id"
-        payload = store.call_args.args[1]
-        assert payload["task_id"] == "contract-A"
-        assert payload["object"]["id"] == str(_OBJ_ID)
-        assert payload["object"]["scope"]["namespace_id"] == str(_NAMESPACE_ID)
-        assert payload["operation"] == "CREATE"
-        assert payload["failure_reason"] == "ValueError: boom"
-        assert store.call_args.kwargs["state"] == states.FAILURE
-        assert store.call_args.kwargs["traceback"] is None
+    def test_marks_failure_keyed_by_contract_task_id(self) -> None:
+        mock_mark_failure = self._invoke(ValueError("boom"), {"task_id": "contract-A"})
+        mock_mark_failure.assert_called_once()
+        call_kwargs = mock_mark_failure.call_args.kwargs
+        assert call_kwargs["task_id"] == "contract-A"
+        assert call_kwargs["failure_reason"] == "ValueError: boom"
 
-    def test_operation_falls_back_to_upload_action(self) -> None:
-        """``index`` carries ``upload_action`` (not ``operation``) — read either."""
-        store = self._invoke(
-            RuntimeError("x"),
-            {
-                "task_id": "contract-A",
-                "namespace_id": str(_NAMESPACE_ID),
-                "source": {"obj_id": str(_OBJ_ID)},
-                "upload_action": "MODIFY",
-            },
-        )
-        assert store.call_args.args[1]["operation"] == "MODIFY"
-
-    def test_obj_id_nullable_when_source_absent(self) -> None:
-        store = self._invoke(
-            KeyError("k"),
-            {
-                "task_id": "contract-A",
-                "namespace_id": str(_NAMESPACE_ID),
-                "operation": "DELETE",
-            },
-        )
-        assert store.call_args.args[1]["object"]["id"] is None
-
-    def test_skips_when_contract_identity_missing(self) -> None:
-        """Without contract task_id + NOT-NULL namespace_id, leave the native row."""
-        task = MagicMock()
-        task.request.id = "subtask-C-id"
-        FailureRecordingTask.on_failure(
-            task, ValueError("x"), "subtask-C-id", (), {"task_id": "A"}, einfo=None
-        )
-        task.backend.store_result.assert_not_called()
+    def test_skips_when_contract_task_id_missing(self) -> None:
+        mock_mark_failure = self._invoke(ValueError("x"), {})
+        mock_mark_failure.assert_not_called()
 
     def test_failing_tasks_use_the_base(self) -> None:
-        assert isinstance(index, FailureRecordingTask)
-        assert isinstance(delete_document, FailureRecordingTask)
-        # ingest (fire-and-forget dispatcher) and delete_namespace do NOT.
-        assert not isinstance(ingest, FailureRecordingTask)
-        assert not isinstance(delete_namespace, FailureRecordingTask)
+        assert isinstance(index, TerminalOutboxTask)
+        assert isinstance(delete_document, TerminalOutboxTask)
+        assert isinstance(index, OutboxTask)  # TerminalOutboxTask IS-A OutboxTask
+        # ingest (writes its own row explicitly) and delete_namespace (out of
+        # ingestion_status scope entirely) do NOT use the outbox base.
+        assert not isinstance(ingest, OutboxTask)
+        assert not isinstance(delete_namespace, OutboxTask)
+
+
+class TestTerminalOutboxTaskOnSuccess:
+    """``on_success`` marks ``ingestion_status`` SUCCESS — only reachable on
+    tasks using ``TerminalOutboxTask`` (``index``, ``delete_document``)."""
+
+    def test_marks_success_keyed_by_contract_task_id(self) -> None:
+        task = MagicMock()
+        with (
+            patch(
+                "src.backend.controller.worker.tasks.SessionLocal",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "src.backend.controller.worker.tasks.outbox.mark_success"
+            ) as mock_mark_success,
+        ):
+            TerminalOutboxTask.on_success(
+                task, {"ok": True}, "subtask-C-id", (), {"task_id": "contract-A"}
+            )
+        mock_mark_success.assert_called_once()
+        assert mock_mark_success.call_args.kwargs["task_id"] == "contract-A"
+
+    def test_skips_when_contract_task_id_missing(self) -> None:
+        task = MagicMock()
+        with patch(
+            "src.backend.controller.worker.tasks.outbox.mark_success"
+        ) as mock_mark_success:
+            TerminalOutboxTask.on_success(task, {"ok": True}, "subtask-C-id", (), {})
+        mock_mark_success.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +328,7 @@ class TestDeleteDocument:
 
     def test_returns_deleted_status(self) -> None:
         """
-        Successful deletion must return an IngestionResult dict for the CDC pipeline.
+        Successful deletion must return a structured IngestionResult dict.
         """
         result = self._run(MagicMock())
         assert result["object"]["id"] == str(_OBJ_ID)
@@ -389,7 +416,7 @@ class TestIndex:
             )
 
     def test_returns_ingestion_result_with_obj_id(self) -> None:
-        """The task returns a structured IngestionResult dict for the JDBC sink."""
+        """The task returns a structured IngestionResult dict."""
         result = self._run(MagicMock(), MagicMock())
         assert result["object"]["id"] == str(_OBJ_ID)
         assert result["object"]["source"] == _SOURCE.source

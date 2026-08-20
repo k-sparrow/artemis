@@ -15,7 +15,7 @@ py_library(
 
 # Subsystem tests: CDC pipeline — Debezium WAL → ksqlDB → JDBC sink → DB tables
 #
-# Inserts rows into apollo_celery_taskmeta (the real Postgres WAL path),
+# Inserts rows into ingestion_status (the real Postgres WAL path),
 # then polls ingested_objects and ingestion_tasks until the JDBC sinks write them.
 #
 # Prerequisites:
@@ -41,39 +41,5 @@ py_test(
         requirement("pytest"),
         requirement("sqlalchemy"),
         requirement("testcontainers"),
-    ],
-)
-
-# Subsystem test: contract task_id propagation through the REAL worker → CDC →
-# ingestion_tasks. Reuses the CDC stack (conftest.py) and adds the real Celery
-# worker (parsing/indexing stubbed). xfail(strict) until the recovering JOIN lands.
-#
-# Prerequisites (in addition to test_cdc_pipeline's):
-#   bazel run //src/backend/controller/worker:image.tarball
-py_test(
-    name = "test_task_id_propagation",
-    srcs = [
-        "conftest.py",
-        "test_task_id_propagation.py",
-    ],
-    data = ["//src/backend/alembic:tarball.dev"],
-    tags = ["integration"],
-    deps = [
-        "//src/backend/storage/api:models",
-        "//tests/backend/controller/worker/integration:conftest",
-        "//tests/lib:polling",
-        "//tests/lib/testcontainers:migrations",
-        "//tests/lib/testcontainers/kafka:pkg",
-        requirement("celery"),
-        requirement("fastapi"),
-        requirement("httpx"),
-        requirement("kombu"),
-        requirement("minio"),
-        requirement("psycopg"),
-        requirement("psycopg-binary"),
-        requirement("pytest"),
-        requirement("sqlalchemy"),
-        requirement("testcontainers"),
-        requirement("wiremock"),
     ],
 )

@@ -17,7 +17,7 @@ py_binary(
     ] + glob(["versions/*.py"]),
     deps = [
         "//src/backend/controller/worker/backend:claims",
-        "//src/backend/controller/worker/backend:models",
+        "//src/backend/controller/worker/backend:outbox",
         "//src/backend/enterprise/data_sources/api:models",
         "//src/backend/storage/api:models",
         "//src/lib/backend/db:base",

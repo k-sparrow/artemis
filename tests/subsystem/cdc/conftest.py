@@ -5,7 +5,7 @@ Stack: Network → Kafka (KRaft) → Postgres (postgres:16-alpine, wal_level=log
        → Kafka Connect (artemis/cp-kafka-connect:latest)
        → three connectors (Debezium source + 2 JDBC sinks)
 
-Test actions insert rows directly into apollo_celery_taskmeta. Debezium reads
+Test actions insert/update rows directly into ingestion_status. Debezium reads
 the WAL, publishes to Kafka. ksqlDB transforms and fans out to two output topics.
 JDBC sinks upsert the rows into ingested_objects and ingestion_tasks.
 
@@ -356,14 +356,14 @@ def connectors(
             "value.converter.schemas.enable": "false",
             "key.converter.schemas.enable": "false",
             "topic.prefix": "apollo.ingestion.celery.results",
-            "table.include.list": "public.apollo_celery_taskmeta",
+            "table.include.list": "public.ingestion_status",
             "database.user": "debezium",
             "database.password": "debezium",
             "database.hostname": _PG_ALIAS,
             "database.port": str(_PG_PORT),
             "database.dbname": _PG_DB,
-            "slot.name": "apollo_taskmeta_table_rep_slot",
-            "publication.name": "celery_results_publication",
+            "slot.name": "ingestion_status_rep_slot",
+            "publication.name": "ingestion_status_publication",
             "publication.autocreate.mode": "disabled",
             "plugin.name": "pgoutput",
             "transforms": "unwrap",
@@ -463,4 +463,4 @@ def clean_db(postgres_engine: sa.Engine) -> Iterator[None]:
         # namespace_ids from previous tests. Truncating namespace would cause FK
         # violations on replay. Only clean the sink output tables and the CDC source.
         conn.execute(sa.text("TRUNCATE ingested_objects, ingestion_tasks"))
-        conn.execute(sa.text("DELETE FROM apollo_celery_taskmeta"))
+        conn.execute(sa.text("DELETE FROM ingestion_status"))

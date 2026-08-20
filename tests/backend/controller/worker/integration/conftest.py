@@ -663,83 +663,37 @@ def wait_for_task(
     task_id: str,
     postgres_container: PostgresContainer,
     timeout: int = 60,
+    stage: str | None = None,
 ) -> str:
-    """Poll apollo_celery_taskmeta until the task reaches SUCCESS or FAILURE.
+    """Poll ``ingestion_status`` until *task_id* reaches a terminal state.
 
-    Returns the final status string. Raises TimeoutError if not done within *timeout*s.
+    ``task_id`` is the contract task_id — ``ingestion_status``'s own primary
+    key, and (per ``ingest()``'s own docstring) equal to the id a directly
+    dispatched ``tasks.ingest`` call's ``AsyncResult.id`` already carries, so
+    callers never need a separate correlation step for it (unlike the old
+    ``apollo_celery_taskmeta``-based helper this replaces, which had to
+    recover the contract id from a per-subtask result blob).
+
+    If *stage* is given, only returns once the row's own ``stage`` column
+    also matches it — e.g. to confirm a failure specifically happened during
+    ``tasks.index``, not an earlier stage in the chain. Returns the final
+    status string (``"success"`` or ``"failure"``). Raises ``TimeoutError`` if
+    not done within *timeout*s.
     """
     connstr = _pg_connstr(postgres_container)
 
     def _terminal_status() -> str | None:
         with psycopg.connect(connstr) as conn:
             row = conn.execute(
-                "SELECT status FROM apollo_celery_taskmeta WHERE task_id = %s",
+                "SELECT status, stage FROM ingestion_status WHERE task_id = %s",
                 (task_id,),
             ).fetchone()
-        if row and row[0] in ("SUCCESS", "FAILURE"):
+        if (
+            row
+            and row[0] in ("success", "failure")
+            and (stage is None or row[1] == stage)
+        ):
             return row[0]
         return None
-
-    return poll_until(_terminal_status, timeout=timeout, interval=1.0)
-
-
-def wait_for_task_result(
-    task_id: str,
-    postgres_container: PostgresContainer,
-    timeout: int = 60,
-) -> dict:
-    """Poll until *task_id* reaches SUCCESS; return its parsed JSON result.
-
-    Used to read a dispatcher task's own return value (e.g. ``ingest``'s
-    ``{"task_id": ...}``) — distinct from ``wait_for_task``, which only reports
-    the terminal status of a task whose result payload isn't needed.
-    """
-    connstr = _pg_connstr(postgres_container)
-
-    def _result() -> dict | None:
-        with psycopg.connect(connstr) as conn:
-            row = conn.execute(
-                "SELECT status, result FROM apollo_celery_taskmeta WHERE task_id = %s",
-                (task_id,),
-            ).fetchone()
-        if row and row[0] == "SUCCESS":
-            return json.loads(row[1])
-        return None
-
-    return poll_until(_result, timeout=timeout, interval=1.0)
-
-
-def wait_for_task_by_contract_id(
-    contract_task_id: str,
-    name: str,
-    postgres_container: PostgresContainer,
-    timeout: int = 60,
-) -> str:
-    """Poll for a terminal (SUCCESS/FAILURE) row named *name* whose ``result``
-    JSON carries ``task_id == contract_task_id``, and return its status.
-
-    Mirrors the real ksqlDB FAILURE/SUCCESS fan-out's own correlation
-    mechanism (``EXTRACTJSONFIELD(result, '$.task_id')`` keyed by the contract
-    id — see ``tools/oci/images/ksqldb/artemis_init.ksql``), rather than
-    Celery's own per-task-instance ``task_id`` column: since ``index`` is no
-    longer chained under ``ingest`` (it's dispatched later, dynamically, by
-    whichever of poll_parse / advance_from_callback wins the parse_stage_state
-    claim), its own Celery task id isn't knowable from ``ingest``'s dispatch
-    call the way ``chain(...).apply_async().id`` used to make it.
-    """
-    connstr = _pg_connstr(postgres_container)
-
-    def _terminal_status() -> str | None:
-        with psycopg.connect(connstr) as conn:
-            row = conn.execute(
-                """
-                SELECT status FROM apollo_celery_taskmeta
-                WHERE name = %s
-                  AND result::json->>'task_id' = %s
-                  AND status IN ('SUCCESS', 'FAILURE')
-                """,
-                (name, contract_task_id),
-            ).fetchone()
-        return row[0] if row else None
 
     return poll_until(_terminal_status, timeout=timeout, interval=1.0)

@@ -54,7 +54,7 @@ import uuid
 
 import httpx
 
-from celery import Task, chain, states
+from celery import Task, chain
 from celery.signals import worker_ready
 from celery.utils.log import get_task_logger
 from opentelemetry import metrics, trace
@@ -65,9 +65,6 @@ from sqlalchemy.orm.exc import StaleDataError
 
 from src.backend.controller.lib.schemas import (
     BlobRef,
-    FailureObject,
-    FailureRecord,
-    FailureScope,
     IngestionInfo,
     IngestionResult,
     IndexingOutcome,
@@ -78,11 +75,8 @@ from src.backend.controller.lib.schemas import (
     SourceDetails,
     UploadAction,
 )
-from src.backend.controller.worker.backend import claims
-from src.backend.controller.worker.backend.database import (
-    DatabaseBackend,
-    session_cleanup,
-)
+from src.backend.controller.worker.backend import claims, outbox
+from src.backend.controller.worker.backend.db import SessionLocal, session_cleanup
 from src.backend.controller.worker.celery import app
 from src.backend.controller.worker.config import settings
 from src.backend.controller.worker.dependencies import get_s3_client
@@ -122,110 +116,130 @@ _poll_elapsed = _meter.create_histogram(
     description="Wall-clock time from submit to terminal poll outcome",
 )
 
-# Single shared result-backend instance — avoids recreating the SQLAlchemy
-# engine for every task invocation.
-_db_backend = DatabaseBackend(
-    app=app,
-    dburi=settings.BACKEND_RESULT_URL,
-    engine_options={"echo": False},
-    serializer="json",
-)
-
-# Bound on the failure_reason length so a multi-KB traceback message never bloats
-# the result column / CDC payload — the full traceback still lives elsewhere.
-_FAILURE_REASON_MAX = 2000
-
 # The only parse_stage_state stage in use today (see backend/claims.py).
 _CONVERT_STAGE = "convert"
 
+_DB_TRANSIENT_ERRORS = (DatabaseError, InvalidRequestError, StaleDataError)
 
-class FailureRecordingTask(Task):
-    """Base task that records a clean, CDC-readable FAILURE row on terminal failure.
 
-    On a native failure Celery stores the exception encoding
-    (``{exc_type, exc_message, exc_module}``) in ``apollo_celery_taskmeta.result``
-    — it has no contract ``task_id``/``namespace_id``, so the ksqlDB
-    ``ingestion_tasks`` fan-out cannot key or populate a row from it.  This hook
-    OVERWRITES this task's own result row with a :class:`FailureRecord` (identity
-    recovered from the task kwargs) and nulls the traceback column, so the fan-out
-    reads it with the same ``EXTRACTJSONFIELD(result, …)`` paths it uses for SUCCESS.
+def _write_with_local_retry(op, *, contract_task_id: str, max_retries: int = 3) -> None:
+    """Run *op* (a callable taking a fresh Session), retrying with a FRESH
+    session per attempt on a transient Postgres error.
 
-    Celery's ``handle_failure`` runs ``mark_as_failure`` (the exception write) BEFORE
-    ``on_failure``, so this overwrite is the LAST write — no ``Ignore()`` needed (and
-    the FAILURE state still short-circuits the chain).  The two writes surface as two
-    Debezium events; the fan-out's ``$.task_id IS NOT NULL`` guard drops the
-    pre-overwrite (exception-encoded) one.
+    Used only for the terminal ingestion_status writes (mark_success/
+    mark_failure) — unlike before_start's stage write (which can afford to be
+    swallowed outright, since the *next* stage's own write self-heals a
+    missed one) a lost terminal write has no later write to correct it, so
+    it's worth a small bounded in-process retry before giving up. A Celery-
+    level self.retry() isn't available here — on_success/on_failure are
+    lifecycle hooks, not task bodies.
+    """
+    for attempt in range(max_retries):
+        try:
+            session = SessionLocal()
+            with session_cleanup(session):
+                op(session)
+            return
+        except _DB_TRANSIENT_ERRORS:
+            if attempt + 1 >= max_retries:
+                logger.warning(
+                    "ingestion_status=terminal_write_failed_after_retries "
+                    "task_id=%s",
+                    contract_task_id,
+                )
+                return
 
-    Uses ``self.backend`` (the bound per-task ``_db_backend``) — NOT
-    ``self.app.AsyncResult``: this app has no app-level backend.
+
+class OutboxTask(Task):
+    """Base task that keeps ``ingestion_status`` in sync with this task's own
+    lifecycle — see ``backend/outbox.py``.
+
+    ``before_start`` advances ``stage`` to this task's own name;
+    ``on_failure`` records a terminal FAILURE. Both recover the contract
+    ``task_id`` from this task's own invocation kwargs
+    (``kwargs.get("task_id")``) — every task in the chain already carries it
+    for exactly this reason. ``advance_from_callback`` is the one exception:
+    it has no ``task_id`` in its own kwargs (dispatched directly from the
+    callback endpoint with only ``obj_id``/``stage``/``docling_task_id``/
+    ``outcome``/``error_message``), so both hooks silently no-op for it —
+    its failure branch calls ``record_failure`` explicitly instead, once it
+    has recovered the real contract id from the claimed ``parse_stage_state``
+    row's ``resume_context``. Its (very brief) missing before_start stage
+    update is accepted — the very next task in the tail chain's own
+    before_start corrects it moments later.
+
+    ``before_start`` fires on EVERY delivery, including every retry — gated
+    on ``self.request.retries == 0`` so ``poll_parse``/``poll_chunk``'s
+    up-to-1440-retry budget doesn't turn into 1440 Postgres writes per
+    document. Its own write failures are swallowed + logged: purely
+    observational, and the next stage's own before_start self-heals a missed
+    one.
     """
 
-    def record_failure(
-        self,
-        *,
-        contract_task_id: str,
-        namespace_id: str,
-        obj_id: str | None,
-        operation: str,
-        failure_reason: str,
-    ) -> None:
-        """Overwrite this task's own result row with a CDC-readable FAILURE record.
+    def before_start(self, task_id, args, kwargs):
+        contract_task_id = kwargs.get("task_id")
+        if not contract_task_id:
+            return
+        if self.request.retries != 0:
+            return
+        try:
+            session = SessionLocal()
+            with session_cleanup(session):
+                outbox.update_stage(session, task_id=contract_task_id, stage=self.name)
+        except _DB_TRANSIENT_ERRORS:
+            logger.warning(
+                "ingestion_status=stage_write_failed task_id=%s stage=%s",
+                contract_task_id,
+                self.name,
+            )
+
+    def record_failure(self, *, contract_task_id: str, failure_reason: str) -> None:
+        """Mark ``ingestion_status`` FAILURE for *contract_task_id*.
 
         Shared by ``on_failure`` (identity recovered from this task's own
-        invocation kwargs, below) and ``advance_from_callback`` (identity
+        invocation kwargs, above) and ``advance_from_callback`` (identity
         recovered from a claimed ``parse_stage_state`` row's
         ``resume_context`` instead — it has no chain kwargs of its own to
         fall back on).
         """
-        payload = FailureRecord(
-            task_id=str(contract_task_id),
-            object=FailureObject(
-                id=obj_id,
-                scope=FailureScope(namespace_id=namespace_id),
+        _write_with_local_retry(
+            lambda session: outbox.mark_failure(
+                session, task_id=contract_task_id, failure_reason=failure_reason
             ),
-            operation=str(operation),
-            failure_reason=failure_reason[:_FAILURE_REASON_MAX],
-        ).model_dump(mode="json")
-
-        # Pass request= so the backend preserves the extended columns (name, args,
-        # kwargs, worker, …). Our custom DatabaseBackend._update_result writes EVERY
-        # column from the result meta, and _get_result_meta only fills the extended
-        # columns when a request is given — omitting it NULLs `name`, which would make
-        # the ksqlDB FAILURE fan-out's `name IN (…)` filter drop this row.
-        self.backend.store_result(
-            self.request.id,
-            payload,
-            state=states.FAILURE,
-            traceback=None,
-            request=self.request,
+            contract_task_id=contract_task_id,
         )
         logger.warning(
-            "task_failure=recorded task=%s contract_task_id=%s obj_id=%s op=%s",
+            "task_failure=recorded task=%s contract_task_id=%s",
             self.name,
             contract_task_id,
-            obj_id,
-            operation,
         )
 
     def on_failure(self, exc, task_id, args, kwargs, einfo):
         contract_task_id = kwargs.get("task_id")
-        namespace_id = kwargs.get("namespace_id")
-        if not contract_task_id or not namespace_id:
-            # Without the contract id + NOT-NULL namespace_id we cannot build a
-            # resolvable row — leave the native FAILURE row untouched.
+        if not contract_task_id:
             return
-
-        source = kwargs.get("source") or {}
-        obj_id = source.get("obj_id") if isinstance(source, dict) else None
-        operation = kwargs.get("operation") or kwargs.get("upload_action") or ""
-        operation = getattr(operation, "value", operation)
-
         self.record_failure(
             contract_task_id=contract_task_id,
-            namespace_id=namespace_id,
-            obj_id=obj_id,
-            operation=str(operation),
             failure_reason=f"{type(exc).__name__}: {exc}",
+        )
+
+
+class TerminalOutboxTask(OutboxTask):
+    """Adds ``on_success`` → mark ``ingestion_status`` SUCCESS. Used only by
+    the terminal task of each chain (``index``, ``delete_document``) —
+    applying it to every task would flip the row to "success" the moment
+    ``submit_parse`` finishes; chain progression itself already implies the
+    prior stage succeeded (the next stage's ``before_start`` write supersedes
+    it).
+    """
+
+    def on_success(self, retval, task_id, args, kwargs):
+        contract_task_id = kwargs.get("task_id")
+        if not contract_task_id:
+            return
+        _write_with_local_retry(
+            lambda session: outbox.mark_success(session, task_id=contract_task_id),
+            contract_task_id=contract_task_id,
         )
 
 
@@ -267,8 +281,6 @@ class DocumentChunkingError(Exception):
 # atomic UPDATE ... WHERE claimed_at IS NULL RETURNING that arbitrates them.
 # ---------------------------------------------------------------------------
 
-_DB_TRANSIENT_ERRORS = (DatabaseError, InvalidRequestError, StaleDataError)
-
 
 def _retry_on_db_error(self, op, *, max_retries: int):
     """Run *op* (a zero-arg callable), retrying via self.retry on a transient
@@ -295,7 +307,7 @@ def _backfill_docling_task_id(
     self, *, obj_id: str, stage: str, docling_task_id: str, max_retries: int
 ) -> None:
     def _op() -> None:
-        session = _db_backend.ResultSession()
+        session = SessionLocal()
         with session_cleanup(session):
             claims.backfill_docling_task_id(
                 session, obj_id=obj_id, stage=stage, docling_task_id=docling_task_id
@@ -317,7 +329,7 @@ def _try_claim(
     """
 
     def _op() -> claims.ResumeContext | None:
-        session = _db_backend.ResultSession()
+        session = SessionLocal()
         with session_cleanup(session):
             return claims.try_claim(
                 session, obj_id=obj_id, stage=stage, claimant=self.request.id
@@ -335,7 +347,7 @@ def _delete_claim_row(*, obj_id: str, stage: str) -> None:
     behind here is caught by the periodic prune job instead.
     """
     try:
-        session = _db_backend.ResultSession()
+        session = SessionLocal()
         with session_cleanup(session):
             claims.delete_stage_row(session, obj_id=obj_id, stage=stage)
     except _DB_TRANSIENT_ERRORS:
@@ -407,8 +419,6 @@ def _build_and_dispatch_tail_chain(
     name="tasks.ingest",
     bind=True,
     pydantic=True,
-    backend=_db_backend,
-    result_serializer="json",
 )
 def ingest(
     self,
@@ -417,15 +427,24 @@ def ingest(
     upload_action: UploadAction,
     info: IngestionInfo,
 ) -> dict:
-    """Dispatch the parse → index chain for a single document."""
+    """Create this run's ingestion_status row, then dispatch the parse →
+    index chain for a single document.
+
+    Touches infrastructure directly (unlike a purely routing dispatcher) for
+    exactly one reason: this is the only point in the whole pipeline that
+    has every identity field (namespace_id, obj_id, source, group_id, …) in
+    hand at once, so it's the sole INSERT for the whole run — every later
+    task only ever UPDATEs this same row (see backend/outbox.py,
+    OutboxTask in this file).
+    """
     namespace_id = info.namespace_id
 
     # This entry task's Celery id is the contract task_id: the AMQP message id
     # the RabbitMQ sink connector injected, which equals the artemis.task_id the
     # storage service stamped on its upload span. Stamp it here and propagate it
     # down the chain so the whole worker pipeline is searchable by that one key.
-    # (Each subtask still has its own distinct self.request.id / result-backend
-    # PK — we only carry this value as the artemis.task_id span tag.)
+    # (Each subtask still has its own distinct self.request.id — we only carry
+    # this value as the artemis.task_id span tag / ingestion_status PK.)
     task_id = self.request.id or str(uuid.uuid4())
     trace.get_current_span().set_attribute("artemis.task_id", task_id)
 
@@ -439,11 +458,38 @@ def ingest(
     group_id = str(info.group_id) if info.group_id is not None else None
 
     # Identity (namespace_id, source, task_id, operation) is passed by KEYWORD so
-    # FailureRecordingTask.on_failure can recover it uniformly from the task kwargs
+    # OutboxTask.on_failure can recover it uniformly from the task kwargs
     # to build a CDC-readable FAILURE row keyed by the contract task_id.
     # Over the broker `upload_action` arrives as a plain str (celery's pydantic
     # coercion doesn't rebuild the enum), so normalize to its string value.
     operation = getattr(upload_action, "value", upload_action)
+
+    def _write_status_row() -> None:
+        session = SessionLocal()
+        with session_cleanup(session):
+            outbox.create_status_row(
+                session,
+                task_id=task_id,
+                namespace_id=namespace_id,
+                obj_id=source.obj_id,
+                source=source.source,
+                object_type=source.object_type,
+                content_type=source.content_type,
+                size_bytes=s3.size,
+                group_id=info.group_id,
+                operation=operation,
+            )
+
+    try:
+        _write_status_row()
+    except _DB_TRANSIENT_ERRORS as exc:
+        backoff = min(120, 2**self.request.retries)
+        raise self.retry(
+            exc=exc,
+            countdown=backoff + random.uniform(0, backoff),
+            max_retries=20,
+        )
+
     match upload_action:
         case UploadAction.CREATE | UploadAction.UPDATE:
             # `index` is NOT chained here — it's dispatched, along with the rest
@@ -495,15 +541,13 @@ def ingest(
 #
 # The BlobRef dict from poll_chunk flows into index as its first positional arg.
 # The contract task_id from ingest is threaded through all six tasks as a kwarg
-# so FailureRecordingTask.on_failure can always key the CDC FAILURE row correctly.
+# so OutboxTask.on_failure can always key the CDC FAILURE row correctly.
 
 
 @app.task(
     name="tasks.parse",
-    base=FailureRecordingTask,
+    base=OutboxTask,
     bind=True,
-    backend=_db_backend,
-    result_serializer="json",
     acks_late=True,
 )
 def parse(
@@ -528,7 +572,7 @@ def parse(
     observes the terminal outcome AND wins the claim builds and dispatches
     that whole tail explicitly (_build_and_dispatch_tail_chain), exactly
     once, itself. All sub-tasks still receive task_id so
-    FailureRecordingTask.on_failure can recover the contract id for CDC
+    OutboxTask.on_failure can recover the contract id for CDC
     records regardless of which sub-task fails.
     """
     return self.replace(
@@ -554,11 +598,9 @@ def parse(
 
 @app.task(
     name="tasks.submit_parse",
-    base=FailureRecordingTask,
+    base=OutboxTask,
     bind=True,
     pydantic=True,
-    backend=_db_backend,
-    result_serializer="json",
     acks_late=True,
 )
 def submit_parse(
@@ -602,7 +644,7 @@ def submit_parse(
         )
 
         def _write_claim_row() -> None:
-            session = _db_backend.ResultSession()
+            session = SessionLocal()
             with session_cleanup(session):
                 claims.ensure_stage_row(
                     session,
@@ -652,11 +694,16 @@ def submit_parse(
 
 @app.task(
     name="tasks.poll_parse",
-    base=FailureRecordingTask,
+    base=OutboxTask,
     bind=True,
-    backend=_db_backend,
-    result_serializer="json",
     acks_late=True,
+    # Up to 1440 retries/document — a result backend configured (the stock
+    # recipe now covers every other task) would call backend.mark_as_retry()
+    # on EVERY retry (celery/app/trace.py: store_errors = not eager whenever
+    # ignore_result is unset), reintroducing exactly the per-poll Postgres
+    # chatter this feature eliminates. ingestion_status (OutboxTask, gated on
+    # retries==0) already covers this task's status visibility regardless.
+    ignore_result=True,
 )
 def poll_parse(
     self,
@@ -795,10 +842,8 @@ def poll_parse(
 
 @app.task(
     name="tasks.advance_from_callback",
-    base=FailureRecordingTask,
+    base=OutboxTask,
     bind=True,
-    backend=_db_backend,
-    result_serializer="json",
     acks_late=True,
 )
 def advance_from_callback(
@@ -821,7 +866,7 @@ def advance_from_callback(
     Unlike poll_parse, this task has no chain kwargs of its own to recover
     namespace_id/task_id/etc from on failure — that's why the failure branch
     calls self.record_failure(...) explicitly, using the claimed row's
-    resume_context, instead of relying on FailureRecordingTask.on_failure's
+    resume_context, instead of relying on OutboxTask.on_failure's
     automatic kwargs-based recovery (which would silently no-op here).
 
     DB errors during the claim itself use a short retry budget
@@ -855,9 +900,6 @@ def advance_from_callback(
     )
     self.record_failure(
         contract_task_id=resume_context.task_id,
-        namespace_id=resume_context.namespace_id,
-        obj_id=obj_id,
-        operation=resume_context.operation,
         failure_reason=failure_reason,
     )
     _delete_claim_row(obj_id=obj_id, stage=stage)
@@ -866,10 +908,8 @@ def advance_from_callback(
 
 @app.task(
     name="tasks.resolve_parse",
-    base=FailureRecordingTask,
+    base=OutboxTask,
     bind=True,
-    backend=_db_backend,
-    result_serializer="json",
     acks_late=True,
 )
 def resolve_parse(
@@ -914,10 +954,8 @@ def resolve_parse(
 
 @app.task(
     name="tasks.submit_chunk",
-    base=FailureRecordingTask,
+    base=OutboxTask,
     bind=True,
-    backend=_db_backend,
-    result_serializer="json",
     acks_late=True,
 )
 def submit_chunk(
@@ -965,11 +1003,11 @@ def submit_chunk(
 
 @app.task(
     name="tasks.poll_chunk",
-    base=FailureRecordingTask,
+    base=OutboxTask,
     bind=True,
-    backend=_db_backend,
-    result_serializer="json",
     acks_late=True,
+    # Same reasoning as poll_parse above — shares the 1440-retry budget.
+    ignore_result=True,
 )
 def poll_chunk(
     self,
@@ -1100,11 +1138,9 @@ def poll_chunk(
 
 @app.task(
     name="tasks.index",
-    base=FailureRecordingTask,
+    base=TerminalOutboxTask,
     bind=True,
     pydantic=True,
-    backend=_db_backend,
-    result_serializer="json",
 )
 def index(
     self,
@@ -1181,7 +1217,10 @@ def index(
                 num_skipped=result["num_skipped"],
             ),
             operation=upload_action,
-            # Contract task_id (the id the caller holds) → keys ingestion_tasks.
+            # Informational only now — the caller's contract task_id, carried
+            # for anyone introspecting this task's own AsyncResult. CDC keying
+            # of ingestion_tasks comes from ingestion_status (the outbox),
+            # written separately by TerminalOutboxTask.on_success.
             task_id=task_id,
         ).model_dump(mode="json")
 
@@ -1193,11 +1232,9 @@ def index(
 
 @app.task(
     name="tasks.delete_document",
-    base=FailureRecordingTask,
+    base=TerminalOutboxTask,
     bind=True,
     pydantic=True,
-    backend=_db_backend,
-    result_serializer="json",
 )
 def delete_document(
     self,
@@ -1211,7 +1248,9 @@ def delete_document(
     Calls ``DELETE /ingest?namespace=<namespace_id>&obj_id=<obj_id>`` on the
     indexing service, which deletes all vectorstore chunks and record-manager
     entries for the object. ``task_id`` is the contract id propagated from
-    ``ingest`` so the deletion's ``ingestion_tasks`` row is keyed by it.
+    ``ingest`` — ``TerminalOutboxTask.on_success`` uses it to mark the
+    matching ``ingestion_status`` row, which the CDC fan-out then keys the
+    ``ingestion_tasks`` row by.
     """
     try:
         call_delete_service(
@@ -1266,8 +1305,6 @@ def delete_document(
     name="tasks.delete_namespace",
     bind=True,
     pydantic=True,
-    backend=_db_backend,
-    result_serializer="json",
 )
 def delete_namespace(self, namespace_id: uuid.UUID) -> dict:
     """Remove all documents for *namespace_id* from the indexing service.

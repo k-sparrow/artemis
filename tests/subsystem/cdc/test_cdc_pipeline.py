@@ -12,7 +12,6 @@ All containers are session-scoped; only DB rows are cleaned between tests.
 
 from __future__ import annotations
 
-import json
 import time
 import uuid
 from typing import Any
@@ -47,67 +46,48 @@ def _connector_diagnostics(kafka_connect_url: str) -> str:
     return "\n".join(lines)
 
 
-def _make_result_json(
-    obj_id: uuid.UUID,
-    namespace_id: uuid.UUID,
-    group_id: uuid.UUID | None = None,
-    operation: str = "CREATE",
-    task_id: uuid.UUID | None = None,
-) -> str:
-    return json.dumps(
-        {
-            "object": {
-                "id": str(obj_id),
-                "source": "doc.txt",
-                "scope": {
-                    "namespace_id": str(namespace_id),
-                    "group_id": str(group_id) if group_id else None,
-                },
-                "properties": {
-                    "object_type": "file",
-                    "content_type": "text/plain",
-                    "size_bytes": 2048 if operation != "DELETE" else None,
-                },
-            },
-            "indexing": {"num_added": 0, "num_skipped": 0},
-            "operation": operation,
-            # The ingestion_tasks fan-out keys the row by result.task_id (the
-            # contract id), so a synthetic row must carry it here. The synthetic
-            # tests treat it as equal to the taskmeta column task_id.
-            "task_id": str(task_id) if task_id is not None else None,
-        }
-    )
-
-
-def _insert_taskmeta(
+def _insert_ingestion_status(
     engine: sa.Engine,
     *,
     task_id: uuid.UUID,
     obj_id: uuid.UUID,
     namespace_id: uuid.UUID,
     group_id: uuid.UUID | None = None,
-    status: str = "SUCCESS",
-    name: str = "tasks.index",
-    date_done: str = "2026-01-01T12:00:00",
+    status: str = "success",
+    stage: str = "tasks.index",
+    updated_at: str = "2026-01-01T12:00:00",
     operation: str = "CREATE",
 ) -> None:
-    """Insert a row into apollo_celery_taskmeta to trigger Debezium WAL capture."""
+    """Insert a row into ingestion_status to trigger Debezium WAL capture.
+
+    Real tasks INSERT once (ingest()) then UPDATE in place through the chain;
+    these tests only care about the row Debezium ships downstream, so a single
+    INSERT at the desired terminal stage/status is equivalent for CDC purposes.
+    """
     with engine.begin() as conn:
         conn.execute(
             sa.text(
-                "INSERT INTO apollo_celery_taskmeta"
-                " (id, task_id, status, result, date_done, traceback, name)"
-                " VALUES (nextval('apollo_task_id_sequence'), :task_id, :status,"
-                "         :result, CAST(:date_done AS TIMESTAMP), NULL, :name)"
+                "INSERT INTO ingestion_status"
+                " (task_id, namespace_id, obj_id, source, object_type,"
+                "  content_type, size_bytes, group_id, operation, stage,"
+                "  status, failure_reason, updated_at)"
+                " VALUES (:task_id, :namespace_id, :obj_id, :source, :object_type,"
+                "         :content_type, :size_bytes, :group_id, :operation, :stage,"
+                "         :status, NULL, CAST(:updated_at AS TIMESTAMP))"
             ),
             {
                 "task_id": str(task_id),
+                "namespace_id": str(namespace_id),
+                "obj_id": str(obj_id),
+                "source": "doc.txt",
+                "object_type": "file",
+                "content_type": "text/plain",
+                "size_bytes": None if operation == "DELETE" else 2048,
+                "group_id": str(group_id) if group_id else None,
+                "operation": operation,
+                "stage": stage,
                 "status": status,
-                "result": _make_result_json(
-                    obj_id, namespace_id, group_id, operation, task_id
-                ),
-                "date_done": date_done,
-                "name": name,
+                "updated_at": updated_at,
             },
         )
 
@@ -152,7 +132,7 @@ def _assert_row(
 
 @pytest.mark.integration
 class TestIngestedObjectsTable:
-    """JDBC sink writes expected rows to ingested_objects after a SUCCESS task."""
+    """JDBC sink writes expected rows to ingested_objects after a success task."""
 
     def test_row_written(
         self,
@@ -164,7 +144,7 @@ class TestIngestedObjectsTable:
         task_id = uuid.uuid4()
         obj_id = uuid.uuid4()
 
-        _insert_taskmeta(
+        _insert_ingestion_status(
             postgres_engine,
             task_id=task_id,
             obj_id=obj_id,
@@ -186,7 +166,7 @@ class TestIngestedObjectsTable:
         obj_id = uuid.uuid4()
         namespace_id = namespace_row
 
-        _insert_taskmeta(
+        _insert_ingestion_status(
             postgres_engine,
             task_id=task_id,
             obj_id=obj_id,
@@ -215,7 +195,7 @@ class TestIngestedObjectsTable:
         obj_id = uuid.uuid4()
         group_id = uuid.uuid4()
 
-        _insert_taskmeta(
+        _insert_ingestion_status(
             postgres_engine,
             task_id=task_id,
             obj_id=obj_id,
@@ -239,18 +219,18 @@ class TestIngestedObjectsTable:
         filtered_task = uuid.uuid4()
         filtered_obj = uuid.uuid4()
 
-        _insert_taskmeta(
+        _insert_ingestion_status(
             postgres_engine,
             task_id=filtered_task,
             obj_id=filtered_obj,
             namespace_id=namespace_row,
-            name="tasks.ingest",
+            stage="tasks.ingest",
         )
 
         # Sentinel row confirms the pipeline is live; filtered row must not appear first.
         sentinel_task = uuid.uuid4()
         sentinel_obj = uuid.uuid4()
-        _insert_taskmeta(
+        _insert_ingestion_status(
             postgres_engine,
             task_id=sentinel_task,
             obj_id=sentinel_obj,
@@ -276,7 +256,7 @@ class TestIngestedObjectsTable:
 
 @pytest.mark.integration
 class TestIngestionTasksTable:
-    """JDBC sink writes expected rows to ingestion_tasks after a SUCCESS task."""
+    """JDBC sink writes expected rows to ingestion_tasks after a success task."""
 
     def test_row_written(
         self,
@@ -288,7 +268,7 @@ class TestIngestionTasksTable:
         task_id = uuid.uuid4()
         obj_id = uuid.uuid4()
 
-        _insert_taskmeta(
+        _insert_ingestion_status(
             postgres_engine,
             task_id=task_id,
             obj_id=obj_id,
@@ -310,7 +290,7 @@ class TestIngestionTasksTable:
         obj_id = uuid.uuid4()
         namespace_id = namespace_row
 
-        _insert_taskmeta(
+        _insert_ingestion_status(
             postgres_engine,
             task_id=task_id,
             obj_id=obj_id,
@@ -323,9 +303,9 @@ class TestIngestionTasksTable:
         assert row.task_id == task_id
         assert row.obj_id == obj_id
         assert row.namespace_id == namespace_id
-        assert row.status == "SUCCESS"
+        assert row.status == "success"
         assert row.operation == "CREATE"
-        # completed_at is derived from date_done; presence confirms the sink wrote it.
+        # completed_at is derived from updated_at; presence confirms the sink wrote it.
         assert row.completed_at is not None
 
 
@@ -336,7 +316,7 @@ class TestIngestionTasksTable:
 
 @pytest.mark.integration
 class TestDeleteDocumentPath:
-    """tasks.delete_document SUCCESS events are recorded in ingestion_tasks."""
+    """tasks.delete_document success events are recorded in ingestion_tasks."""
 
     def test_delete_task_recorded(
         self,
@@ -348,12 +328,12 @@ class TestDeleteDocumentPath:
         task_id = uuid.uuid4()
         obj_id = uuid.uuid4()
 
-        _insert_taskmeta(
+        _insert_ingestion_status(
             postgres_engine,
             task_id=task_id,
             obj_id=obj_id,
             namespace_id=namespace_row,
-            name="tasks.delete_document",
+            stage="tasks.delete_document",
             operation="DELETE",
         )
 
@@ -372,12 +352,12 @@ class TestDeleteDocumentPath:
         obj_id = uuid.uuid4()
         namespace_id = namespace_row
 
-        _insert_taskmeta(
+        _insert_ingestion_status(
             postgres_engine,
             task_id=task_id,
             obj_id=obj_id,
             namespace_id=namespace_id,
-            name="tasks.delete_document",
+            stage="tasks.delete_document",
             operation="DELETE",
         )
 
@@ -387,7 +367,7 @@ class TestDeleteDocumentPath:
         assert row.task_id == task_id
         assert row.obj_id == obj_id
         assert row.namespace_id == namespace_id
-        assert row.status == "SUCCESS"
+        assert row.status == "success"
         assert row.operation == "DELETE"
         assert row.completed_at is not None
 
@@ -405,7 +385,7 @@ class TestDeleteDocumentPath:
         index_task_id = uuid.uuid4()
         obj_id = uuid.uuid4()
 
-        _insert_taskmeta(
+        _insert_ingestion_status(
             postgres_engine,
             task_id=index_task_id,
             obj_id=obj_id,
@@ -417,12 +397,12 @@ class TestDeleteDocumentPath:
 
         # Step 2: delete the row via tasks.delete_document
         delete_task_id = uuid.uuid4()
-        _insert_taskmeta(
+        _insert_ingestion_status(
             postgres_engine,
             task_id=delete_task_id,
             obj_id=obj_id,
             namespace_id=namespace_row,
-            name="tasks.delete_document",
+            stage="tasks.delete_document",
             operation="DELETE",
         )
 
@@ -455,19 +435,19 @@ class TestDeleteDocumentPath:
         delete_task_id = uuid.uuid4()
         delete_obj_id = uuid.uuid4()
 
-        _insert_taskmeta(
+        _insert_ingestion_status(
             postgres_engine,
             task_id=delete_task_id,
             obj_id=delete_obj_id,
             namespace_id=namespace_row,
-            name="tasks.delete_document",
+            stage="tasks.delete_document",
             operation="DELETE",
         )
 
         # Sentinel tasks.index row confirms the ingested_objects pipeline is live.
         sentinel_task = uuid.uuid4()
         sentinel_obj = uuid.uuid4()
-        _insert_taskmeta(
+        _insert_ingestion_status(
             postgres_engine,
             task_id=sentinel_task,
             obj_id=sentinel_obj,

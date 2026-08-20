@@ -22,12 +22,16 @@ def _setup_otel(**kwargs) -> None:
 
 __all__ = ["app"]
 
-app = Celery(
-    broker=settings.MESSAGE_BROKER_URL,
-    # Result backend is declared per-task (backend=_db_backend in tasks.py)
-    # using our custom DatabaseBackend. No app-level backend is set here.
-)
+app = Celery(broker=settings.MESSAGE_BROKER_URL)
 
+# Official, unmodified recipe (celery.backends.database.DatabaseBackend, via
+# the "db+" URL scheme — celery/app/backends.py:by_url splits only on the
+# FIRST "+", so the SQLAlchemy driver suffix in BACKEND_RESULT_URL survives
+# intact). No custom subclass: nothing reads this table via CDC any more
+# (ingestion_status, written directly by OutboxTask in tasks.py, is the CDC
+# source of truth now), so there's no reason to patch the pickled `result`
+# column into JSON text the way the old custom DatabaseBackend did.
+app.conf.result_backend = f"db+{settings.BACKEND_RESULT_URL}"
 app.conf.result_serializer = "json"
 app.conf.database_create_tables_at_setup = True
 app.conf.result_extended = True

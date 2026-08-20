@@ -1,6 +1,5 @@
-# Set required env vars before any module-level settings objects or the Celery
-# app are instantiated.  Order matters: os.environ must be populated before
-# any import that touches WorkerSettings or creates a DatabaseBackend.
+# Set required env vars before any module-level settings objects or the
+# Celery app are instantiated.
 import os
 
 os.environ.setdefault("S3_ENDPOINT", "test-minio:9000")
@@ -22,22 +21,15 @@ os.environ.setdefault("PARSING_SERVICE_URL", "http://test-parsing:10001")
 os.environ.setdefault("INGESTION_SERVICE_URL", "http://test-indexing:10000")
 os.environ.setdefault("EXCHANGE_NAME", "test-exchange")
 
-# Override the Celery app config BEFORE tasks.py is imported.
-#
-# tasks.py creates `_db_backend = DatabaseBackend(...)` at module level.
-# DatabaseBackend.__init__ calls _create_tables() when
-# `database_create_tables_at_setup=True` (set in celery.py).  _create_tables()
-# opens a real DB connection — which fails with a fake host.
-#
-# By forcing `database_create_tables_at_setup=False` here (after celery.py is
-# imported but before tasks.py), the DatabaseBackend is safely instantiated
-# without touching the network.
+# Celery's own `app.backend` is a lazy property (celery/app/base.py) — merely
+# importing celery.py/tasks.py never constructs a backend or opens a DB
+# connection, so (unlike the old custom-DatabaseBackend-at-module-level
+# design) there is nothing to defuse here beyond eager task execution.
 from src.backend.controller.worker.celery import app  # noqa: E402
 
 app.conf.update(
     task_always_eager=True,
     task_eager_propagates=True,
-    database_create_tables_at_setup=False,
 )
 
 import pytest  # noqa: E402

@@ -142,8 +142,9 @@ class Namespace(Base):
 class IngestedObject(Base):
     """Object registry — one row per successfully ingested object.
 
-    Written exclusively by the JDBC sink (SUCCESS events only, upsert on id).
-    The storage service reads from this table; it never writes to it.
+    Written exclusively by the JDBC sink (CDC from ``ingestion_status``,
+    success events only, upsert on id). The storage service reads from this
+    table; it never writes to it.
     """
 
     __tablename__ = "ingested_objects"
@@ -191,9 +192,9 @@ class IngestedObject(Base):
 
 
 class IngestionTask(Base):
-    """Task history — one row per completed ingestion task (SUCCESS or FAILURE).
+    """Task history — one row per completed ingestion task (success or failure).
 
-    Written exclusively by the JDBC sink (CDC from ``apollo_celery_taskmeta``).
+    Written exclusively by the JDBC sink (CDC from ``ingestion_status``).
     The storage service reads from this table; it never writes to it.
     """
 
@@ -202,7 +203,7 @@ class IngestionTask(Base):
     task_id: Mapped[uuid.UUID] = mapped_column(
         sa.UUID(as_uuid=True),
         primary_key=True,
-        comment="Links to apollo_celery_taskmeta.task_id",
+        comment="Links to ingestion_status.task_id (the contract task_id)",
     )
     obj_id: Mapped[uuid.UUID | None] = mapped_column(
         sa.UUID(as_uuid=True),
@@ -223,17 +224,17 @@ class IngestionTask(Base):
     status: Mapped[str] = mapped_column(
         sa.Text,
         nullable=False,
-        comment="'SUCCESS' or 'FAILURE'",
+        comment="'success' or 'failure'",
     )
     failure_reason: Mapped[str | None] = mapped_column(
         sa.Text,
         nullable=True,
-        comment="Traceback excerpt on failure; NULL on SUCCESS",
+        comment="Traceback excerpt on failure; NULL on success",
     )
     completed_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=False,
-        comment="date_done from Celery result",
+        comment="updated_at from ingestion_status at its last write",
     )
     operation: Mapped[str] = mapped_column(
         sa.Text,

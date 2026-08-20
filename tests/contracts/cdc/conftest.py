@@ -2,8 +2,8 @@
 
 Stack: Network → Kafka (KRaft) → KSQLDbContainer → artemis/ksqldb-init sidecar
 
-The `streams` fixture creates all six streams from artemis_init.ksql
-(S3 pipeline streams 1–3 and CDC pipeline streams 4–6) via the
+The `streams` fixture creates all streams from artemis_init.ksql
+(S3 pipeline streams 1–3 and CDC pipeline streams 4–8) via the
 artemis/ksqldb-init one-shot container.
 
 Prerequisites:

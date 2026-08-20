@@ -11,8 +11,8 @@ and reach the RUNNING state within a reasonable timeout.
 Connectors under test
 ---------------------
 1. DebeziumPostgresSourceConnector__CeleryResultBackendPublish
-   Reads apollo_celery_taskmeta WAL via pgoutput; requires wal_level=logical,
-   celery_results_publication, and the debezium replication user.
+   Reads ingestion_status WAL via pgoutput; requires wal_level=logical,
+   ingestion_status_publication, and the debezium replication user.
 
 2. DebeziumJdbcSinkConnector__CeleryResultToIngestedObjects
    Upserts rows into ingested_objects from artemis.celery.ingested_objects.
@@ -100,14 +100,14 @@ class TestDebeziumSourceConnector:
                 "value.converter.schemas.enable": "false",
                 "key.converter.schemas.enable": "false",
                 "topic.prefix": "apollo.ingestion.celery.results",
-                "table.include.list": "public.apollo_celery_taskmeta",
+                "table.include.list": "public.ingestion_status",
                 "database.user": "debezium",
                 "database.password": "debezium",
                 "database.hostname": _PG_HOST,
                 "database.port": str(_PG_PORT),
                 "database.dbname": _PG_DB,
-                "slot.name": "apollo_taskmeta_table_rep_slot",
-                "publication.name": "celery_results_publication",
+                "slot.name": "ingestion_status_rep_slot",
+                "publication.name": "ingestion_status_publication",
                 "publication.autocreate.mode": "disabled",
                 "plugin.name": "pgoutput",
                 "transforms": "unwrap",

@@ -501,10 +501,10 @@ kafka_connect_connector_instance(
         "value.converter.schemas.enable": "false",
         "key.converter.schemas.enable": "false",
 
-        # This connector will publish the Celery task results to the Kafka topic
-        # 'apollo.ingestion.celery.results.public.apollo_celery_taskmeta'
+        # This connector will publish the ingestion_status outbox table to the
+        # Kafka topic 'apollo.ingestion.celery.results.public.ingestion_status'
         "topic.prefix": "apollo.ingestion.celery.results",
-        "table.include.list": "public.apollo_celery_taskmeta",
+        "table.include.list": "public.ingestion_status",
 
         # Connection configuration
         "database.user": "debezium",
@@ -514,8 +514,8 @@ kafka_connect_connector_instance(
         "database.dbname": "documents",
 
         # Pub/sub configuration
-        "slot.name": "apollo_taskmeta_table_rep_slot",
-        "publication.name": "celery_results_publication",
+        "slot.name": "ingestion_status_rep_slot",
+        "publication.name": "ingestion_status_publication",
         "publication.autocreate.mode": "disabled",
         "plugin.name": "pgoutput",
         "transforms": "unwrap",
@@ -808,7 +808,7 @@ kafka_connect_init_image(
         ":artemis-http-sink-connector-intake",
         # ksqlDB-routed Celery tasks → RabbitMQ → Celery worker
         ":artemis-rabbitmq-sink-connector-celery",
-        # Celery task results (apollo_celery_taskmeta) → Kafka CDC
+        # Ingestion status outbox (ingestion_status) → Kafka CDC
         ":debezium-cdc-postgres-task-results",
         # ksqlDB CDC fan-out → storage service tables
         ":debezium-jdbc-sink-ingested-objects",

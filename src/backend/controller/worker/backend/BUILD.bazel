@@ -12,20 +12,19 @@ py_library(
     srcs = ["__init__.py"],
     deps = [
         ":claims",
-        ":database",
+        ":db",
+        ":outbox",
     ],
 )
 
 py_library(
-    name = "database",
+    name = "db",
     srcs = [
-        "database.py",
+        "db.py",
     ],
     deps = [
-        requirement("vine"),
-        requirement("celery"),
         requirement("sqlalchemy"),
-        ":models",
+        "//src/backend/controller/worker:config",
     ],
 )
 
@@ -43,12 +42,12 @@ py_library(
 )
 
 py_library(
-    name = "models",
+    name = "outbox",
     srcs = [
-        "models.py",
+        "outbox.py",
     ],
     deps = [
         requirement("sqlalchemy"),
-        requirement("celery"),
+        "//src/lib/backend/db:base",
     ],
 )

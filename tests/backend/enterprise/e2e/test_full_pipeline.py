@@ -321,7 +321,7 @@ class TestSingleNamespaceFullPipeline:
         data_source: dict,
         postgres_engine: sa.Engine,
     ) -> None:
-        """CDC pipeline writes ingestion_tasks rows after tasks.index SUCCESS."""
+        """CDC pipeline writes ingestion_tasks rows after tasks.index success."""
         namespace_id = uuid.UUID(data_source["namespace_id"])
 
         def _row():
@@ -329,7 +329,7 @@ class TestSingleNamespaceFullPipeline:
                 return conn.execute(
                     sa.text(
                         "SELECT task_id FROM ingestion_tasks"
-                        " WHERE namespace_id = :ns_id AND status = 'SUCCESS' LIMIT 1"
+                        " WHERE namespace_id = :ns_id AND status = 'success' LIMIT 1"
                     ),
                     {"ns_id": namespace_id},
                 ).fetchone()
@@ -338,7 +338,7 @@ class TestSingleNamespaceFullPipeline:
             poll_until(_row, timeout=_CDC_POLL_TIMEOUT_S, interval=_CDC_POLL_INTERVAL_S)
         except TimeoutError:
             pytest.fail(
-                f"ingestion_tasks has no SUCCESS rows for namespace_id={namespace_id} "
+                f"ingestion_tasks has no success rows for namespace_id={namespace_id} "
                 f"after {_CDC_POLL_TIMEOUT_S}s"
             )
 
@@ -700,7 +700,7 @@ class TestPrivatePathFullPipeline:
                 return conn.execute(
                     sa.text(
                         "SELECT task_id FROM ingestion_tasks"
-                        " WHERE namespace_id = :ns_id AND status = 'SUCCESS' LIMIT 1"
+                        " WHERE namespace_id = :ns_id AND status = 'success' LIMIT 1"
                     ),
                     {"ns_id": namespace_id},
                 ).fetchone()
@@ -709,7 +709,7 @@ class TestPrivatePathFullPipeline:
             poll_until(_row, timeout=_CDC_POLL_TIMEOUT_S, interval=_CDC_POLL_INTERVAL_S)
         except TimeoutError:
             pytest.fail(
-                f"ingestion_tasks has no SUCCESS rows for namespace_id={namespace_id} "
+                f"ingestion_tasks has no success rows for namespace_id={namespace_id} "
                 f"after {_CDC_POLL_TIMEOUT_S}s"
             )
 
