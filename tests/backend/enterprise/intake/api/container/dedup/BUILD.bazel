@@ -13,23 +13,26 @@ py_library(
     srcs = ["conftest.py"],
     visibility = ["//visibility:public"],
     deps = [
-        "//src/backend/enterprise/intake/api:dependencies",
-        "//src/backend/enterprise/intake/api:main",
+        "//tests/lib/testcontainers:migrations",
         requirement("fastapi"),
         requirement("httpx"),
         requirement("pytest"),
-        requirement("sqlalchemy"),
-        requirement("aiosqlite"),
+        requirement("testcontainers"),
+        requirement("wiremock"),
     ],
 )
 
 py_test(
-    name = "test_health",
-    srcs = ["test_health.py"],
+    name = "test_dedup",
+    size = "large",
+    srcs = ["test_dedup.py"],
+    tags = [
+        "container",
+        "integration",
+        "local",  # disable Bazel sandbox so Docker volume mounts see the real host filesystem
+    ],
     deps = [
         ":conftest",
-        "//src/backend/enterprise/intake/api:main",
-        requirement("aioresponses"),
         requirement("fastapi"),
         requirement("httpx"),
         requirement("pytest"),

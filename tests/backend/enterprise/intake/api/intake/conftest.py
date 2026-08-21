@@ -4,6 +4,14 @@ External dependencies replaced:
   - Storage service   → httpx mock via dependency_overrides (asserted in tests)
   - Filesystem        → tmp_path (pytest built-in)
   - URL fetch         → httpx.AsyncClient patched per-test in service
+  - Postgres          → SQLite in-memory, used only so the lifespan's
+                         idempotent create_all() has somewhere to point;
+                         the per-request session dependency is overridden to
+                         yield None (see below), so these tests never
+                         exercise dedup.py's Postgres-specific ON CONFLICT
+                         claim logic — that's covered with a real Postgres
+                         testcontainer at the integration layer instead
+                         (see tests/backend/enterprise/intake/api/container).
 """
 
 from __future__ import annotations
@@ -13,6 +21,7 @@ import uuid
 from typing import Iterator
 from unittest.mock import AsyncMock, MagicMock
 
+os.environ.setdefault("SQL_DB_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("STORAGE_SERVICE_URL", "http://localhost:7000")
 
 import pytest  # noqa: E402
@@ -20,6 +29,7 @@ from fastapi import status  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from src.backend.enterprise.intake.api.dependencies import (  # noqa: E402
+    get_db_session,
     get_storage_client,
 )
 from src.backend.enterprise.intake.api.main import app  # noqa: E402
@@ -51,9 +61,14 @@ def mock_http() -> MagicMock:
     return client
 
 
+async def _no_db_session():
+    yield None
+
+
 @pytest.fixture
 def client(mock_http: MagicMock) -> Iterator[TestClient]:
     app.dependency_overrides[get_storage_client] = lambda: mock_http
+    app.dependency_overrides[get_db_session] = _no_db_session
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()

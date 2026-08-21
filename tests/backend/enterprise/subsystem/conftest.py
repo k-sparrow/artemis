@@ -538,12 +538,19 @@ def intake_container(
     ksqldb_transformation: None,
     wiremock: WireMockContainer,
     session_watch_dir: Path,
+    postgres_container: PostgresContainer,
+    migrations_container: None,
 ) -> DockerContainer:
     container = (
         DockerContainer(_INTAKE_IMAGE)
         .with_network(docker_network)
         .with_network_aliases("intake")
         .with_exposed_ports(_INTAKE_PORT)
+        .with_env(
+            "SQL_DB_URL",
+            f"postgresql+asyncpg://{postgres_container.username}:{postgres_container.password}"  # noqa: E501
+            f"@postgres:5432/{postgres_container.dbname}",
+        )
         .with_env("STORAGE_SERVICE_URL", f"http://wiremock:{_WIREMOCK_INTERNAL_PORT}")
         .with_env("DEBUG", "true")
         .with_volume_mapping(str(session_watch_dir), "/watch", "ro")
