@@ -8,6 +8,8 @@ dispatch, Epic 21)."""
 
 from __future__ import annotations
 
+import os
+import uuid
 from pathlib import Path
 
 from minio import Minio
@@ -56,6 +58,20 @@ class DoclingServeRayClusterWithApp:
     """
 
     def __init__(self) -> None:
+        # testcontainers' DockerCompose has no project-name field of its own
+        # and never overrides the subprocess env, so it falls back to Docker
+        # Compose's own default: the basename of cwd. That cwd is this
+        # fixture's own directory, shared with the sibling
+        # DoclingServeRayCluster fixture (docling_ray.py) — whose compose
+        # file defines services with the *same names* (redis, ray-head,
+        # ray-worker, docling-serve). Without an explicit, unique project
+        # name, two such fixtures running concurrently (e.g. Bazel's default
+        # parallelism across independent test targets) fight over literally
+        # the same container names, producing "Recreate" / "removal already
+        # in progress" races. Docker Compose reads COMPOSE_PROJECT_NAME from
+        # the environment when no -p flag is given, which _run_command's
+        # subprocess inherits.
+        os.environ["COMPOSE_PROJECT_NAME"] = f"docling-ray-app-{uuid.uuid4().hex[:8]}"
         self._compose = DockerCompose(
             context=str(_COMPOSE_DIR),
             compose_file_name=[_COMPOSE_FILE],

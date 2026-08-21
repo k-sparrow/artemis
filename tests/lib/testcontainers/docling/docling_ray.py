@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import os
+import uuid
 from pathlib import Path
 
 from testcontainers.compose import DockerCompose
@@ -42,6 +44,14 @@ class DoclingServeRayCluster:
     """
 
     def __init__(self) -> None:
+        # See docling_ray_app.py's identical comment: without an explicit,
+        # unique COMPOSE_PROJECT_NAME, this fixture and its sibling
+        # DoclingServeRayClusterWithApp both fall back to Docker Compose's
+        # default project name (the basename of their shared directory) —
+        # and both compose files define services with the same names
+        # (redis, ray-head, ray-worker, docling-serve), so running them
+        # concurrently collides on literal container names.
+        os.environ["COMPOSE_PROJECT_NAME"] = f"docling-ray-{uuid.uuid4().hex[:8]}"
         self._compose = DockerCompose(
             context=str(_COMPOSE_DIR),
             compose_file_name=[_COMPOSE_FILE],
