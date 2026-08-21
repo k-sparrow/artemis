@@ -10,6 +10,7 @@ import src.backend.storage.api.models  # noqa: F401
 import src.backend.controller.worker.backend.claims  # noqa: F401
 import src.backend.controller.worker.backend.outbox  # noqa: F401
 import src.backend.enterprise.data_sources.api.models  # noqa: F401
+import src.backend.enterprise.intake.api.intake.models  # noqa: F401
 
 from src.lib.backend.db.base import Base
 

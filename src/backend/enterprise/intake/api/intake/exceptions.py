@@ -10,6 +10,13 @@ class PathNotFoundError(Exception):
         super().__init__(f"File not found on mount: {path}")
 
 
+class PathEscapesWatchRootError(Exception):
+    def __init__(self, path: str, resolved: str) -> None:
+        self.path = path
+        self.resolved = resolved
+        super().__init__(f"Resolved path escapes the watch root: {path} -> {resolved}")
+
+
 class UrlFetchError(Exception):
     def __init__(self, url: str, upstream_status: int | None) -> None:
         self.url = url
@@ -51,6 +58,15 @@ def _path_not_found_handler(req: Request, exc: PathNotFoundError) -> JSONRespons
     )
 
 
+def _path_escapes_watch_root_handler(
+    req: Request, exc: PathEscapesWatchRootError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        content={"detail": str(exc)},
+    )
+
+
 def _url_fetch_handler(req: Request, exc: UrlFetchError) -> JSONResponse:
     return JSONResponse(
         status_code=status.HTTP_502_BAD_GATEWAY,
@@ -70,6 +86,7 @@ def _storage_service_handler(req: Request, exc: StorageServiceError) -> JSONResp
 EXCEPTION_HANDLER_MAP = {
     NamespaceNotFoundError: _namespace_not_found_handler,
     PathNotFoundError: _path_not_found_handler,
+    PathEscapesWatchRootError: _path_escapes_watch_root_handler,
     UrlFetchError: _url_fetch_handler,
     StorageServiceError: _storage_service_handler,
 }

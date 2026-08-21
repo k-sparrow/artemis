@@ -442,6 +442,10 @@ services:
     profiles: [enterprise]
     image: artemis/backend-enterprise-intake:${ARTEMIS_VERSION:?set ARTEMIS_VERSION to a release tag}
     depends_on:
+      postgres:
+        condition: service_healthy
+      artemis-db-migrations:
+        condition: service_completed_successfully
       backend-storage:
         condition: service_healthy
     volumes:
@@ -453,6 +457,7 @@ services:
       retries: 5
       start_period: 30s
     environment:
+      SQL_DB_URL: "postgresql+asyncpg://postgres:testpass@postgres:5432/documents"
       KAFKA_CONNECT_URL: "http://kafka-connect:8083"
       STORAGE_SERVICE_URL: "http://backend-storage:7000"
       INTAKE_URL: "http://backend-enterprise-intake:9000/intake"

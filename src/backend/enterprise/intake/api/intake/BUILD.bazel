@@ -7,6 +7,7 @@ load("@pip//:requirements.bzl", "requirement")
 
 package(
     default_visibility = [
+        "//src/backend/alembic:__subpackages__",
         "//src/backend/enterprise/intake/api:__pkg__",
         "//tests/backend/enterprise/intake:__subpackages__",
     ],
@@ -34,10 +35,32 @@ py_library(
     name = "service",
     srcs = ["service.py"],
     deps = [
+        ":dedup",
         ":exceptions",
         ":schemas",
+        "//src/backend/enterprise/intake/api:config",
+        requirement("fastapi"),
         requirement("httpx"),
         requirement("filetype"),
+        requirement("sqlalchemy"),
+    ],
+)
+
+py_library(
+    name = "models",
+    srcs = ["models.py"],
+    deps = [
+        "//src/lib/backend/db:base",
+        requirement("sqlalchemy"),
+    ],
+)
+
+py_library(
+    name = "dedup",
+    srcs = ["dedup.py"],
+    deps = [
+        ":models",
+        requirement("sqlalchemy"),
     ],
 )
 

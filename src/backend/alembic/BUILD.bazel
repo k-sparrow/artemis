@@ -19,6 +19,7 @@ py_binary(
         "//src/backend/controller/worker/backend:claims",
         "//src/backend/controller/worker/backend:outbox",
         "//src/backend/enterprise/data_sources/api:models",
+        "//src/backend/enterprise/intake/api/intake:models",
         "//src/backend/storage/api:models",
         "//src/lib/backend/db:base",
         requirement("alembic"),

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, status
 
-from src.backend.enterprise.intake.api.dependencies import storage_client_dependency
+from src.backend.enterprise.intake.api.dependencies import (
+    db_session_dependency,
+    storage_client_dependency,
+)
 from src.backend.enterprise.intake.api.intake import service
 from src.backend.enterprise.intake.api.intake.schemas import (
     IntakeRequest,
@@ -21,9 +24,9 @@ log = get_logger(__name__)
     response_model=IntakeResponse,
 )
 async def intake_endpoint(
-    body: IntakeRequest, http: storage_client_dependency
+    body: IntakeRequest, http: storage_client_dependency, session: db_session_dependency
 ) -> IntakeResponse:
-    task_id = await service.intake_file(http=http, request=body)
+    task_id = await service.intake_file(http=http, request=body, session=session)
     log.info(
         "intake_dispatched",
         source_type=body.source.type,

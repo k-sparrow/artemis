@@ -60,8 +60,11 @@ py_library(
     srcs = ["dependencies.py"],
     deps = [
         ":config",
+        "//src/lib/backend/db:session",
+        requirement("asyncpg"),
         requirement("fastapi"),
         requirement("httpx"),
+        requirement("sqlalchemy"),
     ],
 )
 
@@ -70,8 +73,10 @@ py_library(
     srcs = ["utils.py"],
     deps = [
         ":config",
+        "//src/backend/enterprise/intake/api/intake:models",
         "//src/lib/backend/logging:pkg",
         requirement("fastapi"),
+        requirement("sqlalchemy"),
     ],
 )
 
