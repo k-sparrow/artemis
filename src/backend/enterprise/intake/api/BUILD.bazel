@@ -25,7 +25,18 @@ uvicorn_server(
     app = "src.backend.enterprise.intake.api.main:app",
     host = "0.0.0.0",
     port = ENTERPRISE_INGEST_SERVICE_PORT,
-    deps = [":pkg"],
+    # wsproto: intake serves no WebSocket endpoints, but its absence makes
+    # uvicorn log "No supported WebSocket library detected" on any genuine
+    # WS handshake attempt against the exposed port. Installing a minimal
+    # backend closes that off (FastAPI just rejects the connection, no route
+    # matches). It does NOT silence uvicorn's separate "Unsupported upgrade
+    # request." warning fired by the Aiven HTTP sink connector's h2c (HTTP/2
+    # cleartext) probes on each fresh connection — that's a different Upgrade
+    # value entirely, filtered instead in main.py (see its docstring).
+    deps = [
+        ":pkg",
+        requirement("wsproto"),
+    ],
 )
 
 py_library(

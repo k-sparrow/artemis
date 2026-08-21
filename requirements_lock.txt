@@ -1536,6 +1536,7 @@ h11==0.16.0 \
     # via
     #   httpcore
     #   uvicorn
+    #   wsproto
 h2==4.3.0 \
     --hash=sha256:6c59efe4323fa18b47a632221a1888bd7fde6249819beda254aeca909f221bf1 \
     --hash=sha256:c438f029a25f7945c69e0ccf0fb951dc3f73a5f6412981daee861431b70e2bdd
@@ -5295,6 +5296,10 @@ wrapt==1.17.3 \
     #   opentelemetry-instrumentation-httpx
     #   opentelemetry-instrumentation-sqlalchemy
     #   testcontainers
+wsproto==1.2.0 \
+    --hash=sha256:ad565f26ecb92588a3e43bc3d96164de84cd9902482b130d0ddbaa9664a85065 \
+    --hash=sha256:b9acddd652b585d75b20477888c56642fdade28bdfd3579aa24a4d2c037dd736
+    # via -r requirements.in
 yarl==1.23.0 \
     --hash=sha256:03214408cfa590df47728b84c679ae4ef00be2428e11630277be0727eba2d7cc \
     --hash=sha256:041b1a4cefacf65840b4e295c6985f334ba83c30607441ae3cf206a0eed1a2e4 \
