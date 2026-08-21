@@ -64,13 +64,21 @@ class DoclingServeRayClusterWithApp:
         )
 
     def start(self) -> Self:
-        self._compose.start()
         try:
+            self._compose.start()
             wait_for_http(
                 f"{self.get_parsing_url()}/health/readiness",
                 timeout=_STARTUP_TIMEOUT_S,
             )
         except Exception:
+            # self._compose.start() itself can fail partway through (e.g. a
+            # transient "docker compose up" error) — previously only
+            # wait_for_http's failure triggered cleanup, so a startup
+            # failure left orphaned containers under this fixture's
+            # non-unique "docling" compose project name, which then made
+            # every subsequent run collide with that stale state too
+            # ("No such container: <id>" from docker compose up racing
+            # leftover containers it didn't create this time).
             self.stop()
             raise
         return self

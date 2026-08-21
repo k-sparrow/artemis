@@ -50,10 +50,15 @@ class DoclingServeRayCluster:
         )
 
     def start(self) -> Self:
-        self._compose.start()
         try:
+            self._compose.start()
             wait_for_http(f"{self.get_url()}/health", timeout=_STARTUP_TIMEOUT_S)
         except Exception:
+            # See docling_ray_app.py's identical fix: self._compose.start()
+            # itself can fail partway through, and previously only
+            # wait_for_http's failure triggered cleanup — leaving orphaned
+            # containers under this fixture's non-unique compose project
+            # name to poison every subsequent run.
             self.stop()
             raise
         return self
