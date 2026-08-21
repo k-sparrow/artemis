@@ -244,6 +244,9 @@ def data_sources_container(
         )
         .with_env("STORAGE_SERVICE_URL", wiremock_internal_url)
         .with_env("DEBUG", "true")
+        # Production default is 10 minutes (see templates.py); tests need
+        # near-real-time delivery within their own timeout budgets.
+        .with_env("FILESOURCE_POLL_DELAY_MS", "2000")
     )
     container.start()
     request.addfinalizer(container.stop)

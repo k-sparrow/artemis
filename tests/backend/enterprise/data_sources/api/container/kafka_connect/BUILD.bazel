@@ -23,6 +23,7 @@ py_library(
 
 py_test(
     name = "test_kafka_connect",
+    size = "large",  # ~8min: multiple fresh Kafka Connect containers per test
     srcs = ["test_kafka_connect.py"],
     tags = [
         "container",
@@ -32,6 +33,7 @@ py_test(
     deps = [
         ":conftest",
         "//src/backend/enterprise/data_sources/api/sources:templates",
+        "//tests/lib:polling",
         "//tests/lib/testcontainers/kafka:pkg",
         requirement("httpx"),
         requirement("kafka-python-ng"),

@@ -68,6 +68,40 @@ def _wait_for_storage_upload(
     )
 
 
+def _wait_for_upload_containing(
+    wiremock_host_url: str,
+    needle: str,
+    namespace_id: str = _NAMESPACE_ID,
+    timeout: int = 90,
+) -> list[dict]:
+    """Poll WireMock until a POST body containing *needle* appears.
+
+    Unlike ``_wait_for_storage_upload(count=1, ...)``, this doesn't stop at
+    the first call — a connector restart drops its in-memory idempotent
+    state, so every previously-delivered file in the watched tree gets
+    legitimately redelivered too, and the very first call after a restart is
+    typically one of those, not the file the caller is waiting for.
+    """
+    expected_path = f"/namespaces/{namespace_id}/objects"
+    deadline = time.monotonic() + timeout
+    calls: list[dict] = []
+    while time.monotonic() < deadline:
+        resp = httpx.get(f"{wiremock_host_url}/__admin/requests")
+        calls = [
+            r["request"]
+            for r in resp.json().get("requests", [])
+            if r["request"]["method"] == "POST"
+            and r["request"]["url"].split("?")[0] == expected_path
+        ]
+        if any(needle in c.get("body", "") for c in calls):
+            return calls
+        time.sleep(2)
+    pytest.fail(
+        f"WireMock never received a POST {expected_path} containing {needle!r} "
+        f"within {timeout}s. All recorded: {calls}"
+    )
+
+
 def _assert_no_upload(
     wiremock_host_url: str,
     namespace_id: str = _NAMESPACE_ID,
@@ -214,10 +248,11 @@ class TestFullPipeline:
         fname = f"post-restart-{uuid.uuid4().hex[:8]}.txt"
         (session_watch_dir / fname).write_text("delivered after restart")
 
-        calls = _wait_for_storage_upload(wiremock_host_url, count=1, timeout=60)
-        assert any(
-            fname in c.get("body", "") for c in calls
-        ), f"{fname} not found in post-restart WireMock calls"
+        # A restart drops the connector's in-memory idempotent state, so every
+        # file already in session_watch_dir from earlier tests in this class
+        # gets legitimately redelivered too — wait for this specific file
+        # rather than assuming the first call after the restart is it.
+        _wait_for_upload_containing(wiremock_host_url, fname, timeout=90)
 
 
 class TestConnectorLifecycle:

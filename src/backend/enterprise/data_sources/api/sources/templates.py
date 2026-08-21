@@ -47,6 +47,23 @@ DEFAULT_FILE_EXTENSIONS: tuple[str, ...] = (
 )
 
 
+# Camel's file consumer re-lists the entire watched tree on every poll and
+# relies solely on this cache to skip already-seen files (noop=true means
+# there's no other marker). The default MemoryIdempotentRepository holds only
+# 1000 entries with silent LRU eviction: once a tree exceeds that, evicted
+# files look "new" again on the next poll, forever - verified experimentally
+# to produce unbounded duplicate ingestion (100k+ duplicates within minutes)
+# with the task never failing or even logging a warning. Sized well above any
+# expected tree; cheap to raise further since entries are just path strings.
+_IDEMPOTENT_CACHE_SIZE = 50_000
+
+# Default poll delay (500ms) is tuned for low-latency queues, not a RO/noop
+# directory scan. A slower cycle both reduces filesystem load and shrinks the
+# blast radius of the eviction issue above by the same factor, should the
+# cache size ever be undersized again.
+_POLL_DELAY_MS = 600_000
+
+
 def render_filesystem_connector(
     *,
     connector_name: str,
@@ -58,6 +75,8 @@ def render_filesystem_connector(
     owner_id: str,
     recursive: bool = True,
     file_extensions: Sequence[str] = DEFAULT_FILE_EXTENSIONS,
+    idempotent_cache_size: int = _IDEMPOTENT_CACHE_SIZE,
+    poll_delay_ms: int = _POLL_DELAY_MS,
 ) -> dict[str, Any]:
     """Render a Camel FileSource connector config.
 
@@ -98,6 +117,11 @@ def render_filesystem_connector(
         file_extensions: File extensions (no leading dot) to ingest. Rendered
             as ``camel.source.endpoint.includeExt`` so Camel drops everything
             else (e.g. video files) before it ever reaches Kafka.
+        idempotent_cache_size: Capacity of the in-memory idempotent repository
+            that de-duplicates already-seen files across polls. Must comfortably
+            exceed the watched tree's file count or files will be silently
+            evicted and reprocessed (see ``_IDEMPOTENT_CACHE_SIZE``).
+        poll_delay_ms: Milliseconds between full tree scans.
 
     Returns:
         Connector config dict for ``KafkaConnect.create_connector()``.
@@ -112,6 +136,12 @@ def render_filesystem_connector(
         # noop=true: filesystem is RO-mounted; never move or delete files.
         "camel.source.endpoint.noop": "true",
         "camel.source.endpoint.idempotent": "true",
+        "camel.source.endpoint.idempotentRepository": (
+            "#class:org.apache.camel.support.processor.idempotent."
+            "MemoryIdempotentRepository#memoryIdempotentRepository"
+            f"({idempotent_cache_size})"
+        ),
+        "camel.source.endpoint.delay": str(poll_delay_ms),
         # Use the consumed file path as the raw key material.
         "camel.source.camelMessageHeaderKey": "CamelFileNameConsumed",
         "topics": _FILESYSTEM_TOPIC,

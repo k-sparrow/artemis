@@ -38,6 +38,13 @@ def pytest_test(name, srcs, **kwargs):
     data = kwargs.pop("data", [])
     env = kwargs.pop("env", {})
 
+    # Test-only attributes: py_library (used for the .lib target below)
+    # doesn't accept them, so they must only reach the actual py_test.
+    test_only_kwargs = {}
+    for attr in ("size", "timeout", "flaky", "shard_count"):
+        if attr in kwargs:
+            test_only_kwargs[attr] = kwargs.pop(attr)
+
     args = kwargs.pop("args", []) + [
         "--capture=no",
         "-v",
@@ -60,6 +67,8 @@ def pytest_test(name, srcs, **kwargs):
         testonly = True,
         **kwargs
     )
+
+    kwargs.update(test_only_kwargs)
 
     # main test entry
     py_console_script_binary(

@@ -404,6 +404,10 @@ services:
       KAFKA_CONNECT_URL: "http://kafka-connect:8083"
       STORAGE_SERVICE_URL: "http://backend-storage:7000"
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+      # Fast FileSource poll cycle for local/test feedback loops. Release
+      # omits this and falls back to config.py's production-safe default
+      # (10 min) — see templates.py for why that default exists.
+      FILESOURCE_POLL_DELAY_MS: "2000"
     expose:
       - "9500"
     ports:

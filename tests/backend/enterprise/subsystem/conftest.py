@@ -501,6 +501,9 @@ def data_sources_container(
         .with_env("KAFKA_CONNECT_URL", "http://kafka-connect:8083")
         .with_env("STORAGE_SERVICE_URL", f"http://wiremock:{_WIREMOCK_INTERNAL_PORT}")
         .with_env("DEBUG", "true")
+        # Production default is 10 minutes (see templates.py); tests need
+        # near-real-time delivery within their own timeout budgets.
+        .with_env("FILESOURCE_POLL_DELAY_MS", "2000")
     )
     container.start()
     request.addfinalizer(container.stop)

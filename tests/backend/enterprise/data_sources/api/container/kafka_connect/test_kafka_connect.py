@@ -5,6 +5,8 @@ Verifies that the custom-built KafkaConnect image:
   2. Can deploy a FileSource connector using the production template and reach RUNNING.
   3. Produces messages with the correct headers (artemis.namespace, artemis.org_name,
      CamelHeader.CamelFileAbsolutePath).
+  4. Does not duplicate-ingest files from a tree larger than Camel's default
+     idempotent repository capacity (TestFilesourceConnectorIdempotency).
 
 Pre-requisite:
     artemis/cp-kafka-connect:latest must be built.
@@ -14,6 +16,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from pathlib import Path
 from typing import Iterator
 
 import httpx
@@ -24,6 +27,7 @@ from kafka_connect import KafkaConnect
 from src.backend.enterprise.data_sources.api.sources.templates import (
     render_filesystem_connector,
 )
+from tests.lib.polling import poll_until, wait_for_kc_connector
 
 _TOPIC = "artemis.datasource.filesystem"
 _NAMESPACE = "test-ns"
@@ -210,3 +214,119 @@ class TestFilesourceConnector:
             assert path.startswith(
                 "/watch/"
             ), f"Expected path under /watch/, got: {path}"
+
+
+class TestFilesourceConnectorIdempotency:
+    """Regression test for the eviction-driven duplicate-ingestion bug.
+
+    Camel's default MemoryIdempotentRepository holds only 1000 entries with
+    silent LRU eviction, and noop=true (mandatory for our RO-mounted trees)
+    means it's the *only* de-dup mechanism available — no physical marker
+    backs it up. Once a watched tree exceeds that capacity, evicted files
+    look "new" again on the very next poll and get reprocessed forever,
+    without the connector task ever failing or logging a warning (verified
+    manually: 100k+ duplicate records within minutes against a 1200-file
+    tree). render_filesystem_connector fixes this by sizing the repository
+    well above any expected tree (see templates.py's idempotent_cache_size).
+
+    This suite watches a tree sized to exceed Camel's own undersized default
+    (1000) but well under the shipped production default (50000), so it
+    fails if that sizing ever regresses.
+    """
+
+    _FILE_COUNT = 1200
+
+    @pytest.fixture
+    def watch_dir(self) -> Iterator[Path]:
+        """Overrides the module-level watch_dir fixture with a large tree.
+
+        Uses tempfile.mkdtemp() rather than pytest's tmp_path for the same
+        reason as the default watch_dir fixture: Docker must be able to see
+        the real host path, which Bazel's sandboxed /tmp is not.
+        """
+        import shutil
+        import tempfile
+
+        d = Path(tempfile.mkdtemp(prefix="kc-test-idempotency-watch-"))
+        for i in range(self._FILE_COUNT):
+            (d / f"doc_{i:04d}.txt").write_text(f"content {i}")
+        yield d
+        shutil.rmtree(d, ignore_errors=True)
+
+    def _record_count(self, kafka_bootstrap_server: str) -> int:
+        tp = TopicPartition(_TOPIC, 0)
+        c = KafkaConsumer(
+            bootstrap_servers=kafka_bootstrap_server,
+            enable_auto_commit=False,
+            consumer_timeout_ms=2_000,
+            group_id=None,
+        )
+        c.assign([tp])
+        c.seek(tp, 0)
+        count = len(list(c))
+        c.close()
+        return count
+
+    def test_no_duplicate_records_across_multiple_polls(
+        self, kafka_connect_url: str, kafka_bootstrap_server: str, kafka_topic: str
+    ) -> None:
+        # Pre-create the output topic. Otherwise the connector's very first
+        # sends can race topic auto-creation, fail their exchange, and get
+        # legitimately reprocessed once on the next poll (GenericFileOnCompletion's
+        # rollback path) — a real but separate behaviour from the eviction bug
+        # this test targets, and it would make the count assertions flaky.
+        client = _kc_client(kafka_connect_url)
+        connector_name = f"test-filesource-idempotency-{uuid.uuid4().hex[:8]}"
+        config = render_filesystem_connector(
+            connector_name=connector_name,
+            connector_id=_CONNECTOR_ID,
+            watch_path="/watch",
+            namespace=_NAMESPACE,
+            namespace_id=_NAMESPACE_ID,
+            org_name=_ORG_NAME,
+            owner_id=_OWNER_ID,
+            # Production default is 10 minutes; only the poll rate is
+            # shortened here to keep the test fast. idempotent_cache_size is
+            # left at its real production default — that's what's under test.
+            poll_delay_ms=1000,
+        )
+        client.create_connector(config)
+        try:
+            wait_for_kc_connector(kafka_connect_url, connector_name, timeout=60)
+
+            def _reached_full_count() -> bool:
+                return self._record_count(kafka_bootstrap_server) >= self._FILE_COUNT
+
+            poll_until(_reached_full_count, timeout=120, interval=3.0)
+
+            # Kafka Connect source connectors are at-least-once by default
+            # here (no exactly-once support configured), so a handful of
+            # duplicates from in-flight redelivery during the initial burst
+            # scan is expected and not what this test targets. Sanity-check
+            # it's a handful, not a flood.
+            count_after_scan = self._record_count(kafka_bootstrap_server)
+            assert count_after_scan < self._FILE_COUNT * 1.05, (
+                f"Expected roughly {self._FILE_COUNT} records after the initial "
+                f"scan, got {count_after_scan} — more than ordinary at-least-once "
+                "redelivery would explain; looks like eviction-driven reprocessing."
+            )
+
+            # The eviction bug's actual signature is *unbounded, continuous*
+            # growth on every subsequent poll (verified manually: tens of
+            # thousands of duplicates within seconds, never plateauing) — so
+            # the real regression check is that the count stabilises once the
+            # initial burst settles, not that it hits an exact number.
+            time.sleep(4)  # let any residual at-least-once redelivery settle
+            count_a = self._record_count(kafka_bootstrap_server)
+            time.sleep(4)  # a few more 1s poll cycles
+            count_b = self._record_count(kafka_bootstrap_server)
+            assert count_b == count_a, (
+                f"Record count grew from {count_a} to {count_b} across "
+                "additional poll cycles — the idempotent repository is "
+                "evicting and reprocessing already-seen files."
+            )
+        finally:
+            try:
+                client.delete_connector(connector_name)
+            except Exception:
+                pass

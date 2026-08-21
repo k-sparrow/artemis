@@ -231,6 +231,8 @@ async def create_data_source(
         owner_id=str(owner_id),
         recursive=recursive,
         file_extensions=file_extensions,
+        idempotent_cache_size=settings.FILESOURCE_IDEMPOTENT_CACHE_SIZE,
+        poll_delay_ms=settings.FILESOURCE_POLL_DELAY_MS,
     )
 
     kc = _make_kafka_client()
