@@ -78,14 +78,15 @@ def _canonical_watch_path(path: str) -> str:
     A symlink and its target must collapse to the same dedup key (see
     dedup.py) — otherwise the connector's own path-based idempotency gap
     (a symlink and its target are "different files" to Camel) reopens here.
-    Also enforces that the resolved path stays under settings.WATCH_ROOT: a
-    symlink pointing outside the mounted watch tree is rejected rather than
-    silently followed.
+    Also enforces that the resolved path stays under one of
+    settings.WATCH_ROOTS: a symlink pointing outside every mounted watch tree
+    is rejected rather than silently followed. Deployments watching more than
+    one directory must list every root — see config.py's WATCH_ROOTS comment.
     """
     resolved = Path(path).resolve()
-    root = Path(settings.WATCH_ROOT).resolve()
-    if not resolved.is_relative_to(root):
-        raise PathEscapesWatchRootError(path, str(resolved))
+    roots = [Path(r).resolve() for r in settings.WATCH_ROOTS]
+    if not any(resolved.is_relative_to(root) for root in roots):
+        raise PathEscapesWatchRootError(path, str(resolved), settings.WATCH_ROOTS)
     return str(resolved)
 
 

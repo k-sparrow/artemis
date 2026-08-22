@@ -11,10 +11,14 @@ class PathNotFoundError(Exception):
 
 
 class PathEscapesWatchRootError(Exception):
-    def __init__(self, path: str, resolved: str) -> None:
+    def __init__(self, path: str, resolved: str, watch_roots: list[str]) -> None:
         self.path = path
         self.resolved = resolved
-        super().__init__(f"Resolved path escapes the watch root: {path} -> {resolved}")
+        self.watch_roots = watch_roots
+        super().__init__(
+            f"Resolved path escapes every configured watch root: {path} -> "
+            f"{resolved} (WATCH_ROOTS={watch_roots})"
+        )
 
 
 class UrlFetchError(Exception):

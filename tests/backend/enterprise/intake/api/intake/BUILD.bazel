@@ -28,6 +28,7 @@ py_test(
     srcs = ["test_intake.py"],
     deps = [
         ":conftest",
+        "//src/backend/enterprise/intake/api:config",
         "//src/backend/enterprise/intake/api:main",
         "//src/backend/enterprise/intake/api/intake:exceptions",
         "//src/backend/enterprise/intake/api/intake:schemas",

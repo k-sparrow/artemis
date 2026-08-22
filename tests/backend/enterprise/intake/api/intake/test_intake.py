@@ -24,6 +24,11 @@ from tests.backend.enterprise.intake.api.intake.conftest import (
     _OWNER_ID,
     _TASK_ID,
 )
+from src.backend.enterprise.intake.api.config import settings
+from src.backend.enterprise.intake.api.intake.exceptions import (
+    PathEscapesWatchRootError,
+)
+from src.backend.enterprise.intake.api.intake.service import _canonical_watch_path
 
 _GROUP_ID = uuid.uuid4()
 
@@ -384,3 +389,50 @@ class TestRequestValidation:
     def test_inline_missing_content_returns_422(self, client: TestClient) -> None:
         resp = _post(client, {"type": "inline"})
         assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
+# ---------------------------------------------------------------------------
+# WATCH_ROOTS allow-list (multi-root deployments — e.g. several NFS mounts)
+# ---------------------------------------------------------------------------
+
+
+class TestWatchRootAllowList:
+    """_canonical_watch_path() is pure logic (no I/O beyond Path.resolve(),
+    which doesn't require the path to exist) — tested directly rather than
+    through the container suite's real-filesystem symlink test, which covers
+    a different concern (actual symlink resolution against a real mount).
+    """
+
+    def test_path_under_first_configured_root_is_allowed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        root_a = tmp_path / "watch"
+        root_b = tmp_path / "proj" / "eng" / "ot2"
+        monkeypatch.setattr(settings, "WATCH_ROOTS", [str(root_a), str(root_b)])
+
+        result = _canonical_watch_path(str(root_a / "doc.txt"))
+
+        assert result == str(root_a / "doc.txt")
+
+    def test_path_under_second_configured_root_is_allowed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        root_a = tmp_path / "watch"
+        root_b = tmp_path / "proj" / "eng" / "ot2"
+        monkeypatch.setattr(settings, "WATCH_ROOTS", [str(root_a), str(root_b)])
+
+        result = _canonical_watch_path(str(root_b / "opentitan_repo" / "doc.md"))
+
+        assert result == str(root_b / "opentitan_repo" / "doc.md")
+
+    def test_path_outside_every_configured_root_is_rejected(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        root_a = tmp_path / "watch"
+        root_b = tmp_path / "proj" / "eng" / "ot2"
+        monkeypatch.setattr(settings, "WATCH_ROOTS", [str(root_a), str(root_b)])
+
+        with pytest.raises(PathEscapesWatchRootError) as exc_info:
+            _canonical_watch_path(str(tmp_path / "elsewhere" / "doc.txt"))
+
+        assert exc_info.value.watch_roots == [str(root_a), str(root_b)]
