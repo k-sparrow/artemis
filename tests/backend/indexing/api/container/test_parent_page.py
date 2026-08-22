@@ -396,3 +396,88 @@ async def test_delete_namespace_removes_all_pages(
     assert r.status_code == 204
 
     assert _page_keys_under(minio_client, f"{namespace}/") == []
+
+
+# ---------------------------------------------------------------------------
+# Reproduction: accidental namespace wipe via degraded (empty) chunk batch
+# ---------------------------------------------------------------------------
+#
+# Unlike test_delete_namespace_removes_all_pages above (a deliberate wipe via
+# DELETE /ingest), this reproduces an ACCIDENTAL one via an ordinary POST
+# /ingest whose chunk step came back empty for reasons unrelated to any other
+# object in the namespace (e.g. a docling-serve chunking failure that
+# succeeded at HTTP level but produced zero chunks).
+#
+# PagedInput.is_empty() (parent_page.py) only treats a call as an intentional
+# wipe when BOTH pages and chunks are empty. If pages is non-empty but
+# chunks is empty, the pipeline proceeds normally and delegates chunks=[] to
+# the inner upserter's aupsert([]), which calls LangChain's
+# aindex(docs_source=[], cleanup="scoped_full", source_id_key="obj_id").
+# Because there is nothing to iterate, the source-id set LangChain uses to
+# scope cleanup stays empty (not "contains this object's obj_id" — literally
+# empty), which becomes group_ids=[] in SQLRecordManager.list_keys/alist_keys.
+# `if group_ids:` treats an empty list as falsy and skips the group filter
+# entirely — so cleanup lists (and deletes) every key in the WHOLE namespace
+# predating the call, not just the empty-chunk object's own (nonexistent) keys.
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_empty_chunk_batch_does_not_wipe_other_objects_in_namespace(
+    client: httpx.AsyncClient,
+    minio_client: Minio,
+    qdrant_client: AsyncQdrantClient,
+    collection_name: str,
+):
+    """A second object's degraded (zero-chunk) ingest must not delete a
+    first, unrelated object's already-indexed vectors in the same namespace."""
+    namespace = uuid.uuid4()
+    obj_a, obj_b = uuid.uuid4(), uuid.uuid4()
+
+    # Object A: ingested normally and successfully first.
+    pages_a, chunks_a = _make_doc(obj_a)
+    ref_a = _seed_artifact(
+        minio_client,
+        namespace=namespace,
+        obj_id=obj_a,
+        pages=pages_a,
+        chunks=chunks_a,
+    )
+    await _ingest(client, namespace, ref_a)
+
+    points_before, _ = await qdrant_client.scroll(
+        collection_name=collection_name,
+        scroll_filter=_namespace_filter(namespace, obj_a),
+        with_payload=False,
+        limit=100,
+    )
+    assert len(points_before) == len(chunks_a), "sanity: object A indexed correctly"
+
+    # Object B: pages parsed fine, but chunking degraded to zero — the exact
+    # condition PagedInput.is_empty() does not catch.
+    pages_b = [
+        {
+            "obj_id": str(obj_b),
+            "page_no": 1,
+            "markdown": "# Some Page\nContent that failed to chunk.",
+        }
+    ]
+    ref_b = _seed_artifact(
+        minio_client,
+        namespace=namespace,
+        obj_id=obj_b,
+        pages=pages_b,
+        chunks=[],
+    )
+    await _ingest(client, namespace, ref_b)
+
+    points_after, _ = await qdrant_client.scroll(
+        collection_name=collection_name,
+        scroll_filter=_namespace_filter(namespace, obj_a),
+        with_payload=False,
+        limit=100,
+    )
+    assert len(points_after) == len(chunks_a), (
+        f"object A's vectors were wiped by object B's empty-chunk ingest: "
+        f"had {len(points_before)}, now {len(points_after)}"
+    )

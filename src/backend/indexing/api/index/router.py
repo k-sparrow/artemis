@@ -2,6 +2,8 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
+from langchain_core.documents import Document
+from opentelemetry.trace import Status, StatusCode, get_current_span
 
 from src.backend.indexing.api.dependencies import (
     blob_store_factory_dependency,
@@ -10,7 +12,9 @@ from src.backend.indexing.api.dependencies import (
 from src.backend.indexing.api.index import service
 from src.backend.indexing.api.index.service import IngestRequest
 from src.lib.backend.logging import get_logger
-from src.lib.core.ingestion.types import UpsertResult
+from src.lib.core.ingestion.exceptions import DocumentProcessingException
+from src.lib.core.ingestion.indexer.simple import SimpleIndexer
+from src.lib.core.ingestion.types import ChunkType, ParsedChunk, UpsertResult
 
 
 __all__ = [
@@ -69,6 +73,79 @@ async def ingest_endpoint(
         chunks = body.chunks
         pages = []
 
+    # Stamped early (before the pipeline/RecordManager call, not just on
+    # failure) so any child span the RecordManager's own vectorstore delete
+    # call creates underneath this one — including a scoped_full cleanup —
+    # is traceable back to the object being ingested when it fires.
+    obj_id = str(pages[0].obj_id) if pages else (str(chunks[0].obj_id) if chunks else None)
+    span = get_current_span()
+    if span.is_recording():
+        span.set_attribute("artemis.namespace_id", str(namespace))
+        if obj_id is not None:
+            span.set_attribute("artemis.obj_id", obj_id)
+        if group_id is not None:
+            span.set_attribute("artemis.group_id", group_id)
+
+    def _fail(exc: DocumentProcessingException) -> None:
+        if span.is_recording():
+            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR, exc.message))
+        raise exc
+
+    if body.artifact_ref is not None:
+        if not pages:
+            _fail(
+                DocumentProcessingException(
+                    f"parsing produced zero pages for obj_id={obj_id} "
+                    f"in namespace={namespace}"
+                )
+            )
+        if not chunks:
+            page_docs = [
+                Document(
+                    page_content=page.markdown,
+                    metadata={"obj_id": str(page.obj_id), "page_no": page.page_no},
+                )
+                for page in pages
+            ]
+            fallback_docs = SimpleIndexer().process(page_docs)
+            if not fallback_docs:
+                _fail(
+                    DocumentProcessingException(
+                        f"chunking produced zero chunks for obj_id={obj_id}, and "
+                        "the fallback page-split also produced zero chunks "
+                        "(pages are likely whitespace-only)"
+                    )
+                )
+            logger.info(
+                "ingest_chunk_fallback_used",
+                obj_id=obj_id,
+                num_fallback_chunks=len(fallback_docs),
+            )
+            chunks = [
+                ParsedChunk(
+                    page_content=doc.page_content,
+                    source="fallback-page-split",
+                    type=ChunkType.TEXT,
+                    obj_id=UUID(doc.metadata["obj_id"]),
+                    page_no=doc.metadata.get("page_no"),
+                )
+                for doc in fallback_docs
+            ]
+    elif not chunks:
+        # Inline mode carries no pages, so there's no fallback split to try —
+        # and an empty list here is otherwise indistinguishable from
+        # PagedInput's own namespace-wipe signal (both pages and chunks
+        # empty), which ParentPagePipeline.aprocess() reads as "clear
+        # everything". A caller passing chunks=[] must never reach that
+        # path by accident.
+        _fail(
+            DocumentProcessingException(
+                f"inline chunks must be non-empty for namespace={namespace} "
+                "(an empty list is reserved for DELETE /ingest's namespace wipe)"
+            )
+        )
+
     logger.info("ingest_started", num_chunks=len(chunks), num_pages=len(pages))
     try:
         result = await service.a_index_and_ingest(
@@ -82,4 +159,7 @@ async def ingest_endpoint(
         return result
     except Exception as e:
         logger.error("ingest_failed", error=str(e))
+        if span.is_recording():
+            span.record_exception(e)
+            span.set_status(Status(StatusCode.ERROR, str(e)))
         raise

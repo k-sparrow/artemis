@@ -180,6 +180,40 @@ class TestIndexing:
 
         assert await _keys(store) == ["ns1/objA/p1", "ns1/objA/p2"]
 
+    @pytest.mark.asyncio
+    async def test_pages_with_zero_chunks_delegates_delete_not_empty_aprocess(
+        self,
+    ) -> None:
+        """A single object's chunking degrading to zero chunks must never reach
+        the inner pipeline as aprocess([]) — that reads as an unscoped full
+        cleanup to LangChain's aindex and would wipe the whole namespace."""
+        inner = RecordingInner()
+        pipeline, _, _ = await _make_pipeline(inner)
+
+        result = await pipeline.aprocess(
+            PagedInput(pages=[_page("objA", 1)], chunks=[])
+        )
+
+        assert inner.adelete_calls == ["objA"]
+        assert inner.aprocess_calls == []
+        assert result == UpsertResult(
+            num_added=0, num_updated=0, num_skipped=0, num_deleted=0, ids=[]
+        )
+
+    @pytest.mark.asyncio
+    async def test_pages_with_zero_chunks_across_multiple_objects_deletes_each(
+        self,
+    ) -> None:
+        inner = RecordingInner()
+        pipeline, _, _ = await _make_pipeline(inner)
+
+        await pipeline.aprocess(
+            PagedInput(pages=[_page("objA", 1), _page("objB", 1)], chunks=[])
+        )
+
+        assert sorted(inner.adelete_calls) == ["objA", "objB"]
+        assert inner.aprocess_calls == []
+
 
 class TestDeletion:
     @pytest.mark.asyncio

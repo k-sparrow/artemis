@@ -184,6 +184,22 @@ class TestIngestEndpoint:
         response = client.post("/ingest", params={"namespace": str(namespace)}, json={})
         assert response.status_code == 422
 
+    def test_empty_inline_chunks_returns_422_and_pipeline_never_called(
+        self, client: TestClient, namespace: uuid.UUID, mock_pipeline: AsyncMock
+    ) -> None:
+        """chunks=[] is NOT the same as omitting chunks — it must never reach
+        the pipeline as PagedInput(pages=[], chunks=[]), which reads as a
+        full namespace wipe (the same class of bug as the artifact_ref
+        guards, just via the other input mode)."""
+        response = client.post(
+            "/ingest", params={"namespace": str(namespace)}, json={"chunks": []}
+        )
+
+        assert response.status_code == 422
+        body = response.json()
+        assert body["type"] == "document_processing_error"
+        mock_pipeline.aprocess.assert_not_called()
+
     def test_missing_required_chunk_field_returns_422(
         self, client: TestClient, namespace: uuid.UUID
     ) -> None:
@@ -257,6 +273,78 @@ class TestIngestEndpoint:
         _post_chunks(client, namespace, chunks=chunks)
 
         assert len(_paged_arg(mock_pipeline).chunks) == 5
+
+
+class TestArtifactGuards:
+    """Guards on the artifact_ref path against the empty-chunk RecordManager
+    namespace wipe (a single object degrading to zero chunks must never reach
+    the pipeline with an empty batch — see ParentPagePipeline.aprocess)."""
+
+    def test_zero_pages_returns_422_and_pipeline_never_called(
+        self,
+        client: TestClient,
+        namespace: uuid.UUID,
+        store: InMemoryBlobStore,
+        mock_pipeline: AsyncMock,
+    ) -> None:
+        store.put("parsed-chunks/zero-pages.json", _artifact_bytes([_chunk()], pages=[]))
+
+        response = _post_artifact_ref(
+            client, namespace, bucket="parsed-chunks", key="parsed-chunks/zero-pages.json"
+        )
+
+        assert response.status_code == 422
+        body = response.json()
+        assert body["type"] == "document_processing_error"
+        assert "zero pages" in body["detail"]
+        mock_pipeline.aprocess.assert_not_called()
+
+    def test_zero_chunks_whitespace_only_pages_returns_422_after_fallback(
+        self,
+        client: TestClient,
+        namespace: uuid.UUID,
+        store: InMemoryBlobStore,
+        mock_pipeline: AsyncMock,
+    ) -> None:
+        store.put(
+            "parsed-chunks/whitespace.json",
+            _artifact_bytes([], pages=[_page("   \n\n   ")]),
+        )
+
+        response = _post_artifact_ref(
+            client, namespace, bucket="parsed-chunks", key="parsed-chunks/whitespace.json"
+        )
+
+        assert response.status_code == 422
+        body = response.json()
+        assert body["type"] == "document_processing_error"
+        assert "fallback page-split" in body["detail"]
+        mock_pipeline.aprocess.assert_not_called()
+
+    def test_zero_chunks_real_page_content_falls_back_and_succeeds(
+        self,
+        client: TestClient,
+        namespace: uuid.UUID,
+        store: InMemoryBlobStore,
+        mock_pipeline: AsyncMock,
+    ) -> None:
+        store.put(
+            "parsed-chunks/fallback.json",
+            _artifact_bytes(
+                [],
+                pages=[_page("# Real heading\n\nSome real body content to split.")],
+            ),
+        )
+
+        response = _post_artifact_ref(
+            client, namespace, bucket="parsed-chunks", key="parsed-chunks/fallback.json"
+        )
+
+        assert response.status_code == 200
+        mock_pipeline.aprocess.assert_called_once()
+        paged = _paged_arg(mock_pipeline)
+        assert len(paged.chunks) >= 1
+        assert all(chunk.metadata["obj_id"] == str(OBJ_ID) for chunk in paged.chunks)
 
 
 class TestDeleteEndpoint:

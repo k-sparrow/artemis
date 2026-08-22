@@ -325,7 +325,28 @@ def call_indexing_service(
                 params=params,
                 json={"artifact_ref": artifact_ref.model_dump(mode="json")},
             )
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                # httpx.HTTPStatusError's own str() is status/URL only — the
+                # indexing service's actual detail message (e.g. why /ingest
+                # rejected this artifact) never survives into
+                # OutboxTask.on_failure's failure_reason otherwise. Re-raise
+                # the same type (not a new exception class) so the 5xx-retry
+                # /4xx-permanent branching in the index task, which checks
+                # isinstance(exc, httpx.HTTPStatusError) and
+                # exc.response.status_code, keeps working unchanged.
+                try:
+                    detail = response.json().get("detail")
+                except Exception:
+                    detail = None
+                if detail:
+                    raise httpx.HTTPStatusError(
+                        f"{exc}. detail={detail!r}",
+                        request=exc.request,
+                        response=exc.response,
+                    ) from exc
+                raise
             return response.json()
 
     with _tracer.start_as_current_span("http.indexing_service"):

@@ -11,6 +11,7 @@ import logging
 import uuid
 from unittest.mock import MagicMock
 
+import httpx
 import pybreaker
 import pytest
 import respx
@@ -144,6 +145,55 @@ class TestCallIndexingService:
                 timeout=5.0,
                 logger=_logger,
             )
+
+    @respx.mock
+    def test_4xx_detail_preserved_in_exception_message(self) -> None:
+        """httpx.HTTPStatusError's own str() is status/URL only — the indexing
+        service's actual detail (what OutboxTask.on_failure ends up storing as
+        ingestion_status.failure_reason) must survive into the raised
+        exception's message, and the raised exception must still be an
+        httpx.HTTPStatusError so the index task's 5xx-retry/4xx-permanent
+        branching (isinstance check) keeps working."""
+        respx.post(f"{_INDEXING_URL}/ingest").mock(
+            return_value=Response(
+                422,
+                json={
+                    "detail": "chunking produced zero chunks for obj_id=...",
+                    "type": "document_processing_error",
+                },
+            )
+        )
+
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            call_indexing_service(
+                artifact_ref=_ARTIFACT_REF,
+                namespace_id=self._NAMESPACE,
+                ingestion_url=_INDEXING_URL,
+                timeout=5.0,
+                logger=_logger,
+            )
+
+        assert "chunking produced zero chunks" in str(exc_info.value)
+        assert exc_info.value.response.status_code == 422
+
+    @respx.mock
+    def test_non_json_error_body_still_raises_original(self) -> None:
+        """A 4xx with a non-JSON body must not blow up detail-extraction — the
+        original httpx.HTTPStatusError still propagates."""
+        respx.post(f"{_INDEXING_URL}/ingest").mock(
+            return_value=Response(500, text="upstream gateway error")
+        )
+
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            call_indexing_service(
+                artifact_ref=_ARTIFACT_REF,
+                namespace_id=self._NAMESPACE,
+                ingestion_url=_INDEXING_URL,
+                timeout=5.0,
+                logger=_logger,
+            )
+
+        assert exc_info.value.response.status_code == 500
 
 
 # ---------------------------------------------------------------------------

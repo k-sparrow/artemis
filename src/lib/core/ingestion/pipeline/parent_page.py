@@ -138,6 +138,29 @@ class ParentPagePipeline(BasePipeline[PagedInput]):
         self._stamp_parents(pages, chunks)
 
         # 4. Delegate embedding to the inner pipeline (algorithm untouched).
+        #
+        # chunks == [] here is NOT the namespace-wipe case (data.is_empty() is
+        # already False, since pages is non-empty) — it means these specific
+        # object(s) legitimately have zero chunks this run. self._inner.aprocess([])
+        # would call the upserter's aupsert([]), which calls LangChain's
+        # aindex(docs_source=[], cleanup="scoped_full", ...): with nothing to
+        # iterate, its internal source-id set stays empty, becoming
+        # group_ids=[] in SQLRecordManager.list_keys/alist_keys — an empty
+        # list reads as falsy there, so the group filter is skipped entirely
+        # and cleanup reaps every key in the WHOLE namespace, not just these
+        # objects'. adelete_source is already correctly, individually scoped
+        # (group_ids=[source], never empty) for both Simple and SemiStructured
+        # upserters, so use that instead — this exact path caused a production
+        # namespace-wide vector wipe (a single object's chunking degrading to
+        # zero chunks was enough to reap every other object's vectors too).
+        if not chunks:
+            obj_ids = {page.metadata[_OBJ_ID_FIELD] for page in pages}
+            for obj_id in obj_ids:
+                await self._inner.adelete_source(obj_id)
+            return UpsertResult(
+                num_added=0, num_updated=0, num_skipped=0, num_deleted=0, ids=[]
+            )
+
         return await self._inner.aprocess(chunks)
 
     async def adelete_source(self, source: str) -> None:
