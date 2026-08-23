@@ -692,7 +692,14 @@ services:
     ports:
       - "5001:5001"
     healthcheck:
-      test: wget http://localhost:5001/health || exit 1
+      # -O /dev/null -q: plain `wget URL` (no -O) tries to save the response
+      # body to a file named "health" in the container's cwd, which the
+      # non-root app-root user can't write to -- so it exits 1 even on a real
+      # 200, and every dependent service's depends_on: condition:
+      # service_healthy blocks forever despite the service actually being up
+      # (confirmed live: /health and /readyz both return real 200s the whole
+      # time Docker reports this container unhealthy).
+      test: wget -O /dev/null -q http://localhost:5001/health || exit 1
       interval: 20s
       timeout: 20s
       retries: 5
