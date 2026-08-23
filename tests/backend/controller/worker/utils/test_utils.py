@@ -291,6 +291,22 @@ class TestCircuitBreakers:
 
             assert parsing_breaker.current_state == "closed"
 
+    def test_429_does_not_open_breaker(self) -> None:
+        """docling-serve queue-full backpressure (429) is expected, not a
+        system failure — it must not count toward fail_max, or the breaker
+        would trip on healthy backpressure and override the dedicated
+        429-retry policy in submit_parse/submit_chunk with a much shorter
+        (~45min) breaker-recovery budget."""
+        with respx.mock:
+            respx.get(f"{_PARSING_URL}/v1/parse/status/stub-task-id").mock(
+                return_value=Response(429)
+            )
+            for _ in range(5):  # well past fail_max=3
+                with pytest.raises(httpx.HTTPStatusError):
+                    _parse()
+
+            assert parsing_breaker.current_state == "closed"
+
     def test_state_transition_logged_on_open(self, caplog) -> None:
         with caplog.at_level(
             logging.WARNING, logger="src.backend.controller.worker.utils"

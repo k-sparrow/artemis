@@ -73,11 +73,21 @@ class _LoggingListener(pybreaker.CircuitBreakerListener):
         )
 
 
+def _is_queue_backpressure(exc: BaseException) -> bool:
+    """docling-serve's 429 (DOCLING_SERVE_ENG_RAY_ENABLE_QUEUE_LIMIT_REJECTION)
+    means its Ray task queue is full — expected backpressure, not a system
+    failure, so it must not count toward the breaker tripping open. The
+    calling tasks (submit_parse/submit_chunk) give it its own generous,
+    non-exponential retry policy instead."""
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429
+
+
 parsing_breaker = pybreaker.CircuitBreaker(
     fail_max=3,
     reset_timeout=120,
     name="parsing",
     listeners=[_LoggingListener()],
+    exclude=[_is_queue_backpressure],
 )
 
 indexing_breaker = pybreaker.CircuitBreaker(

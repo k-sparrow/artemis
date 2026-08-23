@@ -116,7 +116,13 @@ _DOCLING_RAY_ENGINE_ENV_BLOCK = (
     "      # chain) — upstream's tight defaults (1h task / 5min document) truncate\n"
     "      # large PDFs converting under the Ray engine.\n"
     '      DOCLING_SERVE_ENG_RAY_TASK_TIMEOUT: "86400.0"\n'
-    '      DOCLING_SERVE_ENG_RAY_DOCUMENT_TIMEOUT: "86400.0"'
+    '      DOCLING_SERVE_ENG_RAY_DOCUMENT_TIMEOUT: "86400.0"\n'
+    "      # Active backpressure: reject with 429 past 50 queued tasks/tenant,\n"
+    "      # rather than queueing unboundedly. The worker's submit_parse/submit_chunk\n"
+    "      # (src/backend/controller/worker/tasks.py) treat 429 as expected\n"
+    "      # backpressure — flat-delay retry, not the breaker/5xx failure path.\n"
+    '      DOCLING_SERVE_ENG_RAY_DEFAULT_MAX_QUEUED_TASKS: "50"\n'
+    '      DOCLING_SERVE_ENG_RAY_ENABLE_QUEUE_LIMIT_REJECTION: "true"'
 )
 
 # docling-serve OTel gating. compose interpolates every scalar in the file —

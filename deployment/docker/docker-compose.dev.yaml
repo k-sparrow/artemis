@@ -723,6 +723,12 @@ services:
       # large PDFs converting under the Ray engine.
       DOCLING_SERVE_ENG_RAY_TASK_TIMEOUT: "86400.0"
       DOCLING_SERVE_ENG_RAY_DOCUMENT_TIMEOUT: "86400.0"
+      # Active backpressure: reject with 429 past 50 queued tasks/tenant,
+      # rather than queueing unboundedly. The worker's submit_parse/submit_chunk
+      # (src/backend/controller/worker/tasks.py) treat 429 as expected
+      # backpressure — flat-delay retry, not the breaker/5xx failure path.
+      DOCLING_SERVE_ENG_RAY_DEFAULT_MAX_QUEUED_TASKS: "50"
+      DOCLING_SERVE_ENG_RAY_ENABLE_QUEUE_LIMIT_REJECTION: "true"
     deploy: # This section is for compatibility with Swarm
       resources:
         reservations:

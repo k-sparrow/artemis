@@ -239,6 +239,15 @@ class TestSubmitParse:
             self._run(mock_submit)
         assert exc_info.value.response.status_code == 503
 
+    def test_429_schedules_backpressure_retry(self) -> None:
+        """docling-serve queue-full (DOCLING_SERVE_ENG_RAY_ENABLE_QUEUE_LIMIT_REJECTION)
+        must retry, not permanently fail — distinct from the generic 4xx
+        branch below."""
+        mock_submit = MagicMock(side_effect=_make_http_error(429))
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            self._run(mock_submit)
+        assert exc_info.value.response.status_code == 429
+
     def test_4xx_reraises_permanently(self) -> None:
         mock_submit = MagicMock(side_effect=_make_http_error(422))
         with pytest.raises(httpx.HTTPStatusError) as exc_info:
@@ -568,6 +577,13 @@ class TestSubmitChunk:
         with pytest.raises(httpx.HTTPStatusError) as exc_info:
             self._run(mock)
         assert exc_info.value.response.status_code == 503
+
+    def test_429_schedules_backpressure_retry(self) -> None:
+        """Same reasoning as TestSubmitParse's version above."""
+        mock = MagicMock(side_effect=_make_http_error(429))
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            self._run(mock)
+        assert exc_info.value.response.status_code == 429
 
     def test_4xx_reraises_permanently(self) -> None:
         mock = MagicMock(side_effect=_make_http_error(422))

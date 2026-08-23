@@ -682,6 +682,18 @@ def submit_parse(
                 max_retries=20,
             )
         except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 429:
+                # docling-serve's Ray task queue is full — expected
+                # backpressure, not a failure. Flat delay (no exponential
+                # growth, so a job's wait never compounds past a fresher
+                # job's) and a 24h-ceiling budget matching
+                # DOCLING_SERVE_ENG_RAY_TASK_TIMEOUT — waiting in line should
+                # eventually resolve into a running task.
+                raise self.retry(
+                    exc=exc,
+                    countdown=300 + random.uniform(0, 30),
+                    max_retries=288,
+                )
             if exc.response.status_code >= 500:
                 backoff = min(120, 2**self.request.retries)
                 raise self.retry(
@@ -991,6 +1003,14 @@ def submit_chunk(
             max_retries=20,
         )
     except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 429:
+            # Same reasoning as submit_parse above — queue-full backpressure,
+            # not a failure. Flat 24h-ceiling budget, no exponential growth.
+            raise self.retry(
+                exc=exc,
+                countdown=300 + random.uniform(0, 30),
+                max_retries=288,
+            )
         if exc.response.status_code >= 500:
             backoff = min(120, 2**self.request.retries)
             raise self.retry(
