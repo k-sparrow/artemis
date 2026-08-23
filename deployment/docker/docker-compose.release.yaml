@@ -6,6 +6,13 @@
 #   ARTEMIS_VERSION=v1.0.0-alpha.2 docker compose \
 #     -f deployment/docker/docker-compose.release.yaml --profile <p> up -d
 #
+# DOCLING_IMAGE is the one exception to ${ARTEMIS_VERSION}: it's pinned at
+# *build* time from //tools/oci/images/docling's own STABLE_VERSION stamp,
+# not deploy time. This checked-in file was generated unstamped, so it
+# shows the 0.0.0 placeholder below — regenerate with
+# `bazel build //tools/docker:docker_compose_release --stamp` for a real
+# release to get a traceable version instead.
+#
 # WARNING: still carries the template's DEV secrets/passwords — override them
 # (JWT_SECRET, MinIO/Postgres creds) before any non-staging use.
 # ============================================================================
@@ -531,7 +538,7 @@ services:
   # ---------------------------------------------------------------------------
   docling-model-downloader:
     profiles: [ai]
-    image: "artemis/docling-serve-ray-patched:latest"
+    image: "artemis/docling-serve-ray-patched:0.0.0"
     container_name: docling-model-downloader
     user: "0"
     entrypoint: /opt/app-root/bin/docling-tools
@@ -604,7 +611,7 @@ services:
       - default
   ray-head:
     profiles: [ai]
-    image: "artemis/docling-serve-ray-patched:latest"
+    image: "artemis/docling-serve-ray-patched:0.0.0"
     container_name: ray-head
     command: >
       ray start --head --port=6379 --dashboard-host=0.0.0.0 --num-cpus=0 --block
@@ -632,7 +639,7 @@ services:
       - default
   ray-worker:
     profiles: [ai]
-    image: "artemis/docling-serve-ray-patched:latest"
+    image: "artemis/docling-serve-ray-patched:0.0.0"
     # No container_name: Compose refuses to scale a service with a fixed
     # name. Bring this up with `docker compose ... up --scale ray-worker=2`
     # (plain `up` starts just 1) — every replica is identical, each carrying
@@ -665,7 +672,7 @@ services:
       - default
   docling-serve:
     profiles: [ai]
-    image: "artemis/docling-serve-ray-patched:latest"
+    image: "artemis/docling-serve-ray-patched:0.0.0"
     container_name: docling-serve
     healthcheck:
       test: wget http://localhost:5001/health || exit 1
@@ -724,11 +731,21 @@ services:
       # large PDFs converting under the Ray engine.
       DOCLING_SERVE_ENG_RAY_TASK_TIMEOUT: "86400.0"
       DOCLING_SERVE_ENG_RAY_DOCUMENT_TIMEOUT: "86400.0"
-      # Active backpressure: reject with 429 past 50 queued tasks/tenant,
-      # rather than queueing unboundedly. The worker's submit_parse/submit_chunk
-      # (src/backend/controller/worker/tasks.py) treat 429 as expected
-      # backpressure — flat-delay retry, not the breaker/5xx failure path.
-      DOCLING_SERVE_ENG_RAY_DEFAULT_MAX_QUEUED_TASKS: "50"
+      # Active backpressure: reject past 50 queued tasks/tenant, rather than
+      # queueing unboundedly. NOTE the var name is MAX_QUEUED_TASKS, not
+      # DEFAULT_MAX_QUEUED_TASKS — the latter is what .env.example's own main
+      # reference list (wrongly) documents; only its buried "Medium deployment"
+      # example has the name that actually matches the pydantic field. Confirmed
+      # live: the wrong name is silently swallowed (extra="ignore"), so the
+      # limit silently never enforces at all. Rejection itself currently
+      # returns a bare 500 on stock docling-serve — QueueLimitExceededError
+      # has no registered FastAPI exception handler (upstream issue #581,
+      # unmerged fix in PR #583) — patched to a real 429 in the
+      # docling-serve-ray fork image this compose file actually runs; the
+      # worker's submit_parse/submit_chunk (src/backend/controller/worker/tasks.py)
+      # treat 429 as expected backpressure — flat-delay retry, not the
+      # breaker/5xx failure path.
+      DOCLING_SERVE_ENG_RAY_MAX_QUEUED_TASKS: "50"
       DOCLING_SERVE_ENG_RAY_ENABLE_QUEUE_LIMIT_REJECTION: "true"
     deploy: # This section is for compatibility with Swarm
       resources:

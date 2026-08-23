@@ -77,7 +77,9 @@ async def ingest_endpoint(
     # failure) so any child span the RecordManager's own vectorstore delete
     # call creates underneath this one — including a scoped_full cleanup —
     # is traceable back to the object being ingested when it fires.
-    obj_id = str(pages[0].obj_id) if pages else (str(chunks[0].obj_id) if chunks else None)
+    obj_id = (
+        str(pages[0].obj_id) if pages else (str(chunks[0].obj_id) if chunks else None)
+    )
     span = get_current_span()
     if span.is_recording():
         span.set_attribute("artemis.namespace_id", str(namespace))

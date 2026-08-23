@@ -134,11 +134,21 @@ _DOCLING_RAY_ENGINE_ENV_BLOCK = (
     "      # large PDFs converting under the Ray engine.\n"
     '      DOCLING_SERVE_ENG_RAY_TASK_TIMEOUT: "86400.0"\n'
     '      DOCLING_SERVE_ENG_RAY_DOCUMENT_TIMEOUT: "86400.0"\n'
-    "      # Active backpressure: reject with 429 past 50 queued tasks/tenant,\n"
-    "      # rather than queueing unboundedly. The worker's submit_parse/submit_chunk\n"
-    "      # (src/backend/controller/worker/tasks.py) treat 429 as expected\n"
-    "      # backpressure — flat-delay retry, not the breaker/5xx failure path.\n"
-    '      DOCLING_SERVE_ENG_RAY_DEFAULT_MAX_QUEUED_TASKS: "50"\n'
+    "      # Active backpressure: reject past 50 queued tasks/tenant, rather than\n"
+    "      # queueing unboundedly. NOTE the var name is MAX_QUEUED_TASKS, not\n"
+    "      # DEFAULT_MAX_QUEUED_TASKS — the latter is what .env.example's own main\n"
+    '      # reference list (wrongly) documents; only its buried "Medium deployment"\n'
+    "      # example has the name that actually matches the pydantic field. Confirmed\n"
+    '      # live: the wrong name is silently swallowed (extra="ignore"), so the\n'
+    "      # limit silently never enforces at all. Rejection itself currently\n"
+    "      # returns a bare 500 on stock docling-serve — QueueLimitExceededError\n"
+    "      # has no registered FastAPI exception handler (upstream issue #581,\n"
+    "      # unmerged fix in PR #583) — patched to a real 429 in the\n"
+    "      # docling-serve-ray fork image this compose file actually runs; the\n"
+    "      # worker's submit_parse/submit_chunk (src/backend/controller/worker/tasks.py)\n"
+    "      # treat 429 as expected backpressure — flat-delay retry, not the\n"
+    "      # breaker/5xx failure path.\n"
+    '      DOCLING_SERVE_ENG_RAY_MAX_QUEUED_TASKS: "50"\n'
     '      DOCLING_SERVE_ENG_RAY_ENABLE_QUEUE_LIMIT_REJECTION: "true"'
 )
 
@@ -180,6 +190,13 @@ _RELEASE_BANNER = (
     "#\n"
     "#   ARTEMIS_VERSION=v1.0.0-alpha.2 docker compose \\\n"
     "#     -f deployment/docker/docker-compose.release.yaml --profile <p> up -d\n"
+    "#\n"
+    "# DOCLING_IMAGE is the one exception to ${ARTEMIS_VERSION}: it's pinned at\n"
+    "# *build* time from //tools/oci/images/docling's own STABLE_VERSION stamp,\n"
+    "# not deploy time. This checked-in file was generated unstamped, so it\n"
+    "# shows the 0.0.0 placeholder below — regenerate with\n"
+    "# `bazel build //tools/docker:docker_compose_release --stamp` for a real\n"
+    "# release to get a traceable version instead.\n"
     "#\n"
     "# WARNING: still carries the template's DEV secrets/passwords — override them\n"
     "# (JWT_SECRET, MinIO/Postgres creds) before any non-staging use.\n"
@@ -361,8 +378,10 @@ def _strip_unpublished_ports(lines: list[str]) -> list[str]:
     return out
 
 
-def generate(template: str, mode: str) -> str:
+def generate(template: str, mode: str, docling_image: str | None = None) -> str:
     subs = _SUBS_BY_MODE[mode]
+    if docling_image:
+        subs = {**subs, "DOCLING_IMAGE": docling_image}
     result = template
     for key, value in subs.items():
         result = result.replace("{" + key + "}", value)
@@ -400,12 +419,23 @@ def main() -> None:
             "$BUILD_WORKSPACE_DIRECTORY/deployment/docker/docker-compose.dev.yaml."
         ),
     )
+    parser.add_argument(
+        "--docling-image",
+        default=None,
+        help=(
+            "Override DOCLING_IMAGE (release mode only) — the "
+            "STABLE_VERSION-stamped tag from "
+            "//tools/oci/images/docling:tarball.tags, so release pins a real "
+            "version instead of the mutable :latest dev tag. Falls back to "
+            "the mode's own default when omitted."
+        ),
+    )
     args = parser.parse_args()
 
     with open(args.template, encoding="utf-8") as fh:
         template = fh.read()
 
-    content = generate(template, args.mode)
+    content = generate(template, args.mode, docling_image=args.docling_image)
 
     if args.output:
         output_path = args.output

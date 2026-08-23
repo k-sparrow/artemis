@@ -287,10 +287,15 @@ class TestArtifactGuards:
         store: InMemoryBlobStore,
         mock_pipeline: AsyncMock,
     ) -> None:
-        store.put("parsed-chunks/zero-pages.json", _artifact_bytes([_chunk()], pages=[]))
+        store.put(
+            "parsed-chunks/zero-pages.json", _artifact_bytes([_chunk()], pages=[])
+        )
 
         response = _post_artifact_ref(
-            client, namespace, bucket="parsed-chunks", key="parsed-chunks/zero-pages.json"
+            client,
+            namespace,
+            bucket="parsed-chunks",
+            key="parsed-chunks/zero-pages.json",
         )
 
         assert response.status_code == 422
@@ -312,7 +317,10 @@ class TestArtifactGuards:
         )
 
         response = _post_artifact_ref(
-            client, namespace, bucket="parsed-chunks", key="parsed-chunks/whitespace.json"
+            client,
+            namespace,
+            bucket="parsed-chunks",
+            key="parsed-chunks/whitespace.json",
         )
 
         assert response.status_code == 422

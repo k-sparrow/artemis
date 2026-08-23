@@ -33,11 +33,29 @@ genrule(
 
 # Release/staging artifact — tagged artemis images (${ARTEMIS_VERSION}), dev-tools
 # dropped, gateway-only ingress. Consumed by //deployment/docker:docker_compose.update.
+#
+# DOCLING_IMAGE is the one image reference not covered by ${ARTEMIS_VERSION} --
+# it's an OCI-patched third-party base image (see //tools/oci/images/docling),
+# versioned independently via that target's own stamped_tags. This genrule
+# reads the last line of :tarball.tags (the STABLE_VERSION-stamped entry, not
+# the static :latest dev tag) and passes it through so the release compose
+# output pins a real, traceable version instead of a mutable tag. Only
+# resolves to a real version under `bazel build ... --stamp`; unstamped
+# builds fall back to the same 0.0.0 placeholder stamped_tags always uses.
 genrule(
     name = "docker_compose_release",
-    srcs = ["docker-compose.tmpl.yaml"],
+    srcs = [
+        "docker-compose.tmpl.yaml",
+        "//tools/oci/images/docling:tarball.tags",
+    ],
     outs = ["docker-compose.release.yaml"],
-    cmd = "$(location :compose_generator) --mode release --template $(location :docker-compose.tmpl.yaml) --output $@",
+    cmd = """
+    docling_image=$$(tail -n1 $(location //tools/oci/images/docling:tarball.tags))
+    $(location :compose_generator) --mode release \
+        --template $(location :docker-compose.tmpl.yaml) \
+        --docling-image "$$docling_image" \
+        --output $@
+    """,
     tools = [":compose_generator"],
     visibility = ["//deployment/docker:__pkg__"],
 )

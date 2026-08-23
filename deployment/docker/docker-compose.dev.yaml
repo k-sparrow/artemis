@@ -748,11 +748,21 @@ services:
       # large PDFs converting under the Ray engine.
       DOCLING_SERVE_ENG_RAY_TASK_TIMEOUT: "86400.0"
       DOCLING_SERVE_ENG_RAY_DOCUMENT_TIMEOUT: "86400.0"
-      # Active backpressure: reject with 429 past 50 queued tasks/tenant,
-      # rather than queueing unboundedly. The worker's submit_parse/submit_chunk
-      # (src/backend/controller/worker/tasks.py) treat 429 as expected
-      # backpressure — flat-delay retry, not the breaker/5xx failure path.
-      DOCLING_SERVE_ENG_RAY_DEFAULT_MAX_QUEUED_TASKS: "50"
+      # Active backpressure: reject past 50 queued tasks/tenant, rather than
+      # queueing unboundedly. NOTE the var name is MAX_QUEUED_TASKS, not
+      # DEFAULT_MAX_QUEUED_TASKS — the latter is what .env.example's own main
+      # reference list (wrongly) documents; only its buried "Medium deployment"
+      # example has the name that actually matches the pydantic field. Confirmed
+      # live: the wrong name is silently swallowed (extra="ignore"), so the
+      # limit silently never enforces at all. Rejection itself currently
+      # returns a bare 500 on stock docling-serve — QueueLimitExceededError
+      # has no registered FastAPI exception handler (upstream issue #581,
+      # unmerged fix in PR #583) — patched to a real 429 in the
+      # docling-serve-ray fork image this compose file actually runs; the
+      # worker's submit_parse/submit_chunk (src/backend/controller/worker/tasks.py)
+      # treat 429 as expected backpressure — flat-delay retry, not the
+      # breaker/5xx failure path.
+      DOCLING_SERVE_ENG_RAY_MAX_QUEUED_TASKS: "50"
       DOCLING_SERVE_ENG_RAY_ENABLE_QUEUE_LIMIT_REJECTION: "true"
     deploy: # This section is for compatibility with Swarm
       resources:
