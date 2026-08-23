@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pybreaker
 import pytest
-from celery.exceptions import MaxRetriesExceededError, Retry  # noqa: F401
+from celery.exceptions import MaxRetriesExceededError, Retry
 from sqlalchemy.exc import DatabaseError
 
 from src.backend.controller.lib.schemas import S3Details, SourceDetails
@@ -247,6 +247,28 @@ class TestSubmitParse:
         with pytest.raises(httpx.HTTPStatusError) as exc_info:
             self._run(mock_submit)
         assert exc_info.value.response.status_code == 429
+
+    def test_429_retry_uses_flat_delay_and_24h_budget(self) -> None:
+        """Pins the actual policy, not just "retries eventually": flat
+        countdown (no 2**retries growth — a waiting job's delay must never
+        compound past a fresher job's) and a 288-retry budget (288 x 300s =
+        24h, matching DOCLING_SERVE_ENG_RAY_TASK_TIMEOUT)."""
+        mock_submit = MagicMock(side_effect=_make_http_error(429))
+        with (
+            patch("src.backend.controller.worker.tasks.call_parse_submit", mock_submit),
+            patch("src.backend.controller.worker.tasks.claims.ensure_stage_row"),
+            patch(
+                "src.backend.controller.worker.tasks.SessionLocal",
+                return_value=MagicMock(),
+            ),
+            patch.object(submit_parse, "retry", side_effect=Retry) as mock_retry,
+        ):
+            with pytest.raises(Retry):
+                submit_parse.run(_SUBMIT_PARSE_S3, **_SUBMIT_PARSE_KWARGS)
+
+        retry_kwargs = mock_retry.call_args.kwargs
+        assert retry_kwargs["max_retries"] == 288
+        assert 300 <= retry_kwargs["countdown"] <= 330
 
     def test_4xx_reraises_permanently(self) -> None:
         mock_submit = MagicMock(side_effect=_make_http_error(422))
@@ -584,6 +606,20 @@ class TestSubmitChunk:
         with pytest.raises(httpx.HTTPStatusError) as exc_info:
             self._run(mock)
         assert exc_info.value.response.status_code == 429
+
+    def test_429_retry_uses_flat_delay_and_24h_budget(self) -> None:
+        """Same reasoning as TestSubmitParse's version above."""
+        mock = MagicMock(side_effect=_make_http_error(429))
+        with (
+            patch("src.backend.controller.worker.tasks.call_chunk_submit", mock),
+            patch.object(submit_chunk, "retry", side_effect=Retry) as mock_retry,
+        ):
+            with pytest.raises(Retry):
+                submit_chunk.run(_RESOLVE_RESULT, **_KWARGS)
+
+        retry_kwargs = mock_retry.call_args.kwargs
+        assert retry_kwargs["max_retries"] == 288
+        assert 300 <= retry_kwargs["countdown"] <= 330
 
     def test_4xx_reraises_permanently(self) -> None:
         mock = MagicMock(side_effect=_make_http_error(422))
