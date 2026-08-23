@@ -1,16 +1,17 @@
-"""Reproducible checks that the docling-jobkit Ray-serde patch is actually what
-ships — see //tools/oci/images/docling for the image build itself and the
-full root-cause writeup.
+"""Reproducible checks that the docling-jobkit Ray-serde patch and the
+docling-serve 429-handler patch are actually what ships — see
+//tools/oci/images/docling for the image build itself and the full
+root-cause writeups.
 
-1. models.py_patch_test: cheap, instant check that the patch source itself is
-   correct. Doesn't prove anything about the built image.
-2. test_ray_serde_patch_is_live: the one that actually matters — runs a real
-   import inside a real container of the built image. File-existence/content
-   checks at a path alone can't catch the class of bug this is guarding
-   against (a `docker load` layer merge silently shadowing the real
-   `docling_jobkit` site-packages tree with a sparse, unpatched one — see
-   //tools/oci/images/docling for the full root-cause writeup); only an
-   actual import inside a real running container does.
+1. models.py_patch_test / app.py_patch_test: cheap, instant checks that the
+   patch source itself is correct. Don't prove anything about the built image.
+2. test_ray_serde_patch_is_live / test_queue_limit_exceeded_handler_patch_is_live:
+   the ones that actually matter — run a real import inside a real container
+   of the built image. File-existence/content checks at a path alone can't
+   catch the class of bug this is guarding against (a `docker load` layer
+   merge silently shadowing the real site-packages tree with a sparse,
+   unpatched one — see //tools/oci/images/docling for the full root-cause
+   writeup); only an actual import inside a real running container does.
 """
 
 load("@//tools/testing:pytest.bzl", py_test = "pytest_test")
@@ -25,6 +26,15 @@ assert_contains(
     name = "models.py_patch_test",
     actual = "//tools/oci/images/docling:models.py",
     expected = "chunk: DocumentChunk = Field(",
+)
+
+# Content check: the QueueLimitExceededError -> 429 handler is present in the
+# patch source (not proof it's live in the built image -- see
+# test_queue_limit_exceeded_handler_patch_is_live below for that).
+assert_contains(
+    name = "app.py_patch_test",
+    actual = "//tools/oci/images/docling:app.py",
+    expected = "async def queue_limit_exceeded_error_handler(",
 )
 
 # Prerequisite: bazel run //tools/oci/images/docling:tarball

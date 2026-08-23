@@ -1,7 +1,34 @@
 """Patched docling-serve image.
 
-Layers a one-line fix for an upstream docling-jobkit bug on top of the vanilla
-`docling-serve-cu128:v1.29.0` base: `SourceChunkConvertRequest.chunk` is typed as
+Layers two independent full-file patches on top of the vanilla
+`docling-serve-cu128:v1.29.0` base:
+
+  1. models.py (docling_jobkit) -- the Ray-serde fix, documented in full below.
+  2. app.py (docling_serve) -- `QueueLimitExceededError` (raised by
+     RayOrchestrator.enqueue when DOCLING_SERVE_ENG_RAY_ENABLE_QUEUE_LIMIT_REJECTION
+     rejects a full queue) has no registered FastAPI exception handler upstream,
+     so it surfaces as an unhandled 500 Internal Server Error instead of the
+     documented 429 Too Many Requests. Confirmed live against the real
+     v1.29.0-based image: with DOCLING_SERVE_ENG_RAY_MAX_QUEUED_TASKS=3, 17 of
+     20 concurrent /v1/convert/file/async requests all came back 500 with a raw
+     traceback in the logs, zero 429s. Without this patch, the worker's
+     submit_parse/submit_chunk 429-retry policy (src/backend/controller/worker/tasks.py)
+     never actually engages against real backpressure -- it falls into the
+     5xx branch instead, with the wrong (short, exponential) retry cadence,
+     and counts toward parsing_breaker's fail_max, tripping the breaker on
+     ordinary backpressure. Filed upstream as
+     docling-project/docling-serve#581; a fix exists
+     (docling-project/docling-serve#583) but is unmerged, unreviewed, and
+     additionally depends on a SystemCapacity class that doesn't exist in any
+     released docling-jobkit -- too large/unstable a surface to backport
+     wholesale, so app.py here mirrors just the handler shape from #583
+     (itself mirroring the existing RedisBackpressureError -> 503 handler
+     already in stock docling-serve), not the rest of that PR's
+     capacity-endpoint feature.
+
+## 1. models.py (docling_jobkit) -- Ray-serde fix
+
+A one-line fix for an upstream docling-jobkit bug: `SourceChunkConvertRequest.chunk` is typed as
 the *subscripted* generic `DocumentChunk[Any, Any]` instead of the bare
 `DocumentChunk` class. Pydantic coerces the field's value into a dynamically
 created parameterized class with no stable, importable qualname, which Ray
@@ -48,8 +75,23 @@ load("//tools/oci:stamped_tags.bzl", "stamped_tags")
 # real tree, and why targeting it silently drops the patch.
 _JOBKIT_RAY_MODELS_DIR = "opt/app-root/lib/python3.12/site-packages/docling_jobkit/orchestrators/ray"
 
+# NOT the site-packages path (unlike docling_jobkit above): docling_serve is
+# installed *editable* (PEP 660, via __editable__.docling_serve-1.29.0.pth ->
+# __editable___docling_serve_1_29_0_finder.py), so Python's import resolves
+# straight to this src path regardless of what's overlaid at site-packages --
+# confirmed by `python3 -c 'import docling_serve.app as m; print(m.__file__)'`
+# printing /opt/app-root/src/docling_serve/app.py inside the built image. A
+# site-packages overlay here would build byte-for-byte correct and just
+# silently never be imported, the same class of bug the lib/lib64 writeup
+# above describes, just via a different mechanism (editable install finder,
+# not a symlink).
+_SERVE_APP_DIR = "opt/app-root/src/docling_serve"
+
 # Referenced cross-package by //tests/oci/images/docling's assert_contains check.
-exports_files(["models.py"])
+exports_files([
+    "models.py",
+    "app.py",
+])
 
 mtree_spec(
     name = "models.py.spec",
@@ -74,10 +116,34 @@ tar(
     mtree = ":models.py.mtree",
 )
 
+mtree_spec(
+    name = "app.py.spec",
+    srcs = [":app.py"],
+)
+
+mtree_mutate(
+    name = "app.py.mtree",
+    group = "0",
+    mtree = ":app.py.spec",
+    # Same ownership reasoning as models.py.mtree above.
+    owner = "1001",
+    package_dir = _SERVE_APP_DIR,
+    strip_prefix = package_name(),
+)
+
+tar(
+    name = "app.py.pkg",
+    srcs = [":app.py"],
+    mtree = ":app.py.mtree",
+)
+
 oci_image(
     name = "image",
     base = "@docling-serve-cu128",
-    tars = [":models.py.pkg"],
+    tars = [
+        ":models.py.pkg",
+        ":app.py.pkg",
+    ],
     visibility = ["//tools/oci/images:__pkg__"],
 )
 
@@ -85,6 +151,13 @@ stamped_tags(
     name = "tarball.tags",
     dev_tags = ["latest"],
     repository = "artemis/docling-serve-ray-patched",
+    # //tools/docker:docker_compose_release reads this file's last line (the
+    # STABLE_VERSION-stamped tag) to pin DOCLING_IMAGE in the release compose
+    # output instead of the mutable :latest dev tag.
+    visibility = [
+        "//tools/docker:__pkg__",
+        "//tools/oci/images:__pkg__",
+    ],
 )
 
 oci_load(

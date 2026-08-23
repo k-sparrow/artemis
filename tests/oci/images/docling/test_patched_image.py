@@ -30,6 +30,16 @@ _CHECK_SCRIPT = (
     "print('OK: patch is live, imported from', m.__file__)\n"
 )
 
+_QUEUE_LIMIT_HANDLER_CHECK_SCRIPT = (
+    "import docling_serve.app as m\n"
+    "import inspect\n"
+    "src = inspect.getsource(m)\n"
+    "assert 'queue_limit_exceeded_error_handler' in src, "
+    "f'429 handler not live:\\n{src}'\n"
+    "assert 'HTTP_429_TOO_MANY_REQUESTS' in src, f'429 status not live:\\n{src}'\n"
+    "print('OK: patch is live, imported from', m.__file__)\n"
+)
+
 
 @pytest.mark.integration
 def test_ray_serde_patch_is_live() -> None:
@@ -38,6 +48,28 @@ def test_ray_serde_patch_is_live() -> None:
         output = client.containers.run(
             _IMAGE,
             ["python3", "-c", _CHECK_SCRIPT],
+            entrypoint=[],
+            remove=True,
+            stdout=True,
+            stderr=True,
+        )
+    except docker.errors.ContainerError as exc:
+        pytest.fail(f"patch check failed inside the image: {exc.stderr.decode()}")
+    assert b"OK: patch is live" in output, output.decode()
+
+
+@pytest.mark.integration
+def test_queue_limit_exceeded_handler_patch_is_live() -> None:
+    """QueueLimitExceededError has no registered exception handler in stock
+    docling-serve, so it propagates as an unhandled 500 instead of the
+    documented 429 (see tools/oci/images/docling BUILD.bazel for the full
+    root-cause writeup and confirmed-live reproduction, upstream issue
+    docling-project/docling-serve#581)."""
+    client = docker.from_env()
+    try:
+        output = client.containers.run(
+            _IMAGE,
+            ["python3", "-c", _QUEUE_LIMIT_HANDLER_CHECK_SCRIPT],
             entrypoint=[],
             remove=True,
             stdout=True,
