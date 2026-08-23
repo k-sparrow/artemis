@@ -110,7 +110,13 @@ _DOCLING_RAY_ENGINE_ENV_BLOCK = (
     '      DOCLING_SERVE_ENG_RAY_MAX_CONCURRENT_TASKS: "2"\n'
     "      # PDF page-slice fan-out is off by default upstream — opt in explicitly\n"
     '      DOCLING_SERVE_ENG_RAY_ENABLE_PDF_PAGE_SLICE_FANOUT: "true"\n'
-    '      DOCLING_SERVE_ENG_RAY_MAX_PAGE_SLICE_SIZE: "10"'
+    '      DOCLING_SERVE_ENG_RAY_MAX_PAGE_SLICE_SIZE: "10"\n'
+    "      # Same ~24h ceiling the pre-Ray local orchestrator relied on (client-side\n"
+    "      # HTTPX_TIMEOUT/consumer_timeout, since superseded by Epic 18's async parse\n"
+    "      # chain) — upstream's tight defaults (1h task / 5min document) truncate\n"
+    "      # large PDFs converting under the Ray engine.\n"
+    '      DOCLING_SERVE_ENG_RAY_TASK_TIMEOUT: "86400.0"\n'
+    '      DOCLING_SERVE_ENG_RAY_DOCUMENT_TIMEOUT: "86400.0"'
 )
 
 # docling-serve OTel gating. compose interpolates every scalar in the file —

@@ -693,6 +693,12 @@ services:
       # PDF page-slice fan-out is off by default upstream — opt in explicitly
       DOCLING_SERVE_ENG_RAY_ENABLE_PDF_PAGE_SLICE_FANOUT: "true"
       DOCLING_SERVE_ENG_RAY_MAX_PAGE_SLICE_SIZE: "10"
+      # Same ~24h ceiling the pre-Ray local orchestrator relied on (client-side
+      # HTTPX_TIMEOUT/consumer_timeout, since superseded by Epic 18's async parse
+      # chain) — upstream's tight defaults (1h task / 5min document) truncate
+      # large PDFs converting under the Ray engine.
+      DOCLING_SERVE_ENG_RAY_TASK_TIMEOUT: "86400.0"
+      DOCLING_SERVE_ENG_RAY_DOCUMENT_TIMEOUT: "86400.0"
     deploy: # This section is for compatibility with Swarm
       resources:
         reservations:
