@@ -95,12 +95,26 @@ _DEPLOY_ONLY_CLOSE = "# <<< deploy-only"
 # docling-serve Ray engine — server-side PDF page-slice fan-out across a Ray
 # cluster (ray-head + ray-worker, GCS backed by redis). Dev + test compose for
 # now; release promotion deferred, see TODOs.md Epic 21 §21.7.
-_DOCLING_RAY_ENGINE_ENV_BLOCK = (
+#
+# Actor-scaling (MIN/MAX_ACTORS etc.) is NOT shared across modes, unlike
+# everything else in this block — see _DOCLING_ACTOR_SCALING_2_REPLICA's own
+# comment for why: it requires 2 real ray-worker nodes (`--scale
+# ray-worker=2`), which only dev/release ever bring up. Test mode's compose
+# stack (testcontainers, tests/backend/enterprise/e2e/conftest.py) never
+# scales ray-worker — pointing it at the 2-replica config once caused Ray
+# Serve to get permanently stuck trying to schedule an unplaceable 2nd
+# replica, docling-serve never turned healthy, and every dependent e2e test
+# errored at fixture setup ("backend-parsing is not running in the compose
+# context" — a downstream victim, not the real cause).
+_DOCLING_RAY_ENGINE_BASE = (
     "\n"
     '      DOCLING_SERVE_ENG_KIND: "ray"\n'
     '      DOCLING_SERVE_ENG_RAY_ADDRESS: "ray://ray-head:10001"\n'
     '      DOCLING_SERVE_ENG_RAY_NAMESPACE: "docling"\n'
     '      DOCLING_SERVE_ENG_RAY_REDIS_URL: "redis://redis:6379/"\n'
+)
+
+_DOCLING_ACTOR_SCALING_2_REPLICA = (
     "      # Autoscaling pinned to 2 warm converter replicas, split across the 2\n"
     "      # ray-worker nodes started via `docker compose ... up --scale ray-worker=2`\n"
     "      # (see ray-worker's own comment). Both replicas share the box's single\n"
@@ -111,6 +125,9 @@ _DOCLING_RAY_ENGINE_ENV_BLOCK = (
     "      # Ray's own default (None/uncapped) explicitly packs replicas for\n"
     "      # density, which would otherwise happily put both actors on one node\n"
     "      # (each fits in half its 4 CPUs) and leave the second node's CPU idle.\n"
+    "      # This requires 2 real ray-worker nodes to ever reach a healthy state —\n"
+    "      # see this file's own top comment before reusing it anywhere that\n"
+    "      # doesn't `--scale ray-worker=2`.\n"
     '      DOCLING_SERVE_ENG_RAY_MIN_ACTORS: "2"\n'
     '      DOCLING_SERVE_ENG_RAY_MAX_ACTORS: "2"\n'
     '      DOCLING_SERVE_ENG_RAY_CONVERTER_ACTOR_NUM_CPUS: "2"\n'
@@ -119,13 +136,27 @@ _DOCLING_RAY_ENGINE_ENV_BLOCK = (
     "      # dispatch gate\n"
     '      DOCLING_SERVE_ENG_RAY_MAX_ONGOING_REQUESTS_PER_REPLICA: "2"\n'
     '      DOCLING_SERVE_ENG_RAY_MAX_CONCURRENT_TASKS: "4"\n'
+)
+
+_DOCLING_ACTOR_SCALING_1_REPLICA = (
+    "      # Autoscaling pinned to 1 warm converter replica (single dev-box GPU\n"
+    "      # budget) — matches this mode's single, unscaled ray-worker node.\n"
+    '      DOCLING_SERVE_ENG_RAY_MIN_ACTORS: "1"\n'
+    '      DOCLING_SERVE_ENG_RAY_MAX_ACTORS: "1"\n'
+    '      DOCLING_SERVE_ENG_RAY_CONVERTER_ACTOR_NUM_CPUS: "2"\n'
+    "      # 2 slices in flight per replica, matched at the per-tenant dispatch gate\n"
+    '      DOCLING_SERVE_ENG_RAY_MAX_ONGOING_REQUESTS_PER_REPLICA: "2"\n'
+    '      DOCLING_SERVE_ENG_RAY_MAX_CONCURRENT_TASKS: "2"\n'
+)
+
+_DOCLING_RAY_ENGINE_SUFFIX = (
     "      # PDF page-slice fan-out is off by default upstream — opt in explicitly.\n"
     "      # 150 pages/slice: below that a document converts as a single\n"
     "      # request (no fan-out overhead — converter-unit acquire/release,\n"
     "      # extra Ray remote round-trips, result reassembly); only genuinely\n"
     "      # huge documents split, into a slice count that actually matches\n"
-    "      # the 2-replica/max_concurrent_tasks=4 capacity above instead of\n"
-    "      # dozens of small slices queuing behind each other.\n"
+    "      # available replica capacity instead of dozens of small slices\n"
+    "      # queuing behind each other.\n"
     '      DOCLING_SERVE_ENG_RAY_ENABLE_PDF_PAGE_SLICE_FANOUT: "true"\n'
     '      DOCLING_SERVE_ENG_RAY_MAX_PAGE_SLICE_SIZE: "150"\n'
     "      # Same ~24h ceiling the pre-Ray local orchestrator relied on (client-side\n"
@@ -150,6 +181,22 @@ _DOCLING_RAY_ENGINE_ENV_BLOCK = (
     "      # breaker/5xx failure path.\n"
     '      DOCLING_SERVE_ENG_RAY_MAX_QUEUED_TASKS: "50"\n'
     '      DOCLING_SERVE_ENG_RAY_ENABLE_QUEUE_LIMIT_REJECTION: "true"'
+)
+
+# dev/release: 2 real ray-worker nodes, brought up via `--scale ray-worker=2`.
+_DOCLING_RAY_ENGINE_ENV_BLOCK = (
+    _DOCLING_RAY_ENGINE_BASE
+    + _DOCLING_ACTOR_SCALING_2_REPLICA
+    + _DOCLING_RAY_ENGINE_SUFFIX
+)
+
+# test: single, unscaled ray-worker node (testcontainers/conftest.py never
+# passes --scale) — must stay on the 1-replica config, see this block's own
+# top comment.
+_DOCLING_RAY_ENGINE_ENV_BLOCK_TEST = (
+    _DOCLING_RAY_ENGINE_BASE
+    + _DOCLING_ACTOR_SCALING_1_REPLICA
+    + _DOCLING_RAY_ENGINE_SUFFIX
 )
 
 # docling-serve OTel gating. compose interpolates every scalar in the file —
@@ -251,7 +298,7 @@ _TEST_SUBS: dict[str, str] = {
     # ever exercised in a test.
     "DOCLING_IMAGE": "artemis/docling-serve-ray-patched:latest",
     "DOCLING_GPU_BLOCK": "",
-    "DOCLING_ENGINE_ENV_BLOCK": _DOCLING_RAY_ENGINE_ENV_BLOCK,
+    "DOCLING_ENGINE_ENV_BLOCK": _DOCLING_RAY_ENGINE_ENV_BLOCK_TEST,
     # No collector is ever configured for e2e/testcontainers runs, so the
     # whole OTel-gating dance (see _DOCLING_OTEL_ENTRYPOINT_BLOCK) is dead
     # weight here — drop it and let the image's own default entrypoint run.

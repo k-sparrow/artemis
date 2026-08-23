@@ -708,6 +708,9 @@ services:
       # Ray's own default (None/uncapped) explicitly packs replicas for
       # density, which would otherwise happily put both actors on one node
       # (each fits in half its 4 CPUs) and leave the second node's CPU idle.
+      # This requires 2 real ray-worker nodes to ever reach a healthy state —
+      # see this file's own top comment before reusing it anywhere that
+      # doesn't `--scale ray-worker=2`.
       DOCLING_SERVE_ENG_RAY_MIN_ACTORS: "2"
       DOCLING_SERVE_ENG_RAY_MAX_ACTORS: "2"
       DOCLING_SERVE_ENG_RAY_CONVERTER_ACTOR_NUM_CPUS: "2"
@@ -721,8 +724,8 @@ services:
       # request (no fan-out overhead — converter-unit acquire/release,
       # extra Ray remote round-trips, result reassembly); only genuinely
       # huge documents split, into a slice count that actually matches
-      # the 2-replica/max_concurrent_tasks=4 capacity above instead of
-      # dozens of small slices queuing behind each other.
+      # available replica capacity instead of dozens of small slices
+      # queuing behind each other.
       DOCLING_SERVE_ENG_RAY_ENABLE_PDF_PAGE_SLICE_FANOUT: "true"
       DOCLING_SERVE_ENG_RAY_MAX_PAGE_SLICE_SIZE: "150"
       # Same ~24h ceiling the pre-Ray local orchestrator relied on (client-side
