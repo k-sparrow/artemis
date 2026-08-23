@@ -101,16 +101,33 @@ _DOCLING_RAY_ENGINE_ENV_BLOCK = (
     '      DOCLING_SERVE_ENG_RAY_ADDRESS: "ray://ray-head:10001"\n'
     '      DOCLING_SERVE_ENG_RAY_NAMESPACE: "docling"\n'
     '      DOCLING_SERVE_ENG_RAY_REDIS_URL: "redis://redis:6379/"\n'
-    "      # Autoscaling pinned to 1 warm converter replica (single dev-box GPU budget)\n"
-    '      DOCLING_SERVE_ENG_RAY_MIN_ACTORS: "1"\n'
-    '      DOCLING_SERVE_ENG_RAY_MAX_ACTORS: "1"\n'
+    "      # Autoscaling pinned to 2 warm converter replicas, split across the 2\n"
+    "      # ray-worker nodes started via `docker compose ... up --scale ray-worker=2`\n"
+    "      # (see ray-worker's own comment). Both replicas share the box's single\n"
+    "      # physical GPU via driver-level time-slicing (no MIG/MPS configured) —\n"
+    "      # no VRAM partitioning, so this trades some VRAM headroom for overlap\n"
+    "      # between one replica's CPU-bound phase and the other's GPU-bound phase.\n"
+    "      # max_replicas_per_node=1 is required for the split, not just a hint —\n"
+    "      # Ray's own default (None/uncapped) explicitly packs replicas for\n"
+    "      # density, which would otherwise happily put both actors on one node\n"
+    "      # (each fits in half its 4 CPUs) and leave the second node's CPU idle.\n"
+    '      DOCLING_SERVE_ENG_RAY_MIN_ACTORS: "2"\n'
+    '      DOCLING_SERVE_ENG_RAY_MAX_ACTORS: "2"\n'
     '      DOCLING_SERVE_ENG_RAY_CONVERTER_ACTOR_NUM_CPUS: "2"\n'
-    "      # 2 slices in flight per replica, matched at the per-tenant dispatch gate\n"
+    '      DOCLING_SERVE_ENG_RAY_CONVERTER_MAX_REPLICAS_PER_NODE: "1"\n'
+    "      # 2 slices in flight per replica x 2 replicas, matched at the per-tenant\n"
+    "      # dispatch gate\n"
     '      DOCLING_SERVE_ENG_RAY_MAX_ONGOING_REQUESTS_PER_REPLICA: "2"\n'
-    '      DOCLING_SERVE_ENG_RAY_MAX_CONCURRENT_TASKS: "2"\n'
-    "      # PDF page-slice fan-out is off by default upstream — opt in explicitly\n"
+    '      DOCLING_SERVE_ENG_RAY_MAX_CONCURRENT_TASKS: "4"\n'
+    "      # PDF page-slice fan-out is off by default upstream — opt in explicitly.\n"
+    "      # 150 pages/slice: below that a document converts as a single\n"
+    "      # request (no fan-out overhead — converter-unit acquire/release,\n"
+    "      # extra Ray remote round-trips, result reassembly); only genuinely\n"
+    "      # huge documents split, into a slice count that actually matches\n"
+    "      # the 2-replica/max_concurrent_tasks=4 capacity above instead of\n"
+    "      # dozens of small slices queuing behind each other.\n"
     '      DOCLING_SERVE_ENG_RAY_ENABLE_PDF_PAGE_SLICE_FANOUT: "true"\n'
-    '      DOCLING_SERVE_ENG_RAY_MAX_PAGE_SLICE_SIZE: "10"\n'
+    '      DOCLING_SERVE_ENG_RAY_MAX_PAGE_SLICE_SIZE: "150"\n'
     "      # Same ~24h ceiling the pre-Ray local orchestrator relied on (client-side\n"
     "      # HTTPX_TIMEOUT/consumer_timeout, since superseded by Epic 18's async parse\n"
     "      # chain) — upstream's tight defaults (1h task / 5min document) truncate\n"
