@@ -618,9 +618,15 @@ services:
     command: >
       ray start --head --port=6379 --dashboard-host=0.0.0.0 --num-cpus=0 --block
 
+    # No RAY_LOG_TO_STDERR here or on ray-worker: it dumps Ray's own internal
+    # chatter (heartbeats, object store GC, scheduling internals) straight
+    # into these two containers' logs, drowning out anything useful. Actor
+    # and task-level logs (converter/coordinator replicas, dispatcher) don't
+    # need it — Ray forwards them to the connected driver process regardless,
+    # so they still show up in docling-serve's own log stream (tagged
+    # `(ServeReplica:...)`/`(RayTaskDispatcher ...)`), confirmed live.
     environment:
-      NVIDIA_VISIBLE_DEVICES: "all"
-      RAY_LOG_TO_STDERR: "1" # nvidia container runtime
+      NVIDIA_VISIBLE_DEVICES: "all" # nvidia container runtime
     deploy: # This section is for compatibility with Swarm
       resources:
         reservations:
@@ -657,7 +663,6 @@ services:
     shm_size: "8gb"
     environment:
       NVIDIA_VISIBLE_DEVICES: "all"
-      RAY_LOG_TO_STDERR: "1"
       RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES: "1" # nvidia container runtime
     deploy: # This section is for compatibility with Swarm
       resources:
