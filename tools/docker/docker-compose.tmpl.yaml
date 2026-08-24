@@ -657,15 +657,7 @@ services:
   ray-worker:
     profiles: [ai]
     image: "{DOCLING_IMAGE}"
-    # No container_name: Compose refuses to scale a service with a fixed
-    # name. Bring this up with `docker compose ... up --scale ray-worker=2`
-    # (plain `up` starts just 1) — every replica is identical, each carrying
-    # its own full GPU reservation below, so unlike a dedicated CPU-only
-    # second node there's no risk of Ray placing a converter actor (which
-    # never requests num_gpus — see serve_deployment.py's
-    # _build_deployment_options) somewhere with no GPU visible. See
-    # DOCLING_SERVE_ENG_RAY_MIN_ACTORS/MAX_ACTORS below for the matching
-    # actor-count side of this.
+    container_name: ray-worker
     command: >
       ray start --address=ray-head:6379 --num-cpus=4 --block
 

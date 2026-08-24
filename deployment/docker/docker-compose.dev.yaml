@@ -661,15 +661,7 @@ services:
   ray-worker:
     profiles: [ai]
     image: "artemis/docling-serve-ray-patched:latest"
-    # No container_name: Compose refuses to scale a service with a fixed
-    # name. Bring this up with `docker compose ... up --scale ray-worker=2`
-    # (plain `up` starts just 1) — every replica is identical, each carrying
-    # its own full GPU reservation below, so unlike a dedicated CPU-only
-    # second node there's no risk of Ray placing a converter actor (which
-    # never requests num_gpus — see serve_deployment.py's
-    # _build_deployment_options) somewhere with no GPU visible. See
-    # DOCLING_SERVE_ENG_RAY_MIN_ACTORS/MAX_ACTORS below for the matching
-    # actor-count side of this.
+    container_name: ray-worker
     command: >
       ray start --address=ray-head:6379 --num-cpus=4 --block
 
@@ -727,27 +719,13 @@ services:
       DOCLING_SERVE_ENG_RAY_ADDRESS: "ray://ray-head:10001"
       DOCLING_SERVE_ENG_RAY_NAMESPACE: "docling"
       DOCLING_SERVE_ENG_RAY_REDIS_URL: "redis://redis:6379/"
-      # Autoscaling pinned to 2 warm converter replicas, split across the 2
-      # ray-worker nodes started via `docker compose ... up --scale ray-worker=2`
-      # (see ray-worker's own comment). Both replicas share the box's single
-      # physical GPU via driver-level time-slicing (no MIG/MPS configured) —
-      # no VRAM partitioning, so this trades some VRAM headroom for overlap
-      # between one replica's CPU-bound phase and the other's GPU-bound phase.
-      # max_replicas_per_node=1 is required for the split, not just a hint —
-      # Ray's own default (None/uncapped) explicitly packs replicas for
-      # density, which would otherwise happily put both actors on one node
-      # (each fits in half its 4 CPUs) and leave the second node's CPU idle.
-      # This requires 2 real ray-worker nodes to ever reach a healthy state —
-      # see this file's own top comment before reusing it anywhere that
-      # doesn't `--scale ray-worker=2`.
-      DOCLING_SERVE_ENG_RAY_MIN_ACTORS: "2"
-      DOCLING_SERVE_ENG_RAY_MAX_ACTORS: "2"
+      # Autoscaling pinned to 1 warm converter replica (single dev-box GPU budget)
+      DOCLING_SERVE_ENG_RAY_MIN_ACTORS: "1"
+      DOCLING_SERVE_ENG_RAY_MAX_ACTORS: "1"
       DOCLING_SERVE_ENG_RAY_CONVERTER_ACTOR_NUM_CPUS: "2"
-      DOCLING_SERVE_ENG_RAY_CONVERTER_MAX_REPLICAS_PER_NODE: "1"
-      # 2 slices in flight per replica x 2 replicas, matched at the per-tenant
-      # dispatch gate
+      # 2 slices in flight per replica, matched at the per-tenant dispatch gate
       DOCLING_SERVE_ENG_RAY_MAX_ONGOING_REQUESTS_PER_REPLICA: "2"
-      DOCLING_SERVE_ENG_RAY_MAX_CONCURRENT_TASKS: "4"
+      DOCLING_SERVE_ENG_RAY_MAX_CONCURRENT_TASKS: "2"
       # PDF page-slice fan-out is off by default upstream — opt in explicitly.
       # 150 pages/slice: below that a document converts as a single
       # request (no fan-out overhead — converter-unit acquire/release,
