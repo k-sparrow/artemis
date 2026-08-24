@@ -6,12 +6,14 @@
 #   ARTEMIS_VERSION=v1.0.0-alpha.2 docker compose \
 #     -f deployment/docker/docker-compose.release.yaml --profile <p> up -d
 #
-# DOCLING_IMAGE is the one exception to ${ARTEMIS_VERSION}: it's pinned at
-# *build* time from //tools/oci/images/docling's own STABLE_VERSION stamp,
-# not deploy time. This checked-in file was generated unstamped, so it
-# shows the 0.0.0 placeholder below — regenerate with
-# `bazel build //tools/docker:docker_compose_release --stamp` for a real
-# release to get a traceable version instead.
+# DOCLING_IMAGE is pinned the same way, via ${DOCLING_IMAGE_TAG} — set it to
+# the last line of `bazel build //tools/oci/images/docling:tarball.tags
+# --stamp` (that target's own STABLE_VERSION stamp; the docling image is
+# versioned independently of ${ARTEMIS_VERSION}, see tools/oci/images/docling).
+#
+#   DOCLING_IMAGE_TAG=v1.2.0-beta.3 ARTEMIS_VERSION=v1.2.0-beta.3 \
+#     docker compose -f deployment/docker/docker-compose.release.yaml \
+#     --profile <p> up -d
 #
 # WARNING: still carries the template's DEV secrets/passwords — override them
 # (JWT_SECRET, MinIO/Postgres creds) before any non-staging use.
@@ -538,7 +540,7 @@ services:
   # ---------------------------------------------------------------------------
   docling-model-downloader:
     profiles: [ai]
-    image: "artemis/docling-serve-ray-patched:0.0.0"
+    image: "artemis/docling-serve-ray-patched:${DOCLING_IMAGE_TAG:?set DOCLING_IMAGE_TAG to the stamped tag from tools/oci/images/docling:tarball.tags}"
     container_name: docling-model-downloader
     user: "0"
     entrypoint: /opt/app-root/bin/docling-tools
@@ -611,7 +613,7 @@ services:
       - default
   ray-head:
     profiles: [ai]
-    image: "artemis/docling-serve-ray-patched:0.0.0"
+    image: "artemis/docling-serve-ray-patched:${DOCLING_IMAGE_TAG:?set DOCLING_IMAGE_TAG to the stamped tag from tools/oci/images/docling:tarball.tags}"
     container_name: ray-head
     command: >
       ray start --head --port=6379 --dashboard-host=0.0.0.0 --num-cpus=0 --block
@@ -639,7 +641,7 @@ services:
       - default
   ray-worker:
     profiles: [ai]
-    image: "artemis/docling-serve-ray-patched:0.0.0"
+    image: "artemis/docling-serve-ray-patched:${DOCLING_IMAGE_TAG:?set DOCLING_IMAGE_TAG to the stamped tag from tools/oci/images/docling:tarball.tags}"
     # No container_name: Compose refuses to scale a service with a fixed
     # name. Bring this up with `docker compose ... up --scale ray-worker=2`
     # (plain `up` starts just 1) — every replica is identical, each carrying
@@ -672,7 +674,7 @@ services:
       - default
   docling-serve:
     profiles: [ai]
-    image: "artemis/docling-serve-ray-patched:0.0.0"
+    image: "artemis/docling-serve-ray-patched:${DOCLING_IMAGE_TAG:?set DOCLING_IMAGE_TAG to the stamped tag from tools/oci/images/docling:tarball.tags}"
     container_name: docling-serve
     healthcheck:
       # -O /dev/null -q: plain `wget URL` (no -O) tries to save the response

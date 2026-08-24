@@ -238,12 +238,14 @@ _RELEASE_BANNER = (
     "#   ARTEMIS_VERSION=v1.0.0-alpha.2 docker compose \\\n"
     "#     -f deployment/docker/docker-compose.release.yaml --profile <p> up -d\n"
     "#\n"
-    "# DOCLING_IMAGE is the one exception to ${ARTEMIS_VERSION}: it's pinned at\n"
-    "# *build* time from //tools/oci/images/docling's own STABLE_VERSION stamp,\n"
-    "# not deploy time. This checked-in file was generated unstamped, so it\n"
-    "# shows the 0.0.0 placeholder below — regenerate with\n"
-    "# `bazel build //tools/docker:docker_compose_release --stamp` for a real\n"
-    "# release to get a traceable version instead.\n"
+    "# DOCLING_IMAGE is pinned the same way, via ${DOCLING_IMAGE_TAG} — set it to\n"
+    "# the last line of `bazel build //tools/oci/images/docling:tarball.tags\n"
+    "# --stamp` (that target's own STABLE_VERSION stamp; the docling image is\n"
+    "# versioned independently of ${ARTEMIS_VERSION}, see tools/oci/images/docling).\n"
+    "#\n"
+    "#   DOCLING_IMAGE_TAG=v1.2.0-beta.3 ARTEMIS_VERSION=v1.2.0-beta.3 \\\n"
+    "#     docker compose -f deployment/docker/docker-compose.release.yaml \\\n"
+    "#     --profile <p> up -d\n"
     "#\n"
     "# WARNING: still carries the template's DEV secrets/passwords — override them\n"
     "# (JWT_SECRET, MinIO/Postgres creds) before any non-staging use.\n"
@@ -323,17 +325,28 @@ _TEST_SUBS: dict[str, str] = {
 }
 
 # Release reuses the dev (GPU, prod-image, Ray-engine) substitutions unchanged —
-# only the artemis tags differ, collapsing to the pinned ${ARTEMIS_VERSION}.
-# Promoted to Ray 2026-08-07 (Epic 21 §21.7) ahead of a large-PDF (400+ page)
-# memory-bounding proof — the correctness fan-out was verified at 50 pages/5
-# slices, not at the scale the feature exists for; promoted anyway on an
-# explicit, deliberate call to accept that risk rather than wait. If a
-# large-PDF run later reveals a real memory-bounding problem, revert by
-# re-adding "DOCLING_ENGINE_ENV_BLOCK": "" here.
+# only the artemis tags (and DOCLING_IMAGE's tag) differ, collapsing to
+# ${ARTEMIS_VERSION}/${DOCLING_IMAGE_TAG}. Promoted to Ray 2026-08-07
+# (Epic 21 §21.7) ahead of a large-PDF (400+ page) memory-bounding proof —
+# the correctness fan-out was verified at 50 pages/5 slices, not at the
+# scale the feature exists for; promoted anyway on an explicit, deliberate
+# call to accept that risk rather than wait. If a large-PDF run later
+# reveals a real memory-bounding problem, revert by re-adding
+# "DOCLING_ENGINE_ENV_BLOCK": "" here.
 _RELEASE_SUBS: dict[str, str] = {
     **_DEV_SUBS,
     "ARTEMIS_TAG_DEV": _ARTEMIS_TAG_RELEASE,
     "ARTEMIS_TAG_LATEST": _ARTEMIS_TAG_RELEASE,
+    # Resolved by `docker compose up` at deploy time, like ${ARTEMIS_VERSION}
+    # above — NOT baked into this file at generation time. Set it to the last
+    # line of `bazel build //tools/oci/images/docling:tarball.tags --stamp`
+    # (that target's own STABLE_VERSION stamp; versioned independently of
+    # ${ARTEMIS_VERSION}, see //tools/oci/images/docling).
+    "DOCLING_IMAGE": (
+        "artemis/docling-serve-ray-patched:"
+        "${DOCLING_IMAGE_TAG:?set DOCLING_IMAGE_TAG to the stamped tag "
+        "from tools/oci/images/docling:tarball.tags}"
+    ),
 }
 
 _SUBS_BY_MODE = {"dev": _DEV_SUBS, "test": _TEST_SUBS, "release": _RELEASE_SUBS}
@@ -425,10 +438,8 @@ def _strip_unpublished_ports(lines: list[str]) -> list[str]:
     return out
 
 
-def generate(template: str, mode: str, docling_image: str | None = None) -> str:
+def generate(template: str, mode: str) -> str:
     subs = _SUBS_BY_MODE[mode]
-    if docling_image:
-        subs = {**subs, "DOCLING_IMAGE": docling_image}
     result = template
     for key, value in subs.items():
         result = result.replace("{" + key + "}", value)
@@ -466,23 +477,12 @@ def main() -> None:
             "$BUILD_WORKSPACE_DIRECTORY/deployment/docker/docker-compose.dev.yaml."
         ),
     )
-    parser.add_argument(
-        "--docling-image",
-        default=None,
-        help=(
-            "Override DOCLING_IMAGE (release mode only) — the "
-            "STABLE_VERSION-stamped tag from "
-            "//tools/oci/images/docling:tarball.tags, so release pins a real "
-            "version instead of the mutable :latest dev tag. Falls back to "
-            "the mode's own default when omitted."
-        ),
-    )
     args = parser.parse_args()
 
     with open(args.template, encoding="utf-8") as fh:
         template = fh.read()
 
-    content = generate(template, args.mode, docling_image=args.docling_image)
+    content = generate(template, args.mode)
 
     if args.output:
         output_path = args.output

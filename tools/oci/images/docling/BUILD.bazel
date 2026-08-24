@@ -151,13 +151,11 @@ stamped_tags(
     name = "tarball.tags",
     dev_tags = ["latest"],
     repository = "artemis/docling-serve-ray-patched",
-    # //tools/docker:docker_compose_release reads this file's last line (the
-    # STABLE_VERSION-stamped tag) to pin DOCLING_IMAGE in the release compose
-    # output instead of the mutable :latest dev tag.
-    visibility = [
-        "//tools/docker:__pkg__",
-        "//tools/oci/images:__pkg__",
-    ],
+    # A real release deploy reads this target's own last line (the
+    # STABLE_VERSION-stamped tag, via `bazel build ... --stamp`) and supplies
+    # it as ${DOCLING_IMAGE_TAG} at `docker compose up` time -- see
+    # tools/docker/compose_generator.py's _RELEASE_SUBS.
+    visibility = ["//tools/oci/images:__pkg__"],
 )
 
 oci_load(
