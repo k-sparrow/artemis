@@ -32,6 +32,7 @@ from src.lib.backend.logging import get_logger
 from src.lib.core.ingestion.contract import BlobRef
 from src.lib.core.ingestion.exceptions import (
     DocumentProcessingException,
+    UpstreamBackpressureException,
     UpstreamServiceException,
 )
 from src.lib.core.ingestion.types import ParseArtifact
@@ -60,8 +61,19 @@ def _translate_docling_errors(fn):
 
     Connection failures, timeouts, and docling-serve 5xx are upstream
     problems — mapped to 503 (``UpstreamServiceException``) so the worker
-    retries. A docling-serve 4xx means *this* request was rejected (e.g. a
-    malformed submission) — mapped to 400 (``DocumentProcessingException``)
+    retries. A docling-serve 429 (queue-full backpressure — see
+    ``DOCLING_SERVE_ENG_RAY_ENABLE_QUEUE_LIMIT_REJECTION``) means the request
+    is fine but the queue is full right now, not that it's wrong — mapped to
+    its own 429 (``UpstreamBackpressureException``) so the worker's dedicated
+    429 handling engages (flat-delay retry, 24h budget, excluded from the
+    circuit breaker's failure count — see submit_parse/submit_chunk in
+    controller/worker/tasks.py). Collapsing it into the generic "4xx = this
+    request was rejected" branch below silently defeated that entire
+    backpressure design: the worker never saw a 429 at all, just an
+    indistinguishable-from-permanent 400, which also legitimately tripped the
+    circuit breaker after 3 consecutive occurrences under real load
+    (confirmed live against a ~900-document burst). A genuine 4xx (e.g. a
+    malformed submission) still maps to 400 (``DocumentProcessingException``)
     so the worker treats it as permanent instead of retrying something that
     will never succeed. Content-level failures (e.g. an unsupported file
     *format*) don't hit this path at all — docling-serve reports those via
@@ -74,6 +86,11 @@ def _translate_docling_errors(fn):
         try:
             return await fn(*args, **kwargs)
         except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 429:
+                raise UpstreamBackpressureException(
+                    service="docling-serve",
+                    message=f"queue full: {exc.response.text}",
+                ) from exc
             if exc.response.status_code < 500:
                 raise DocumentProcessingException(
                     f"docling-serve rejected the request: {exc.response.text}"
