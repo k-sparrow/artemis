@@ -689,11 +689,14 @@ def submit_parse(
                 # job's) and a 24h-ceiling budget matching
                 # DOCLING_SERVE_ENG_RAY_TASK_TIMEOUT — waiting in line should
                 # eventually resolve into a running task.
-                raise self.retry(
-                    exc=exc,
-                    countdown=300 + random.uniform(0, 30),
-                    max_retries=288,
+                countdown = 300 + random.uniform(0, 30)
+                logger.info(
+                    "backpressure=docling_queue_full task=submit_parse "
+                    "obj_id=%s retry_in=%.0fs",
+                    obj_id,
+                    countdown,
                 )
+                raise self.retry(exc=exc, countdown=countdown, max_retries=288)
             if exc.response.status_code >= 500:
                 backoff = min(120, 2**self.request.retries)
                 raise self.retry(
@@ -1006,11 +1009,14 @@ def submit_chunk(
         if exc.response.status_code == 429:
             # Same reasoning as submit_parse above — queue-full backpressure,
             # not a failure. Flat 24h-ceiling budget, no exponential growth.
-            raise self.retry(
-                exc=exc,
-                countdown=300 + random.uniform(0, 30),
-                max_retries=288,
+            countdown = 300 + random.uniform(0, 30)
+            logger.info(
+                "backpressure=docling_queue_full task=submit_chunk "
+                "task_id=%s retry_in=%.0fs",
+                task_id,
+                countdown,
             )
+            raise self.retry(exc=exc, countdown=countdown, max_retries=288)
         if exc.response.status_code >= 500:
             backoff = min(120, 2**self.request.retries)
             raise self.retry(
