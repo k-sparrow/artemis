@@ -9,3 +9,6 @@ MODULE.bazel.lock
 
 # eval datasets fetched from third parties (non-commercial licenses, not ours to redistribute)
 /experiments/eval/datasets/*/corpus/
+
+# local planning doc, not tracked
+/TODOs.md
