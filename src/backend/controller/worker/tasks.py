@@ -80,7 +80,7 @@ from src.backend.controller.worker.backend.db import SessionLocal, session_clean
 from src.backend.controller.worker.celery import app
 from src.backend.controller.worker.config import settings
 from src.backend.controller.worker.dependencies import get_s3_client
-from src.backend.controller.worker.exceptions import EmptyObjectError
+from src.backend.controller.worker.exceptions import EmptyObjectError, QueueFullRetry
 from src.backend.controller.worker.utils import (
     call_chunk_finalize,
     call_chunk_status,
@@ -696,7 +696,13 @@ def submit_parse(
                     obj_id,
                     countdown,
                 )
-                raise self.retry(exc=exc, countdown=countdown, max_retries=288)
+                raise self.retry(
+                    exc=QueueFullRetry(
+                        str(exc), request=exc.request, response=exc.response
+                    ),
+                    countdown=countdown,
+                    max_retries=288,
+                )
             if exc.response.status_code >= 500:
                 backoff = min(120, 2**self.request.retries)
                 raise self.retry(
@@ -1016,7 +1022,13 @@ def submit_chunk(
                 task_id,
                 countdown,
             )
-            raise self.retry(exc=exc, countdown=countdown, max_retries=288)
+            raise self.retry(
+                exc=QueueFullRetry(
+                    str(exc), request=exc.request, response=exc.response
+                ),
+                countdown=countdown,
+                max_retries=288,
+            )
         if exc.response.status_code >= 500:
             backoff = min(120, 2**self.request.retries)
             raise self.retry(

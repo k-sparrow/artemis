@@ -164,10 +164,13 @@ def try_claim(
     session.commit()
 
     if raw_resume_context is None:
-        # Ambiguous on its own: already claimed by the other path (expected,
-        # normal operation) vs. no row ever existed (anomalous — submit_parse
-        # should always have written it before either path could observe a
-        # terminal outcome). A no-op either way; only observability differs.
+        # Ambiguous on its own: already claimed by the other path, or the row
+        # is already gone. Both are expected, normal operation — the callback
+        # path is almost always faster than poll_parse's ~60s cadence, so by
+        # the time poll's next check runs the callback has typically already
+        # won the claim AND deleted the row, making no_row the dominant
+        # outcome here, not already_claimed. A no-op either way; only
+        # observability differs.
         existing = session.execute(
             sa.select(ParseStageState.obj_id).where(
                 ParseStageState.obj_id == obj_id, ParseStageState.stage == stage
@@ -178,7 +181,7 @@ def try_claim(
                 "parse_stage_claim=already_claimed obj_id=%s stage=%s", obj_id, stage
             )
         else:
-            logger.warning("parse_stage_claim=no_row obj_id=%s stage=%s", obj_id, stage)
+            logger.info("parse_stage_claim=no_row obj_id=%s stage=%s", obj_id, stage)
         return None
 
     return ResumeContext.model_validate(raw_resume_context)

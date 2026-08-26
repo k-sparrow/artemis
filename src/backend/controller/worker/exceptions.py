@@ -1,9 +1,12 @@
 """Non-retryable and retryable failure types for the ingestion worker."""
 
+import httpx
+
 __all__ = [
     "EmptyObjectError",
     "S3IntegrityError",
     "ChunkIntegrityError",
+    "QueueFullRetry",
 ]
 
 
@@ -41,3 +44,16 @@ class ChunkIntegrityError(Exception):
             f"parsing service returned chunks with multiple obj_ids: {obj_ids} — "
             "expected exactly one"
         )
+
+
+class QueueFullRetry(httpx.HTTPStatusError):
+    """docling-serve's Ray task queue is full — expected backpressure, not a
+    failure. Same exception as the original 429, just with a __repr__ that
+    matches this codebase's own structured log convention: passed as
+    ``self.retry(exc=...)`` so Celery's built-in retry log line (which
+    renders ``repr(exc)``) reads as a clean backpressure notice instead of
+    dumping the raw httpx error text + MDN status-code link.
+    """
+
+    def __repr__(self) -> str:
+        return "backpressure=docling_queue_full status=429"
