@@ -60,6 +60,16 @@ def build_pages(dl_doc: DoclingDocument, obj_id: uuid.UUID) -> list[Page]:
     /v1/chunk/finalize to merge with the separately-fetched chunks — chunking
     is a fully decoupled stage from conversion (Epic 21), so this half of the
     final ParseArtifact never needs the DoclingDocument re-fetched or re-parsed.
+
+    ``source`` is read from ``dl_doc.origin.filename`` — the same document
+    ChunkedDocumentResultItem.filename (see ``_item_to_parsed`` above) is
+    derived from server-side, so pages and chunks agree on ``source`` for a
+    given obj_id. ``origin`` is optional on DoclingDocument; falls back to
+    "" like ``_item_to_parsed`` does for the chunk side.
     """
     pages = split_pages(dl_doc)
-    return [Page(obj_id=obj_id, page_no=pno, markdown=md) for pno, md in pages]
+    source = dl_doc.origin.filename if dl_doc.origin else ""
+    return [
+        Page(obj_id=obj_id, page_no=pno, markdown=md, source=source)
+        for pno, md in pages
+    ]

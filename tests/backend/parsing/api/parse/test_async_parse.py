@@ -447,7 +447,9 @@ class TestChunkFinalizeEndpoint:
         """Chunk finalize reads the pages cache /v1/parse/resolve writes —
         never re-derives pages from the DoclingDocument itself — so this
         seeds it directly, standing in for a prior resolve call."""
-        pages = [Page(obj_id=OBJ_ID, page_no=1, markdown="# Seeded Page")]
+        pages = [
+            Page(obj_id=OBJ_ID, page_no=1, markdown="# Seeded Page", source="doc.pdf")
+        ]
         store.put(f"pages/{OBJ_ID_STR}.json", parse_service.encode_pages(pages))
 
     def test_returns_artifact_blob_ref(
@@ -611,7 +613,9 @@ class TestChunkFinalizeEndpointDoclingErrorMapping:
     def test_connect_error_returns_503(
         self, client: TestClient, docling_client: MagicMock, store: InMemoryBlobStore
     ) -> None:
-        pages = [Page(obj_id=OBJ_ID, page_no=1, markdown="# Seeded Page")]
+        pages = [
+            Page(obj_id=OBJ_ID, page_no=1, markdown="# Seeded Page", source="doc.pdf")
+        ]
         store.put(f"pages/{OBJ_ID_STR}.json", parse_service.encode_pages(pages))
         docling_client.fetch_chunk_result.side_effect = httpx.ConnectError("refused")
         resp = client.post(

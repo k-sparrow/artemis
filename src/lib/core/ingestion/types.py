@@ -153,13 +153,14 @@ class Page(BaseModel):
     ``obj_id`` ties the page to its source object — the same value carried by the
     object's chunks — so the page is self-describing and the indexing service can
     key/scope it (``{namespace_id}/{obj_id}/p{page_no}``) without inferring
-    ownership from the chunks.  Stamped by the parsing service, like ``obj_id`` on
-    :class:`ParsedChunk`.
+    ownership from the chunks.  Stamped by the parsing service, like ``obj_id`` and
+    ``source`` on :class:`ParsedChunk`.
     """
 
     obj_id: UUID
     page_no: int
     markdown: str
+    source: str
 
 
 class ParseArtifact(BaseModel):

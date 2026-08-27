@@ -84,6 +84,7 @@ async def test_ingest_via_artifact_ref(client: httpx.AsyncClient, minio_client: 
                 "obj_id": str(obj_id),
                 "page_no": 1,
                 "markdown": "# chunk read from the parse artifact",
+                "source": "a.md",
             }
         ],
         "chunks": [

@@ -72,6 +72,7 @@ _SAMPLE_ARTIFACT = {
             "obj_id": _STUB_OBJ_ID,
             "page_no": 1,
             "markdown": "# hello world\n\n| a | b |",
+            "source": "test.md",
         }
     ],
     "chunks": [

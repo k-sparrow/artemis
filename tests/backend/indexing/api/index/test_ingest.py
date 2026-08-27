@@ -43,8 +43,15 @@ def _chunk(content: str = "hello world", obj_id: uuid.UUID = OBJ_ID) -> dict:
     }
 
 
-def _page(markdown: str, page_no: int = 1, obj_id: uuid.UUID = OBJ_ID) -> dict:
-    return {"obj_id": str(obj_id), "page_no": page_no, "markdown": markdown}
+def _page(
+    markdown: str, page_no: int = 1, obj_id: uuid.UUID = OBJ_ID, source: str = "test.md"
+) -> dict:
+    return {
+        "obj_id": str(obj_id),
+        "page_no": page_no,
+        "markdown": markdown,
+        "source": source,
+    }
 
 
 def _artifact_bytes(chunks: list[dict], pages: list[dict] | None = None) -> bytes:
@@ -176,6 +183,7 @@ class TestIngestEndpoint:
         assert [d.page_content for d in paged.chunks] == ["from artifact"]
         assert [d.page_content for d in paged.pages] == ["# from artifact"]
         assert paged.pages[0].metadata["obj_id"] == str(OBJ_ID)
+        assert paged.pages[0].metadata["source"] == "test.md"
 
     def test_requires_exactly_one_input(
         self, client: TestClient, namespace: uuid.UUID

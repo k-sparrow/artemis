@@ -85,11 +85,16 @@ async def a_index_and_ingest(
         for chunk in chunks
     ]
 
-    # Pages are self-describing — each carries its own obj_id (set at parse time).
+    # Pages are self-describing — each carries its own obj_id and source (set
+    # at parse time).
     page_docs = [
         Document(
             page_content=page.markdown,
-            metadata={"obj_id": str(page.obj_id), "page_no": page.page_no},
+            metadata={
+                "source": page.source,
+                "obj_id": str(page.obj_id),
+                "page_no": page.page_no,
+            },
         )
         for page in pages
     ]

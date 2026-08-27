@@ -64,11 +64,13 @@ def _make_doc(obj_id: uuid.UUID) -> tuple[list[dict], list[dict]]:
             "obj_id": str(obj_id),
             "page_no": 1,
             "markdown": "# Page One\nQuarterly revenue grew across all regions.",
+            "source": "report.pdf",
         },
         {
             "obj_id": str(obj_id),
             "page_no": 2,
             "markdown": "# Page Two\nOperating costs were reduced via automation.",
+            "source": "report.pdf",
         },
     ]
     chunks = [
@@ -248,6 +250,9 @@ async def test_retrieve_return_parents_derefs_chunks_to_pages(
     # 3 chunks across 2 pages → exactly the 2 distinct parent pages, no chunks.
     contents = {d["page_content"] for d in docs}
     assert contents == {pages[0]["markdown"], pages[1]["markdown"]}
+    # Parent pages must carry their source, not just obj_id/page_no — a prior
+    # bug (Page had no source field at all) meant this was always null.
+    assert all(d["metadata"]["source"] == "report.pdf" for d in docs)
 
 
 @pytest.mark.integration
@@ -460,6 +465,7 @@ async def test_empty_chunk_batch_does_not_wipe_other_objects_in_namespace(
             "obj_id": str(obj_b),
             "page_no": 1,
             "markdown": "# Some Page\nContent that failed to chunk.",
+            "source": "empty-chunks.pdf",
         }
     ]
     ref_b = _seed_artifact(

@@ -92,23 +92,47 @@ class TestChunkItemsToParsed:
 
 
 class TestBuildPages:
-    def _make_dl_doc(self):
-        """Return a minimal DoclingDocument with no pages (empty doc)."""
+    def _make_dl_doc(self, origin=None, with_content=False):
+        """Return a DoclingDocument, with a single text item when with_content
+        (non-paginated formats need real content or split_pages returns [])."""
         from docling.datamodel.document import DoclingDocument
+        from docling_core.types.doc.labels import DocItemLabel
 
-        doc = DoclingDocument(name="test")
+        doc = DoclingDocument(name="test", origin=origin)
+        if with_content:
+            doc.add_text(label=DocItemLabel.TEXT, text="hello world")
         return doc
 
+    def _make_origin(self, filename="doc.pdf"):
+        from docling_core.types.doc.document import DocumentOrigin
+
+        return DocumentOrigin(
+            mimetype="application/pdf", binary_hash=0, filename=filename
+        )
+
     def test_returns_list_of_pages(self) -> None:
-        dl_doc = self._make_dl_doc()
+        dl_doc = self._make_dl_doc(with_content=True)
         pages = build_pages(dl_doc, _OBJ_ID)
         assert isinstance(pages, list)
+        assert len(pages) == 1
         assert all(isinstance(p, Page) for p in pages)
 
     def test_pages_have_obj_id_stamped(self) -> None:
-        dl_doc = self._make_dl_doc()
+        dl_doc = self._make_dl_doc(with_content=True)
         pages = build_pages(dl_doc, _OBJ_ID)
-        assert all(p.obj_id == _OBJ_ID for p in pages)
+        assert pages and all(p.obj_id == _OBJ_ID for p in pages)
+
+    def test_pages_have_source_stamped_from_origin_filename(self) -> None:
+        dl_doc = self._make_dl_doc(
+            origin=self._make_origin(filename="report.pdf"), with_content=True
+        )
+        pages = build_pages(dl_doc, _OBJ_ID)
+        assert pages and all(p.source == "report.pdf" for p in pages)
+
+    def test_pages_source_falls_back_to_empty_string_when_no_origin(self) -> None:
+        dl_doc = self._make_dl_doc(origin=None, with_content=True)
+        pages = build_pages(dl_doc, _OBJ_ID)
+        assert pages and all(p.source == "" for p in pages)
 
 
 class TestParseStatus:
