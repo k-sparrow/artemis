@@ -486,6 +486,58 @@ class TestChunkFinalizeEndpoint:
         )
 
 
+class TestChunkFinalizeEmptyChunkFallback:
+    """Epic 21.11: the chunk-empty fallback split (docling's hybrid chunker
+    degrading to zero chunks for a document that otherwise converted fine —
+    a real production occurrence, not hypothetical) now lives here rather
+    than in the indexing service (Epic 21.8: chunking-strategy decisions
+    belong entirely to this service)."""
+
+    def _finalize_body(self) -> dict:
+        return {
+            "chunking_task_id": CHUNK_TASK_ID,
+            "obj_id": OBJ_ID_STR,
+            "metadata": {"obj_id": OBJ_ID_STR},
+        }
+
+    def _seed_pages(self, store: InMemoryBlobStore, markdown: str) -> None:
+        pages = [Page(obj_id=OBJ_ID, page_no=1, markdown=markdown, source="doc.pdf")]
+        store.put(f"pages/{OBJ_ID_STR}.json", parse_service.encode_pages(pages))
+
+    def test_whitespace_only_pages_returns_400_after_fallback(
+        self,
+        client: TestClient,
+        docling_client: MagicMock,
+        store: InMemoryBlobStore,
+    ) -> None:
+        docling_client.fetch_chunk_result = AsyncMock(return_value=[])
+        self._seed_pages(store, "   \n\n   ")
+
+        resp = client.post("/v1/chunk/finalize", json=self._finalize_body())
+
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["type"] == "document_processing_error"
+        assert "fallback page-split" in body["detail"]
+
+    def test_real_page_content_falls_back_and_succeeds(
+        self,
+        client: TestClient,
+        docling_client: MagicMock,
+        store: InMemoryBlobStore,
+    ) -> None:
+        docling_client.fetch_chunk_result = AsyncMock(return_value=[])
+        self._seed_pages(store, "# Real heading\n\nSome real body content to split.")
+
+        resp = client.post("/v1/chunk/finalize", json=self._finalize_body())
+
+        assert resp.status_code == 200
+        artifact = json.loads(store.get(f"parse/{OBJ_ID_STR}.json"))
+        assert len(artifact["chunks"]) >= 1
+        assert all(c["obj_id"] == OBJ_ID_STR for c in artifact["chunks"])
+        assert all(c["source"] == "fallback-page-split" for c in artifact["chunks"])
+
+
 # ---------------------------------------------------------------------------
 # docling-serve failure mapping (_translate_docling_errors)
 # ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ from docling.datamodel.service.callbacks import (
     ProgressKind,
 )
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from langchain_core.documents import Document
 from minio import Minio
 from pydantic import BaseModel, BeforeValidator
 
@@ -35,7 +36,8 @@ from src.lib.core.ingestion.exceptions import (
     UpstreamBackpressureException,
     UpstreamServiceException,
 )
-from src.lib.core.ingestion.types import ParseArtifact
+from src.lib.core.ingestion.indexer.simple import SimpleIndexer
+from src.lib.core.ingestion.types import ChunkType, ParseArtifact, ParsedChunk
 
 __all__ = ["router"]
 
@@ -504,6 +506,16 @@ async def chunk_finalize_endpoint(
     Must only be called after /v1/chunk/status/{chunking_task_id} returns
     "success". Reads back the pages /v1/parse/resolve already derived —
     finalizing chunks never re-fetches or re-parses the DoclingDocument itself.
+
+    If docling-serve's hybrid chunker produces zero chunks (a real production
+    occurrence — the chunking step can degrade to nothing for a specific
+    document even though conversion succeeded), fall back to a plain
+    character-count split of the cached pages rather than writing an artifact
+    with an empty chunk list. This lives here, not in the indexing service,
+    per Epic 21.8: chunking-strategy decisions belong entirely to this
+    service now. If the fallback split *also* produces nothing (pages are
+    whitespace-only), that's a genuine failure — raised here rather than
+    silently persisted for indexing to discover later.
     """
     obj_id_str = request.obj_id
     obj_id = uuid.UUID(obj_id_str)
@@ -517,6 +529,37 @@ async def chunk_finalize_endpoint(
 
     pages_bytes = await replay_store.aget(service.pages_key(obj_id_str))
     pages = service.decode_pages(pages_bytes)
+
+    if not parsed_chunks:
+        page_docs = [
+            Document(
+                page_content=page.markdown,
+                metadata={"obj_id": obj_id_str, "page_no": page.page_no},
+            )
+            for page in pages
+        ]
+        fallback_docs = SimpleIndexer().process(page_docs)
+        if not fallback_docs:
+            raise DocumentProcessingException(
+                f"chunking produced zero chunks for obj_id={obj_id_str}, and "
+                "the fallback page-split also produced zero chunks "
+                "(pages are likely whitespace-only)"
+            )
+        logger.info(
+            "chunk_finalize_fallback_used",
+            obj_id=obj_id_str,
+            num_fallback_chunks=len(fallback_docs),
+        )
+        parsed_chunks = [
+            ParsedChunk(
+                page_content=doc.page_content,
+                source="fallback-page-split",
+                type=ChunkType.TEXT,
+                obj_id=obj_id,
+                page_no=doc.metadata.get("page_no"),
+            )
+            for doc in fallback_docs
+        ]
 
     artifact = ParseArtifact(pages=pages, chunks=parsed_chunks)
 

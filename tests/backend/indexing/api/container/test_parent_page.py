@@ -408,15 +408,15 @@ async def test_delete_namespace_removes_all_pages(
 # ---------------------------------------------------------------------------
 #
 # Unlike test_delete_namespace_removes_all_pages above (a deliberate wipe via
-# DELETE /ingest), this reproduces an ACCIDENTAL one via an ordinary POST
-# /ingest whose chunk step came back empty for reasons unrelated to any other
-# object in the namespace (e.g. a docling-serve chunking failure that
+# DELETE /ingest), this guards against an ACCIDENTAL one from an ordinary
+# POST /ingest whose chunk step came back empty for reasons unrelated to any
+# other object in the namespace (e.g. a docling-serve chunking failure that
 # succeeded at HTTP level but produced zero chunks).
 #
 # PagedInput.is_empty() (parent_page.py) only treats a call as an intentional
-# wipe when BOTH pages and chunks are empty. If pages is non-empty but
-# chunks is empty, the pipeline proceeds normally and delegates chunks=[] to
-# the inner upserter's aupsert([]), which calls LangChain's
+# wipe when BOTH pages and chunks are empty. If pages is non-empty but chunks
+# is empty and that ever reached the pipeline unguarded, chunks=[] would
+# delegate to the inner upserter's aupsert([]), which calls LangChain's
 # aindex(docs_source=[], cleanup="scoped_full", source_id_key="obj_id").
 # Because there is nothing to iterate, the source-id set LangChain uses to
 # scope cleanup stays empty (not "contains this object's obj_id" — literally
@@ -424,6 +424,16 @@ async def test_delete_namespace_removes_all_pages(
 # `if group_ids:` treats an empty list as falsy and skips the group filter
 # entirely — so cleanup lists (and deletes) every key in the WHOLE namespace
 # predating the call, not just the empty-chunk object's own (nonexistent) keys.
+#
+# As of Epic 21.11, the parsing service guarantees a non-empty chunk list
+# before an artifact is ever written (it runs its own fallback page-split —
+# see chunk_finalize_endpoint), so this service's own guard
+# (ingest_endpoint's `if not chunks:`) now rejects an empty-chunk artifact
+# outright with 422 rather than attempting a fallback — the pipeline is
+# never reached at all for object B. ParentPagePipeline.aprocess's own
+# defense-in-depth (never delegates an empty chunks list downstream; see
+# tests/lib/core/ingestion/pipeline/test_parent_page.py) remains a second,
+# independent layer for any future caller that bypasses this router.
 
 
 @pytest.mark.integration
@@ -434,8 +444,9 @@ async def test_empty_chunk_batch_does_not_wipe_other_objects_in_namespace(
     qdrant_client: AsyncQdrantClient,
     collection_name: str,
 ):
-    """A second object's degraded (zero-chunk) ingest must not delete a
-    first, unrelated object's already-indexed vectors in the same namespace."""
+    """A second object's degraded (zero-chunk) ingest must be rejected
+    outright, and must not delete a first, unrelated object's already-indexed
+    vectors in the same namespace."""
     namespace = uuid.uuid4()
     obj_a, obj_b = uuid.uuid4(), uuid.uuid4()
 
@@ -459,7 +470,11 @@ async def test_empty_chunk_batch_does_not_wipe_other_objects_in_namespace(
     assert len(points_before) == len(chunks_a), "sanity: object A indexed correctly"
 
     # Object B: pages parsed fine, but chunking degraded to zero — the exact
-    # condition PagedInput.is_empty() does not catch.
+    # condition PagedInput.is_empty() does not catch. In production the
+    # parsing service would never write this artifact shape (it falls back
+    # to a page-split itself first); seeding it directly here still proves
+    # the indexing service's own guard rejects it defensively rather than
+    # trusting the artifact's shape.
     pages_b = [
         {
             "obj_id": str(obj_b),
@@ -475,7 +490,10 @@ async def test_empty_chunk_batch_does_not_wipe_other_objects_in_namespace(
         pages=pages_b,
         chunks=[],
     )
-    await _ingest(client, namespace, ref_b)
+    r = await client.post(
+        "/ingest", params={"namespace": str(namespace)}, json={"artifact_ref": ref_b}
+    )
+    assert r.status_code == 422, r.text
 
     points_after, _ = await qdrant_client.scroll(
         collection_name=collection_name,
@@ -484,6 +502,6 @@ async def test_empty_chunk_batch_does_not_wipe_other_objects_in_namespace(
         limit=100,
     )
     assert len(points_after) == len(chunks_a), (
-        f"object A's vectors were wiped by object B's empty-chunk ingest: "
-        f"had {len(points_before)}, now {len(points_after)}"
+        f"object A's vectors were wiped by object B's rejected empty-chunk "
+        f"ingest: had {len(points_before)}, now {len(points_after)}"
     )

@@ -312,13 +312,19 @@ class TestArtifactGuards:
         assert "zero pages" in body["detail"]
         mock_pipeline.aprocess.assert_not_called()
 
-    def test_zero_chunks_whitespace_only_pages_returns_422_after_fallback(
+    def test_zero_chunks_returns_422_and_pipeline_never_called(
         self,
         client: TestClient,
         namespace: uuid.UUID,
         store: InMemoryBlobStore,
         mock_pipeline: AsyncMock,
     ) -> None:
+        """As of Epic 21.11, the parsing service guarantees a non-empty
+        chunk list (it runs its own fallback page-split — see
+        chunk_finalize_endpoint) before an artifact is ever written. So an
+        empty ``chunks`` list reaching this service is always an unexpected,
+        permanent failure, not a case to re-split for — this service has no
+        chunking-strategy knowledge by design (Epic 21.8)."""
         store.put(
             "parsed-chunks/whitespace.json",
             _artifact_bytes([], pages=[_page("   \n\n   ")]),
@@ -334,33 +340,8 @@ class TestArtifactGuards:
         assert response.status_code == 422
         body = response.json()
         assert body["type"] == "document_processing_error"
-        assert "fallback page-split" in body["detail"]
+        assert "zero chunks" in body["detail"]
         mock_pipeline.aprocess.assert_not_called()
-
-    def test_zero_chunks_real_page_content_falls_back_and_succeeds(
-        self,
-        client: TestClient,
-        namespace: uuid.UUID,
-        store: InMemoryBlobStore,
-        mock_pipeline: AsyncMock,
-    ) -> None:
-        store.put(
-            "parsed-chunks/fallback.json",
-            _artifact_bytes(
-                [],
-                pages=[_page("# Real heading\n\nSome real body content to split.")],
-            ),
-        )
-
-        response = _post_artifact_ref(
-            client, namespace, bucket="parsed-chunks", key="parsed-chunks/fallback.json"
-        )
-
-        assert response.status_code == 200
-        mock_pipeline.aprocess.assert_called_once()
-        paged = _paged_arg(mock_pipeline)
-        assert len(paged.chunks) >= 1
-        assert all(chunk.metadata["obj_id"] == str(OBJ_ID) for chunk in paged.chunks)
 
 
 class TestDeleteEndpoint:

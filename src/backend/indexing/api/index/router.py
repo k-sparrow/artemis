@@ -2,7 +2,6 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
-from langchain_core.documents import Document
 from opentelemetry.trace import Status, StatusCode, get_current_span
 
 from src.backend.indexing.api.dependencies import (
@@ -13,8 +12,7 @@ from src.backend.indexing.api.index import service
 from src.backend.indexing.api.index.service import IngestRequest
 from src.lib.backend.logging import get_logger
 from src.lib.core.ingestion.exceptions import DocumentProcessingException
-from src.lib.core.ingestion.indexer.simple import SimpleIndexer
-from src.lib.core.ingestion.types import ChunkType, ParsedChunk, UpsertResult
+from src.lib.core.ingestion.types import UpsertResult
 
 
 __all__ = [
@@ -103,37 +101,19 @@ async def ingest_endpoint(
                 )
             )
         if not chunks:
-            page_docs = [
-                Document(
-                    page_content=page.markdown,
-                    metadata={"obj_id": str(page.obj_id), "page_no": page.page_no},
+            # By this point the parsing service's own chunk-empty fallback
+            # (Epic 21.8/21.11 — see chunk_finalize_endpoint) has already
+            # run, so a genuinely empty chunk list here means something
+            # upstream is broken, not a case to re-split for. No fallback
+            # logic lives in this service — it has no chunking-strategy
+            # knowledge by design.
+            _fail(
+                DocumentProcessingException(
+                    f"chunking produced zero chunks for obj_id={obj_id} "
+                    f"in namespace={namespace} (unexpected: the parsing "
+                    "service is expected to guarantee a non-empty artifact)"
                 )
-                for page in pages
-            ]
-            fallback_docs = SimpleIndexer().process(page_docs)
-            if not fallback_docs:
-                _fail(
-                    DocumentProcessingException(
-                        f"chunking produced zero chunks for obj_id={obj_id}, and "
-                        "the fallback page-split also produced zero chunks "
-                        "(pages are likely whitespace-only)"
-                    )
-                )
-            logger.info(
-                "ingest_chunk_fallback_used",
-                obj_id=obj_id,
-                num_fallback_chunks=len(fallback_docs),
             )
-            chunks = [
-                ParsedChunk(
-                    page_content=doc.page_content,
-                    source="fallback-page-split",
-                    type=ChunkType.TEXT,
-                    obj_id=UUID(doc.metadata["obj_id"]),
-                    page_no=doc.metadata.get("page_no"),
-                )
-                for doc in fallback_docs
-            ]
     elif not chunks:
         # Inline mode carries no pages, so there's no fallback split to try —
         # and an empty list here is otherwise indistinguishable from

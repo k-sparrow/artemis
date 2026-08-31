@@ -27,7 +27,6 @@ py_library(
         "//src/lib/backend/logging:pkg",
         "//src/lib/core/ingestion:pkg",
         requirement("fastapi"),
-        requirement("langchain-core"),
         requirement("opentelemetry-api"),
     ],
 )
