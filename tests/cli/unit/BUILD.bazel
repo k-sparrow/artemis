@@ -14,6 +14,7 @@ py_test(
     tags = ["unit"],
     deps = [
         "//src/backend/enterprise/data_sources/api/sources:schemas",
+        "//src/backend/storage/api/files:schemas",
         "//src/cli:client",
         "//src/cli:settings",
         requirement("httpx"),

@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+import httpx
 import pytest
 import respx
 from httpx import Response
@@ -13,7 +14,8 @@ from src.backend.enterprise.data_sources.api.sources.schemas import (
     DataSourceCreate,
     DataSourceResponse,
 )
-from src.cli.client import DataSourcesClient
+from src.backend.storage.api.files.schemas import IngestionTaskResponse
+from src.cli.client import DataSourcesClient, StorageClient
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -164,3 +166,75 @@ async def test_lifecycle_action_posts_and_returns_response(action, client):
     assert route.called
     assert isinstance(result, DataSourceResponse)
     assert result.id == _SOURCE_ID
+
+
+# ---------------------------------------------------------------------------
+# StorageClient.list_tasks
+# ---------------------------------------------------------------------------
+
+_TASK_ID = uuid.UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+_OBJ_ID = uuid.UUID("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee")
+
+_SAMPLE_TASK_RESPONSE = {
+    "task_id": str(_TASK_ID),
+    "obj_id": str(_OBJ_ID),
+    "namespace_id": str(_NS_ID),
+    "status": "running",
+    "stage": "tasks.submit_parse",
+    "operation": "CREATE",
+    "failure_reason": None,
+    "created_at": _NOW.isoformat(),
+    "completed_at": None,
+}
+
+
+@pytest.fixture
+def storage_client():
+    return StorageClient(base_url=_GATEWAY)
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_returns_parsed_list(storage_client):
+    with respx.mock(base_url=_GATEWAY) as mock:
+        mock.get(f"/namespaces/{_NS_ID}/tasks").mock(
+            return_value=Response(200, json=[_SAMPLE_TASK_RESPONSE])
+        )
+        result = await storage_client.list_tasks(_NS_ID, _OWNER_ID)
+
+    assert result == [IngestionTaskResponse.model_validate(_SAMPLE_TASK_RESPONSE)]
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_sends_owner_header(storage_client):
+    with respx.mock(base_url=_GATEWAY) as mock:
+        route = mock.get(f"/namespaces/{_NS_ID}/tasks").mock(
+            return_value=Response(200, json=[_SAMPLE_TASK_RESPONSE])
+        )
+        await storage_client.list_tasks(_NS_ID, _OWNER_ID)
+
+    assert route.called
+    assert route.calls[0].request.headers["X-Owner-Id"] == str(_OWNER_ID)
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_surfaces_running_status_and_stage(storage_client):
+    """The CLI/TUI's whole reason for polling this endpoint (Epic 22): a
+    still-running task must come back with its live stage and a null
+    completed_at, not just terminal SUCCESS/FAILURE rows."""
+    with respx.mock(base_url=_GATEWAY) as mock:
+        mock.get(f"/namespaces/{_NS_ID}/tasks").mock(
+            return_value=Response(200, json=[_SAMPLE_TASK_RESPONSE])
+        )
+        result = await storage_client.list_tasks(_NS_ID, _OWNER_ID)
+
+    assert result[0].status == "running"
+    assert result[0].stage == "tasks.submit_parse"
+    assert result[0].completed_at is None
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_raises_on_error(storage_client):
+    with respx.mock(base_url=_GATEWAY) as mock:
+        mock.get(f"/namespaces/{_NS_ID}/tasks").mock(return_value=Response(404))
+        with pytest.raises(httpx.HTTPStatusError):
+            await storage_client.list_tasks(_NS_ID, _OWNER_ID)

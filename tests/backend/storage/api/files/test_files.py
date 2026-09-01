@@ -553,6 +553,26 @@ class TestListTasks:
         assert body["failure_reason"] is not None
         assert body["obj_id"] is None
 
+    def test_running_task_has_stage_and_null_completed_at(
+        self, client: TestClient
+    ) -> None:
+        """Epic 22: the TUI polls this endpoint, not GET /tasks/{task_id} —
+        an in-flight task must show up here too with its live stage and no
+        completed_at, not just terminal SUCCESS/FAILURE rows."""
+        task_obj = SimpleNamespace(
+            **_ingestion_task_row(status="running", stage="tasks.index")
+        )
+
+        with patch(f"{_SERVICE}.list_tasks", new=AsyncMock(return_value=[task_obj])):
+            response = client.get(
+                f"/namespaces/{NAMESPACE_ID}/tasks", headers=_OWNER_HEADER
+            )
+        assert response.status_code == 200
+        body = response.json()[0]
+        assert body["status"] == "running"
+        assert body["stage"] == "tasks.index"
+        assert body["completed_at"] is None
+
     def test_empty_namespace_returns_empty_list(self, client: TestClient) -> None:
         with patch(f"{_SERVICE}.list_tasks", new=AsyncMock(return_value=[])):
             response = client.get(

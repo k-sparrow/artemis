@@ -12,7 +12,11 @@ from fastapi.testclient import TestClient
 from minio import Minio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from src.backend.storage.api.models import IngestedObject, IngestionTaskType
+from src.backend.storage.api.models import (
+    IngestedObject,
+    IngestionStatus,
+    IngestionTaskType,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +55,39 @@ def _seed_ingested_object(
 
     asyncio.get_event_loop().run_until_complete(_insert())
     return obj_id
+
+
+def _seed_ingestion_status(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    task_id: uuid.UUID,
+    namespace_id: uuid.UUID,
+    obj_id: uuid.UUID | None = None,
+    stage: str = "tasks.ingest",
+    status: str = "running",
+    operation: str = "CREATE",
+    failure_reason: str | None = None,
+) -> None:
+    """Insert a minimal IngestionStatus row directly — stands in for what
+    the worker's outbox (create_status_row/update_stage/mark_success/
+    mark_failure) would write over the course of a real pipeline run."""
+    import asyncio
+
+    async def _insert():
+        async with session_factory() as session:
+            row = IngestionStatus(
+                task_id=task_id,
+                namespace_id=namespace_id,
+                obj_id=obj_id,
+                operation=operation,
+                stage=stage,
+                status=status,
+                failure_reason=failure_reason,
+            )
+            session.add(row)
+            await session.commit()
+
+    asyncio.get_event_loop().run_until_complete(_insert())
 
 
 # ---------------------------------------------------------------------------
@@ -606,3 +643,210 @@ class TestListObjectsIntegration:
         stat = test_minio_client.stat_object(os.environ["S3_ARTEMIS_BUCKET"], s3_key)
         contract = json.loads(stat.metadata.get("x-amz-meta-contract"))
         assert contract["info"]["group_id"] == str(group_id)
+
+
+# ---------------------------------------------------------------------------
+# GET /namespaces/{id}/tasks, GET /namespaces/{id}/tasks/{task_id}
+#
+# Epic 22: both endpoints now read ingestion_status directly instead of the
+# retired, terminal-only ingestion_tasks — these seed ingestion_status rows
+# directly (standing in for what the worker's outbox would write) rather
+# than driving a real Celery pipeline, matching this layer's own contract
+# ("can this service read its own infra correctly").
+# ---------------------------------------------------------------------------
+
+
+class TestListTasksIntegration:
+    def test_running_task_visible_with_stage(
+        self,
+        client: TestClient,
+        owner_id: str,
+        storage_session_factory,
+    ) -> None:
+        """The exact gap Epic 22 closed: a task still in flight used to have
+        no row in the old ingestion_tasks table at all. It must now show up
+        here with its live stage and a null completed_at."""
+        ns_id = uuid.UUID(
+            client.post(
+                "/namespaces",
+                json={"type": "private"},
+                headers={"X-Owner-Id": owner_id},
+            ).json()["id"]
+        )
+        task_id = uuid.uuid4()
+        _seed_ingestion_status(
+            storage_session_factory,
+            task_id=task_id,
+            namespace_id=ns_id,
+            stage="tasks.submit_parse",
+            status="running",
+        )
+
+        response = client.get(
+            f"/namespaces/{ns_id}/tasks", headers={"X-Owner-Id": owner_id}
+        )
+        assert response.status_code == 200
+        tasks = response.json()
+        assert len(tasks) == 1
+        assert tasks[0]["task_id"] == str(task_id)
+        assert tasks[0]["status"] == "running"
+        assert tasks[0]["stage"] == "tasks.submit_parse"
+        assert tasks[0]["completed_at"] is None
+
+    def test_success_task_has_completed_at(
+        self,
+        client: TestClient,
+        owner_id: str,
+        storage_session_factory,
+    ) -> None:
+        ns_id = uuid.UUID(
+            client.post(
+                "/namespaces",
+                json={"type": "private"},
+                headers={"X-Owner-Id": owner_id},
+            ).json()["id"]
+        )
+        task_id = uuid.uuid4()
+        obj_id = uuid.uuid4()
+        _seed_ingestion_status(
+            storage_session_factory,
+            task_id=task_id,
+            namespace_id=ns_id,
+            obj_id=obj_id,
+            stage="tasks.index",
+            status="success",
+        )
+
+        response = client.get(
+            f"/namespaces/{ns_id}/tasks", headers={"X-Owner-Id": owner_id}
+        )
+        assert response.status_code == 200
+        task = response.json()[0]
+        assert task["status"] == "success"
+        assert task["obj_id"] == str(obj_id)
+        assert task["completed_at"] is not None
+
+    def test_excludes_other_namespace_tasks(
+        self,
+        client: TestClient,
+        owner_id: str,
+        storage_session_factory,
+    ) -> None:
+        ns_a = uuid.UUID(
+            client.post(
+                "/namespaces",
+                json={"type": "private"},
+                headers={"X-Owner-Id": owner_id},
+            ).json()["id"]
+        )
+        ns_b = uuid.UUID(
+            client.post(
+                "/namespaces",
+                json={"type": "private"},
+                headers={"X-Owner-Id": owner_id},
+            ).json()["id"]
+        )
+        _seed_ingestion_status(
+            storage_session_factory, task_id=uuid.uuid4(), namespace_id=ns_a
+        )
+        _seed_ingestion_status(
+            storage_session_factory, task_id=uuid.uuid4(), namespace_id=ns_b
+        )
+
+        resp_a = client.get(
+            f"/namespaces/{ns_a}/tasks", headers={"X-Owner-Id": owner_id}
+        )
+        assert len(resp_a.json()) == 1
+        assert resp_a.json()[0]["namespace_id"] == str(ns_a)
+
+    def test_missing_namespace_returns_404(
+        self, client: TestClient, owner_id: str
+    ) -> None:
+        response = client.get(
+            f"/namespaces/{uuid.uuid4()}/tasks", headers={"X-Owner-Id": owner_id}
+        )
+        assert response.status_code == 404
+
+
+class TestGetTaskStatusIntegration:
+    def test_running_task_returns_200_not_404(
+        self,
+        client: TestClient,
+        owner_id: str,
+        storage_session_factory,
+    ) -> None:
+        """The exact gap Epic 22 closed: an in-flight task used to 404
+        because ingestion_tasks had no row for it yet."""
+        ns_id = uuid.UUID(
+            client.post(
+                "/namespaces",
+                json={"type": "private"},
+                headers={"X-Owner-Id": owner_id},
+            ).json()["id"]
+        )
+        task_id = uuid.uuid4()
+        _seed_ingestion_status(
+            storage_session_factory,
+            task_id=task_id,
+            namespace_id=ns_id,
+            stage="tasks.poll_chunk",
+            status="running",
+        )
+
+        response = client.get(
+            f"/namespaces/{ns_id}/tasks/{task_id}", headers={"X-Owner-Id": owner_id}
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "running"
+        assert body["stage"] == "tasks.poll_chunk"
+        assert body["completed_at"] is None
+
+    def test_unknown_task_id_returns_404(
+        self, client: TestClient, owner_id: str
+    ) -> None:
+        ns_id = uuid.UUID(
+            client.post(
+                "/namespaces",
+                json={"type": "private"},
+                headers={"X-Owner-Id": owner_id},
+            ).json()["id"]
+        )
+        response = client.get(
+            f"/namespaces/{ns_id}/tasks/{uuid.uuid4()}",
+            headers={"X-Owner-Id": owner_id},
+        )
+        assert response.status_code == 404
+
+    def test_task_in_other_namespace_returns_404(
+        self,
+        client: TestClient,
+        owner_id: str,
+        storage_session_factory,
+    ) -> None:
+        """ingestion_status has no direct namespace ownership check of its
+        own — get_task_status filters on (task_id, namespace_id) together,
+        so a task queried under the wrong namespace must 404, not leak."""
+        ns_a = uuid.UUID(
+            client.post(
+                "/namespaces",
+                json={"type": "private"},
+                headers={"X-Owner-Id": owner_id},
+            ).json()["id"]
+        )
+        ns_b = uuid.UUID(
+            client.post(
+                "/namespaces",
+                json={"type": "private"},
+                headers={"X-Owner-Id": owner_id},
+            ).json()["id"]
+        )
+        task_id = uuid.uuid4()
+        _seed_ingestion_status(
+            storage_session_factory, task_id=task_id, namespace_id=ns_a
+        )
+
+        response = client.get(
+            f"/namespaces/{ns_b}/tasks/{task_id}", headers={"X-Owner-Id": owner_id}
+        )
+        assert response.status_code == 404

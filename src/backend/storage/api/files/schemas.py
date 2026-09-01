@@ -47,7 +47,9 @@ class IngestionTaskResponse(BaseModel):
     obj_id: uuid.UUID | None
     namespace_id: uuid.UUID
     status: str = Field(description="'running', 'success', or 'failure'")
-    stage: str = Field(description="Current/last pipeline task name, e.g. 'tasks.index'")
+    stage: str = Field(
+        description="Current/last pipeline task name, e.g. 'tasks.index'"
+    )
     operation: str
     failure_reason: str | None
     created_at: datetime

@@ -156,7 +156,7 @@ async def clean_db(
     async with storage_session_factory() as session:
         await session.execute(
             sa.text(
-                "TRUNCATE owner, namespace, ingested_objects CASCADE"
+                "TRUNCATE owner, namespace, ingested_objects, ingestion_status CASCADE"
             )
         )
         await session.commit()

@@ -343,11 +343,7 @@ def clean_db(postgres_container: PostgresContainer) -> Iterator[None]:
     )
     engine = sa.create_engine(url)
     with engine.begin() as conn:
-        conn.execute(
-            sa.text(
-                "TRUNCATE owner, namespace, ingested_objects CASCADE"
-            )
-        )
+        conn.execute(sa.text("TRUNCATE owner, namespace, ingested_objects CASCADE"))
     engine.dispose()
 
 
