@@ -345,7 +345,7 @@ def clean_db(postgres_container: PostgresContainer) -> Iterator[None]:
     with engine.begin() as conn:
         conn.execute(
             sa.text(
-                "TRUNCATE owner, namespace, ingested_objects, ingestion_tasks CASCADE"
+                "TRUNCATE owner, namespace, ingested_objects CASCADE"
             )
         )
     engine.dispose()

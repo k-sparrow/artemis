@@ -3,11 +3,14 @@
 Stack: Network → Kafka (KRaft) → Postgres (postgres:16-alpine, wal_level=logical)
        → artemis-db-migrations → ksqlDB → ksqldb-init sidecar
        → Kafka Connect (artemis/cp-kafka-connect:latest)
-       → three connectors (Debezium source + 2 JDBC sinks)
+       → two connectors (Debezium source + 1 JDBC sink)
 
 Test actions insert/update rows directly into ingestion_status. Debezium reads
-the WAL, publishes to Kafka. ksqlDB transforms and fans out to two output topics.
-JDBC sinks upsert the rows into ingested_objects and ingestion_tasks.
+the WAL, publishes to Kafka. ksqlDB transforms and fans out to one output topic.
+The JDBC sink upserts the rows into ingested_objects. Task-state visibility
+(ingestion_tasks) was retired in Epic 22 — the storage service now reads
+ingestion_status directly instead, so there's no second sink/table to verify
+here.
 
 Prerequisites:
     bazel run //tools/oci/images:kafka-connect.tarball
@@ -50,7 +53,6 @@ _CONNECTOR_TIMEOUT_S = 90
 
 _SOURCE_CONNECTOR = "DebeziumPostgresSourceConnector__CeleryResultBackendPublish"
 _SINK_OBJECTS = "DebeziumJdbcSinkConnector__CeleryResultToIngestedObjects"
-_SINK_TASKS = "DebeziumJdbcSinkConnector__CeleryResultToIngestionTasks"
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +345,7 @@ def connectors(
     streams: None,
     schema_registry: SchemaRegistryContainer,
 ) -> None:
-    """Deploy all three CDC connectors and wait for each to reach RUNNING."""
+    """Deploy the CDC connectors and wait for each to reach RUNNING."""
     sr_url = schema_registry.get_internal_url()
 
     _deploy_connector(
@@ -396,32 +398,7 @@ def connectors(
             "use.time.zone": "UTC",
         },
     )
-    _deploy_connector(
-        kafka_connect_url,
-        _SINK_TASKS,
-        {
-            "connector.class": "io.debezium.connector.jdbc.JdbcSinkConnector",
-            "tasks.max": "1",
-            "topics": "artemis.celery.ingestion_tasks",
-            "value.converter": "io.confluent.connect.json.JsonSchemaConverter",
-            "value.converter.schema.registry.url": sr_url,
-            "value.converter.schemas.enable": "true",
-            "key.converter": "io.confluent.connect.json.JsonSchemaConverter",
-            "key.converter.schema.registry.url": sr_url,
-            "key.converter.schemas.enable": "true",
-            "connection.username": _PG_USER,
-            "connection.password": _PG_PASS,
-            "connection.url": f"jdbc:postgresql://{_PG_ALIAS}:{_PG_PORT}/{_PG_DB}",
-            "table.name.format": "ingestion_tasks",
-            "primary.key.mode": "record_key",
-            "primary.key.fields": "task_id",
-            "insert.mode": "upsert",
-            "delete.enabled": "true",
-            "schema.evolution": "none",
-            "use.time.zone": "UTC",
-        },
-    )
-    for name in (_SOURCE_CONNECTOR, _SINK_OBJECTS, _SINK_TASKS):
+    for name in (_SOURCE_CONNECTOR, _SINK_OBJECTS):
         _wait_connector_running(kafka_connect_url, name)
 
 
@@ -432,12 +409,7 @@ def connectors(
 
 @pytest.fixture
 def namespace_row(postgres_engine: sa.Engine) -> uuid.UUID:
-    """Insert an owner + namespace row and return the namespace_id.
-
-    ingested_objects.namespace_id and ingestion_tasks.namespace_id both have
-    FK constraints to namespace.id, so a valid namespace must exist before the
-    JDBC sink writes its rows.
-    """
+    """Insert an owner + namespace row and return the namespace_id."""
     owner_id = uuid.uuid4()
     namespace_id = uuid.uuid4()
     with Session(postgres_engine) as session:
@@ -462,5 +434,5 @@ def clean_db(postgres_engine: sa.Engine) -> Iterator[None]:
         # replay earlier messages after a task restart, and those messages reference
         # namespace_ids from previous tests. Truncating namespace would cause FK
         # violations on replay. Only clean the sink output tables and the CDC source.
-        conn.execute(sa.text("TRUNCATE ingested_objects, ingestion_tasks"))
+        conn.execute(sa.text("TRUNCATE ingested_objects"))
         conn.execute(sa.text("DELETE FROM ingestion_status"))

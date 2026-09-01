@@ -25,10 +25,28 @@ from src.backend.storage.api.files.schemas import (
     IngestionTaskResponse,
     ObjectUploadResponse,
 )
+from src.backend.storage.api.models import IngestionStatus
 from src.lib.backend.logging import get_logger
 
 router = APIRouter(tags=["objects"])
 log = get_logger(__name__)
+
+
+def _to_task_response(row: IngestionStatus) -> IngestionTaskResponse:
+    """``ingestion_status`` has no ``completed_at`` column of its own — it's
+    derived here from ``updated_at``, only once the row reaches a terminal
+    status (Epic 22: a running task has no completion time)."""
+    return IngestionTaskResponse(
+        task_id=row.task_id,
+        obj_id=row.obj_id,
+        namespace_id=row.namespace_id,
+        status=row.status,
+        stage=row.stage,
+        operation=row.operation,
+        failure_reason=row.failure_reason,
+        created_at=row.created_at,
+        completed_at=row.updated_at if row.status != "running" else None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -224,7 +242,7 @@ async def list_tasks_endpoint(
         namespace_id=namespace_id,
         caller_owner_id=caller_owner_id,
     )
-    return [IngestionTaskResponse.model_validate(t) for t in tasks]
+    return [_to_task_response(t) for t in tasks]
 
 
 @router.get("/{namespace_id}/tasks/{task_id}", response_model=IngestionTaskResponse)
@@ -240,4 +258,4 @@ async def get_task_status_endpoint(
         caller_owner_id=caller_owner_id,
         task_id=task_id,
     )
-    return IngestionTaskResponse.model_validate(task)
+    return _to_task_response(task)

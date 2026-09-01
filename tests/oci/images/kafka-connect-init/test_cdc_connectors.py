@@ -4,7 +4,7 @@
 #
 """CDC pipeline connector deployment tests.
 
-Verifies that the three connectors deployed by artemis/cp-kafka-connect-init
+Verifies that the two connectors deployed by artemis/cp-kafka-connect-init
 can be deployed against a plain Postgres (postgres:16-alpine + Alembic migrations)
 and reach the RUNNING state within a reasonable timeout.
 
@@ -17,8 +17,9 @@ Connectors under test
 2. DebeziumJdbcSinkConnector__CeleryResultToIngestedObjects
    Upserts rows into ingested_objects from artemis.celery.ingested_objects.
 
-3. DebeziumJdbcSinkConnector__CeleryResultToIngestionTasks
-   Upserts rows into ingestion_tasks from artemis.celery.ingestion_tasks.
+(Epic 22 retired the third connector, DebeziumJdbcSinkConnector__CeleryResultToIngestionTasks
+— task-state visibility is now a direct read of ingestion_status by the storage
+service, not a second JDBC-sunk table.)
 
 Prerequisites:
     bazel run //tools/oci/images:kafka-connect.tarball
@@ -147,43 +148,6 @@ class TestJdbcSinkIngestedObjects:
                 "table.name.format": "ingested_objects",
                 "primary.key.mode": "record_value",
                 "primary.key.fields": "id",
-                "insert.mode": "upsert",
-                "schema.evolution": "none",
-                "use.time.zone": "UTC",
-            },
-        )
-        yield
-        _delete_connector(kafka_connect_url, self._NAME)
-
-    def test_reaches_running_state(self, kafka_connect_url: str) -> None:
-        _wait_connector_running(kafka_connect_url, self._NAME)
-
-
-@pytest.mark.integration
-class TestJdbcSinkIngestionTasks:
-    """JDBC sink for ingestion_tasks reaches RUNNING with the target table present."""
-
-    _NAME = "DebeziumJdbcSinkConnector__CeleryResultToIngestionTasks"
-
-    @pytest.fixture(autouse=True)
-    def connector(self, kafka_connect_url: str) -> None:
-        _deploy_connector(
-            kafka_connect_url,
-            self._NAME,
-            {
-                "connector.class": "io.debezium.connector.jdbc.JdbcSinkConnector",
-                "tasks.max": "1",
-                "topics": "artemis.celery.ingestion_tasks",
-                "value.converter": "org.apache.kafka.connect.json.JsonConverter",
-                "value.converter.schemas.enable": "false",
-                "key.converter": "org.apache.kafka.connect.json.JsonConverter",
-                "key.converter.schemas.enable": "false",
-                "connection.username": "postgres",
-                "connection.password": "testpass",
-                "connection.url": f"jdbc:postgresql://{_PG_HOST}:{_PG_PORT}/{_PG_DB}",
-                "table.name.format": "ingestion_tasks",
-                "primary.key.mode": "record_value",
-                "primary.key.fields": "task_id",
                 "insert.mode": "upsert",
                 "schema.evolution": "none",
                 "use.time.zone": "UTC",

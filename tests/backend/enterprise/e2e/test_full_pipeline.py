@@ -9,7 +9,7 @@ Proves the complete pipeline end-to-end:
   Private path:
     POST /namespaces/{id}/objects → storage → Celery → Docling → TEI → Qdrant vectors
               → /retrieve/invoke returns the indexed documents
-              → CDC → ingested_objects + ingestion_tasks tables
+              → CDC → ingested_objects table; direct read → ingestion_status
     DELETE /namespaces/{id}/objects/{obj_id} → tombstone → Qdrant vectors gone
               → CDC → ingested_objects row deleted
 """
@@ -315,20 +315,22 @@ class TestSingleNamespaceFullPipeline:
                 f"after {_CDC_POLL_TIMEOUT_S}s"
             )
 
-    def test_ingestion_tasks_recorded(
+    def test_ingestion_status_recorded(
         self,
         indexed_documents: list[Document],
         data_source: dict,
         postgres_engine: sa.Engine,
     ) -> None:
-        """CDC pipeline writes ingestion_tasks rows after tasks.index success."""
+        """The worker's transactional outbox writes an ingestion_status success
+        row after tasks.index (Epic 22: this table replaced ingestion_tasks as
+        the source of task-state visibility, read directly, not via CDC)."""
         namespace_id = uuid.UUID(data_source["namespace_id"])
 
         def _row():
             with postgres_engine.connect() as conn:
                 return conn.execute(
                     sa.text(
-                        "SELECT task_id FROM ingestion_tasks"
+                        "SELECT task_id FROM ingestion_status"
                         " WHERE namespace_id = :ns_id AND status = 'success' LIMIT 1"
                     ),
                     {"ns_id": namespace_id},
@@ -338,7 +340,7 @@ class TestSingleNamespaceFullPipeline:
             poll_until(_row, timeout=_CDC_POLL_TIMEOUT_S, interval=_CDC_POLL_INTERVAL_S)
         except TimeoutError:
             pytest.fail(
-                f"ingestion_tasks has no success rows for namespace_id={namespace_id} "
+                f"ingestion_status has no success rows for namespace_id={namespace_id} "
                 f"after {_CDC_POLL_TIMEOUT_S}s"
             )
 
@@ -687,7 +689,7 @@ class TestPrivatePathFullPipeline:
                 f"after {_CDC_POLL_TIMEOUT_S}s"
             )
 
-    def test_ingestion_tasks_recorded(
+    def test_ingestion_status_recorded(
         self,
         indexed_documents: list[Document],
         namespace: dict,
@@ -699,7 +701,7 @@ class TestPrivatePathFullPipeline:
             with postgres_engine.connect() as conn:
                 return conn.execute(
                     sa.text(
-                        "SELECT task_id FROM ingestion_tasks"
+                        "SELECT task_id FROM ingestion_status"
                         " WHERE namespace_id = :ns_id AND status = 'success' LIMIT 1"
                     ),
                     {"ns_id": namespace_id},
@@ -709,7 +711,7 @@ class TestPrivatePathFullPipeline:
             poll_until(_row, timeout=_CDC_POLL_TIMEOUT_S, interval=_CDC_POLL_INTERVAL_S)
         except TimeoutError:
             pytest.fail(
-                f"ingestion_tasks has no success rows for namespace_id={namespace_id} "
+                f"ingestion_status has no success rows for namespace_id={namespace_id} "
                 f"after {_CDC_POLL_TIMEOUT_S}s"
             )
 

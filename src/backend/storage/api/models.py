@@ -29,6 +29,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.lib.backend.db.base import Base
+from src.lib.core.ingestion.models import IngestionStatus
 
 # Deterministic UUID5 namespace used to derive surrogate IDs from natural keys.
 # Stable across all deployments — must never change once data exists.
@@ -189,60 +190,6 @@ class IngestedObject(Base):
     )
 
     namespace: Mapped[Namespace] = relationship(back_populates="objects")
-
-
-class IngestionTask(Base):
-    """Task history — one row per completed ingestion task (success or failure).
-
-    Written exclusively by the JDBC sink (CDC from ``ingestion_status``).
-    The storage service reads from this table; it never writes to it.
-    """
-
-    __tablename__ = "ingestion_tasks"
-
-    task_id: Mapped[uuid.UUID] = mapped_column(
-        sa.UUID(as_uuid=True),
-        primary_key=True,
-        comment="Links to ingestion_status.task_id (the contract task_id)",
-    )
-    obj_id: Mapped[uuid.UUID | None] = mapped_column(
-        sa.UUID(as_uuid=True),
-        nullable=True,
-        index=True,
-        comment="NULL on FAILURE tasks that produced no object",
-    )
-    namespace_id: Mapped[uuid.UUID] = mapped_column(
-        sa.UUID(as_uuid=True),
-        sa.ForeignKey("namespace.id"),
-        nullable=False,
-        index=True,
-        comment=(
-            "Denormalised from obj_id for efficient per-namespace "
-            "queries and FAILURE lookup"
-        ),
-    )
-    status: Mapped[str] = mapped_column(
-        sa.Text,
-        nullable=False,
-        comment="'success' or 'failure'",
-    )
-    failure_reason: Mapped[str | None] = mapped_column(
-        sa.Text,
-        nullable=True,
-        comment="Traceback excerpt on failure; NULL on success",
-    )
-    completed_at: Mapped[datetime] = mapped_column(
-        sa.DateTime(timezone=True),
-        nullable=False,
-        comment="updated_at from ingestion_status at its last write",
-    )
-    operation: Mapped[str] = mapped_column(
-        sa.Text,
-        nullable=False,
-        comment="'CREATE', 'MODIFY', or 'DELETE'",
-    )
-
-    namespace: Mapped[Namespace] = relationship()
 
 
 # ---------------------------------------------------------------------------

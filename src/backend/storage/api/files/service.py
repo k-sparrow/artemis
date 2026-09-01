@@ -15,7 +15,7 @@ from src.backend.storage.api.files.exceptions import (
 )
 from src.backend.storage.api.models import (
     IngestedObject,
-    IngestionTask,
+    IngestionStatus,
     IngestionTaskType,
 )
 from src.backend.storage.api.service import _fetch_namespace, s3_key
@@ -303,14 +303,17 @@ async def list_tasks(
     session: AsyncSession,
     namespace_id: uuid.UUID,
     caller_owner_id: uuid.UUID,
-) -> list[IngestionTask]:
+) -> list[IngestionStatus]:
+    """Epic 22: reads ``ingestion_status`` directly (not the retired,
+    terminal-only ``ingestion_tasks``) so an in-flight task is visible here
+    too, not just SUCCESS/FAILURE ones."""
     await _fetch_namespace(
         session=session,
         namespace_id=namespace_id,
         caller_owner_id=caller_owner_id,
     )
     result = await session.execute(
-        sa.select(IngestionTask).where(IngestionTask.namespace_id == namespace_id)
+        sa.select(IngestionStatus).where(IngestionStatus.namespace_id == namespace_id)
     )
     return list(result.scalars().all())
 
@@ -320,16 +323,17 @@ async def get_task_status(
     namespace_id: uuid.UUID,
     caller_owner_id: uuid.UUID,
     task_id: uuid.UUID,
-) -> IngestionTask:
+) -> IngestionStatus:
+    """Epic 22: reads ``ingestion_status`` directly — see ``list_tasks``."""
     await _fetch_namespace(
         session=session,
         namespace_id=namespace_id,
         caller_owner_id=caller_owner_id,
     )
     result = await session.execute(
-        sa.select(IngestionTask).where(
-            IngestionTask.task_id == task_id,
-            IngestionTask.namespace_id == namespace_id,
+        sa.select(IngestionStatus).where(
+            IngestionStatus.task_id == task_id,
+            IngestionStatus.namespace_id == namespace_id,
         )
     )
     task = result.scalar_one_or_none()

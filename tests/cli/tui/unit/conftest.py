@@ -69,8 +69,10 @@ def make_task(**overrides) -> IngestionTaskResponse:
         obj_id=str(OBJ_ID),
         namespace_id=str(NS_ID),
         status="SUCCESS",
+        stage="tasks.index",
         operation="CREATE",
         failure_reason=None,
+        created_at=_NOW.isoformat(),
         completed_at=_NOW.isoformat(),
     )
     defaults.update(overrides)

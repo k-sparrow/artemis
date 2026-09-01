@@ -16,7 +16,7 @@ py_library(
 # Subsystem tests: CDC pipeline — Debezium WAL → ksqlDB → JDBC sink → DB tables
 #
 # Inserts rows into ingestion_status (the real Postgres WAL path),
-# then polls ingested_objects and ingestion_tasks until the JDBC sinks write them.
+# then polls ingested_objects until the JDBC sink writes it.
 #
 # Prerequisites:
 #   bazel run //tools/oci/images:kafka-connect.tarball

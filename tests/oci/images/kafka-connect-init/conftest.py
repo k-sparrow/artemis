@@ -13,7 +13,7 @@ Stack:
 Alembic migrations create:
   - debezium user with REPLICATION privilege
   - ingestion_status table + ingestion_status_publication
-  - all storage service tables (ingested_objects, ingestion_tasks, owner, namespace)
+  - all storage service tables (ingested_objects, owner, namespace)
 
 Prerequisites:
     bazel run //tools/oci/images:kafka-connect.tarball
@@ -43,7 +43,6 @@ _PG_SUPERPASS = "testpass"
 
 _SINK_TOPICS = [
     "artemis.celery.ingested_objects",
-    "artemis.celery.ingestion_tasks",
 ]
 
 

@@ -8,7 +8,6 @@ EXPECTED_TABLES = {
     "data_source",
     "ingested_objects",
     "ingestion_status",
-    "ingestion_tasks",
     "intake_dedup_ledger",
     "namespace",
     "owner",
@@ -25,7 +24,7 @@ def test_all_tables_exist(conn):
 
 def test_alembic_version(conn):
     row = conn.execute("SELECT version_num FROM alembic_version").fetchone()
-    assert row[0] == "0009"
+    assert row[0] == "0010"
 
 
 def test_debezium_and_celery_users_exist_with_replication(conn):

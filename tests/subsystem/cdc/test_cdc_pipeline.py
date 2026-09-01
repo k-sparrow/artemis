@@ -1,5 +1,4 @@
-"""Subsystem tests: CDC pipeline writes expected rows
-to ingested_objects + ingestion_tasks.
+"""Subsystem tests: CDC pipeline writes expected rows to ingested_objects.
 
 Verifies the complete path from a Celery result row appearing in Postgres through
 Debezium WAL capture → Kafka → ksqlDB fan-out → JDBC sink → DB tables.
@@ -30,12 +29,11 @@ _POLL_INTERVAL_S = 2
 
 _SOURCE_CONNECTOR = "DebeziumPostgresSourceConnector__CeleryResultBackendPublish"
 _SINK_OBJECTS = "DebeziumJdbcSinkConnector__CeleryResultToIngestedObjects"
-_SINK_TASKS = "DebeziumJdbcSinkConnector__CeleryResultToIngestionTasks"
 
 
 def _connector_diagnostics(kafka_connect_url: str) -> str:
     lines = []
-    for name in (_SOURCE_CONNECTOR, _SINK_OBJECTS, _SINK_TASKS):
+    for name in (_SOURCE_CONNECTOR, _SINK_OBJECTS):
         try:
             resp = httpx.get(
                 f"{kafka_connect_url}/connectors/{name}/status", timeout=5.0
@@ -250,126 +248,19 @@ class TestIngestedObjectsTable:
 
 
 # ---------------------------------------------------------------------------
-# ingestion_tasks
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.integration
-class TestIngestionTasksTable:
-    """JDBC sink writes expected rows to ingestion_tasks after a success task."""
-
-    def test_row_written(
-        self,
-        postgres_engine: sa.Engine,
-        namespace_row: uuid.UUID,
-        connectors: None,
-        kafka_connect_url: str,
-    ) -> None:
-        task_id = uuid.uuid4()
-        obj_id = uuid.uuid4()
-
-        _insert_ingestion_status(
-            postgres_engine,
-            task_id=task_id,
-            obj_id=obj_id,
-            namespace_id=namespace_row,
-        )
-
-        q = "SELECT task_id FROM ingestion_tasks WHERE task_id = :task_id"
-        p = {"task_id": task_id}
-        _assert_row(_poll_row(postgres_engine, q, p), q, p, kafka_connect_url)
-
-    def test_all_fields_correct(
-        self,
-        postgres_engine: sa.Engine,
-        namespace_row: uuid.UUID,
-        connectors: None,
-        kafka_connect_url: str,
-    ) -> None:
-        task_id = uuid.uuid4()
-        obj_id = uuid.uuid4()
-        namespace_id = namespace_row
-
-        _insert_ingestion_status(
-            postgres_engine,
-            task_id=task_id,
-            obj_id=obj_id,
-            namespace_id=namespace_id,
-        )
-
-        q = "SELECT * FROM ingestion_tasks WHERE task_id = :task_id"
-        p = {"task_id": task_id}
-        row = _assert_row(_poll_row(postgres_engine, q, p), q, p, kafka_connect_url)
-        assert row.task_id == task_id
-        assert row.obj_id == obj_id
-        assert row.namespace_id == namespace_id
-        assert row.status == "success"
-        assert row.operation == "CREATE"
-        # completed_at is derived from updated_at; presence confirms the sink wrote it.
-        assert row.completed_at is not None
-
-
-# ---------------------------------------------------------------------------
 # Delete document path
 # ---------------------------------------------------------------------------
+#
+# Epic 22 retired ingestion_tasks (and this suite's former TestIngestionTasksTable
+# / TestDeleteDocumentPath.test_delete_task_recorded+fields_correct, which asserted
+# on rows landing there) — task-state visibility is now a direct read of
+# ingestion_status by the storage service, not a second CDC-fed table. This class
+# now only covers the tombstone path, which is unrelated to that table.
 
 
 @pytest.mark.integration
 class TestDeleteDocumentPath:
-    """tasks.delete_document success events are recorded in ingestion_tasks."""
-
-    def test_delete_task_recorded(
-        self,
-        postgres_engine: sa.Engine,
-        namespace_row: uuid.UUID,
-        connectors: None,
-        kafka_connect_url: str,
-    ) -> None:
-        task_id = uuid.uuid4()
-        obj_id = uuid.uuid4()
-
-        _insert_ingestion_status(
-            postgres_engine,
-            task_id=task_id,
-            obj_id=obj_id,
-            namespace_id=namespace_row,
-            stage="tasks.delete_document",
-            operation="DELETE",
-        )
-
-        q = "SELECT task_id FROM ingestion_tasks WHERE task_id = :task_id"
-        p = {"task_id": task_id}
-        _assert_row(_poll_row(postgres_engine, q, p), q, p, kafka_connect_url)
-
-    def test_delete_task_fields_correct(
-        self,
-        postgres_engine: sa.Engine,
-        namespace_row: uuid.UUID,
-        connectors: None,
-        kafka_connect_url: str,
-    ) -> None:
-        task_id = uuid.uuid4()
-        obj_id = uuid.uuid4()
-        namespace_id = namespace_row
-
-        _insert_ingestion_status(
-            postgres_engine,
-            task_id=task_id,
-            obj_id=obj_id,
-            namespace_id=namespace_id,
-            stage="tasks.delete_document",
-            operation="DELETE",
-        )
-
-        q = "SELECT * FROM ingestion_tasks WHERE task_id = :task_id"
-        p = {"task_id": task_id}
-        row = _assert_row(_poll_row(postgres_engine, q, p), q, p, kafka_connect_url)
-        assert row.task_id == task_id
-        assert row.obj_id == obj_id
-        assert row.namespace_id == namespace_id
-        assert row.status == "success"
-        assert row.operation == "DELETE"
-        assert row.completed_at is not None
+    """tasks.delete_document success events tombstone the ingested_objects row."""
 
     def test_ingested_objects_row_deleted(
         self,

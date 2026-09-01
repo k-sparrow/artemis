@@ -169,7 +169,7 @@ class TestIngest:
 
         ``source`` must be a dict (``model_dump()``) and ``namespace_id`` a
         string so the broker can JSON-encode them.  The contract ``task_id`` is
-        threaded through so CDC keys ``ingestion_tasks`` by the id storage
+        threaded through so ``ingestion_status`` is keyed by the id storage
         returned (``ANY`` here — a fresh UUID since the direct ``.run()`` has no
         request id).
         """

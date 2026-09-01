@@ -75,3 +75,14 @@ py_library(
         "exceptions.py",
     ],
 )
+
+py_library(
+    name = "models",
+    srcs = [
+        "models.py",
+    ],
+    deps = [
+        "//src/lib/backend/db:base",
+        requirement("sqlalchemy"),
+    ],
+)

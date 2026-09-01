@@ -282,7 +282,10 @@ class ObjectsScreen(Screen):
             if t.obj_id is None:
                 continue
             existing = task_map.get(t.obj_id)
-            if existing is None or t.completed_at > existing.completed_at:
+            # created_at (never None) rather than completed_at (None while
+            # running, Epic 22) — an in-flight task is always the most
+            # recent one for its object, so this still picks it correctly.
+            if existing is None or t.created_at > existing.created_at:
                 task_map[t.obj_id] = t
 
         objects_to_show = [selected_obj] if selected_obj else self._objects
@@ -290,7 +293,11 @@ class ObjectsScreen(Screen):
             name = obj.source.split("/")[-1]
             task = task_map.get(obj.id)
             if task:
-                completed = task.completed_at.strftime("%Y-%m-%d %H:%M")
+                completed = (
+                    task.completed_at.strftime("%Y-%m-%d %H:%M")
+                    if task.completed_at is not None
+                    else f"running ({task.stage})"
+                )
                 reason = task.failure_reason or "—"
                 table.add_row(name, task.status, completed, reason)
             else:

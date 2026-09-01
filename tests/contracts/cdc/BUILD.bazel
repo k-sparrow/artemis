@@ -13,9 +13,9 @@ py_library(
     visibility = ["//visibility:public"],
 )
 
-# Contract tests: ingestion_status CDC row → ingested_objects + ingestion_tasks topics
+# Contract tests: ingestion_status CDC row → ingested_objects topic
 #
-# Validates ksqlDB streams 4–8 in artemis_init.ksql.
+# Validates ksqlDB streams 4–6 in artemis_init.ksql.
 # Infrastructure: KafkaContainer + KSQLDbContainer only (no host mounts).
 #
 # Prerequisite: bazel run //tools/oci/images/ksqldb:artemis_init_tarball

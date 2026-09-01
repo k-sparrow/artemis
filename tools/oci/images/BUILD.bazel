@@ -561,38 +561,6 @@ kafka_connect_connector_instance(
 )
 
 kafka_connect_connector_instance(
-    name = "debezium-jdbc-sink-ingestion-tasks",
-    connector_config = {
-        "connector.class": "io.debezium.connector.jdbc.JdbcSinkConnector",
-        "tasks.max": "1",
-        "topics": "artemis.celery.ingestion_tasks",
-
-        # ksqlDB writes JSON_SR (JSON Schema Registry format); requires JsonSchemaConverter
-        "value.converter": "io.confluent.connect.json.JsonSchemaConverter",
-        "value.converter.schemas.enable": True,
-        "value.converter.schema.registry.url": "http://schemaregistry:8081",
-        "key.converter": "io.confluent.connect.json.JsonSchemaConverter",
-        "key.converter.schemas.enable": True,
-        "key.converter.schema.registry.url": "http://schemaregistry:8081",
-        "connection.username": "postgres",
-        "connection.password": "testpass",
-        "connection.url": "jdbc:postgresql://postgres:5432/documents",
-
-        # sink to the ingestion_tasks table (created by the storage service)
-        "table.name.format": "ingestion_tasks",
-
-        # PARTITION BY strips 'task_id' from the value; read PK from the record key struct
-        "primary.key.mode": "record_key",
-        "primary.key.fields": "task_id",
-
-        # upsert: a given task_id is processed at most once
-        "insert.mode": "upsert",
-        "schema.evolution": "none",
-    },
-    connector_name = "DebeziumJdbcSinkConnector__CeleryResultToIngestionTasks",
-)
-
-kafka_connect_connector_instance(
     name = "debezium-jdbc-sink-private-files-table",
     connector_config = {
         "connector.class": "io.debezium.connector.jdbc.JdbcSinkConnector",
@@ -812,7 +780,6 @@ kafka_connect_init_image(
         ":debezium-cdc-postgres-task-results",
         # ksqlDB CDC fan-out → storage service tables
         ":debezium-jdbc-sink-ingested-objects",
-        ":debezium-jdbc-sink-ingestion-tasks",
     ],
     exec_dir = "etc/bin",
 )

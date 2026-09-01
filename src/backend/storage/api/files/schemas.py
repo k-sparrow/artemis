@@ -39,12 +39,18 @@ class GroupDeleteResponse(BaseModel):
 
 
 class IngestionTaskResponse(BaseModel):
+    """Built via ``router._to_task_response`` — never ``.model_validate()``
+    directly off an ``ingestion_status`` row, since ``completed_at`` is
+    derived (not a real column; see that helper's docstring)."""
+
     task_id: uuid.UUID
     obj_id: uuid.UUID | None
     namespace_id: uuid.UUID
-    status: str
+    status: str = Field(description="'running', 'success', or 'failure'")
+    stage: str = Field(description="Current/last pipeline task name, e.g. 'tasks.index'")
     operation: str
     failure_reason: str | None
-    completed_at: datetime
-
-    model_config = {"from_attributes": True}
+    created_at: datetime
+    completed_at: datetime | None = Field(
+        description="Set once status is 'success' or 'failure'; None while running."
+    )

@@ -268,15 +268,14 @@ def compose(
         wait_for_kc_connector(
             kc_url, "CamelRabbitMQSinkConnector__CeleryTasksIngestion"
         )
-        # CDC pipeline: Debezium source + two JDBC sinks
+        # CDC pipeline: Debezium source + one JDBC sink (ingested_objects only —
+        # Epic 22 retired the ingestion_tasks sink; task-state visibility is now
+        # a direct read of ingestion_status by the storage service)
         wait_for_kc_connector(
             kc_url, "DebeziumPostgresSourceConnector__CeleryResultBackendPublish"
         )
         wait_for_kc_connector(
             kc_url, "DebeziumJdbcSinkConnector__CeleryResultToIngestedObjects"
-        )
-        wait_for_kc_connector(
-            kc_url, "DebeziumJdbcSinkConnector__CeleryResultToIngestionTasks"
         )
         # Both Celery workers must be consuming before any file is dropped.
         # Workers connect to RabbitMQ asynchronously after compose starts;

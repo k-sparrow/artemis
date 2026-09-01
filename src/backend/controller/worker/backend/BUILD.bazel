@@ -48,6 +48,6 @@ py_library(
     ],
     deps = [
         requirement("sqlalchemy"),
-        "//src/lib/backend/db:base",
+        "//src/lib/core/ingestion:models",
     ],
 )

@@ -56,18 +56,24 @@ def _ingested_file_row(group_id: uuid.UUID | None = None) -> dict:
 
 def _ingestion_task_row(
     status: str = "SUCCESS",
+    stage: str = "tasks.index",
     failure_reason: str | None = None,
     operation: str = "CREATE",
 ) -> dict:
-    """Minimal dict that satisfies IngestionTaskResponse.model_validate."""
+    """Minimal dict for SimpleNamespace(**...) — stands in for an
+    ingestion_status ORM row, as router._to_task_response expects (attribute
+    access, not dict keys). No completed_at here: that's derived by
+    _to_task_response from updated_at/status, not a real column."""
     return {
         "task_id": TASK_ID,
         "obj_id": FILE_ID,
         "namespace_id": NAMESPACE_ID,
         "status": status,
+        "stage": stage,
         "operation": operation,
         "failure_reason": failure_reason,
-        "completed_at": datetime.now(timezone.utc),
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
     }
 
 
@@ -599,6 +605,28 @@ class TestGetTaskStatus:
         body = response.json()
         assert body["task_id"] == str(TASK_ID)
         assert body["status"] == "SUCCESS"
+
+    def test_running_task_has_stage_and_null_completed_at(
+        self, client: TestClient
+    ) -> None:
+        """Epic 22: a task that's still in-flight is now visible at all (no
+        404) — with its live stage, and completed_at null since it hasn't
+        finished."""
+        task_obj = SimpleNamespace(
+            **_ingestion_task_row(status="running", stage="tasks.submit_parse")
+        )
+        with patch(
+            f"{_SERVICE}.get_task_status",
+            new=AsyncMock(return_value=task_obj),
+        ):
+            response = client.get(
+                f"/namespaces/{NAMESPACE_ID}/tasks/{TASK_ID}", headers=_OWNER_HEADER
+            )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "running"
+        assert body["stage"] == "tasks.submit_parse"
+        assert body["completed_at"] is None
 
     def test_namespace_not_found_returns_404(self, client: TestClient) -> None:
         with patch(

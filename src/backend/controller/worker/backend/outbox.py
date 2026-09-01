@@ -1,17 +1,22 @@
 """Transactional outbox for task-state visibility.
 
 ``ingestion_status`` is the single source of truth for both task-state
-visibility (``ingestion_tasks``) and object visibility (``ingested_objects``)
-via CDC — see ``tools/oci/images/ksqldb/artemis_init.ksql``. One row per
-*contract* ``task_id`` — the id the storage service itself generates and
-returns to its caller (see ``ingest()``'s own docstring for the full
-provenance chain) — created once by ``ingest()``, updated in place by every
-task via ``OutboxTask``'s ``before_start``/``on_success``/``on_failure``
-hooks (see ``tasks.py``).
+visibility (read directly by the storage service — Epic 22) and object
+visibility (``ingested_objects``, via CDC) — see
+``tools/oci/images/ksqldb/artemis_init.ksql``. One row per *contract*
+``task_id`` — the id the storage service itself generates and returns to its
+caller (see ``ingest()``'s own docstring for the full provenance chain) —
+created once by ``ingest()``, updated in place by every task via
+``OutboxTask``'s ``before_start``/``on_success``/``on_failure`` hooks (see
+``tasks.py``).
 
 Unlike ``parse_stage_state`` (ephemeral, claim-and-delete), rows here are
-never deleted — the same permanent-history lifecycle as today's
-``ingestion_tasks`` table.
+never deleted — permanent history, read live (not just at terminal state) by
+the storage service's task-status endpoints.
+
+The ``IngestionStatus`` model itself lives in
+``src.lib.core.ingestion.models`` — this module only owns the write path
+(only the worker writes); see that module's docstring for why it's shared.
 """
 
 from __future__ import annotations
@@ -21,7 +26,7 @@ import uuid
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from src.lib.backend.db.base import Base
+from src.lib.core.ingestion.models import IngestionStatus
 
 __all__ = [
     "IngestionStatus",
@@ -34,38 +39,6 @@ __all__ = [
 # Bound on failure_reason so a multi-KB traceback message never bloats the
 # column / CDC payload — the full traceback still lives in worker logs.
 _FAILURE_REASON_MAX = 2000
-
-
-class IngestionStatus(Base):
-    """One row per contract task_id, updated in place through the pipeline."""
-
-    __tablename__ = "ingestion_status"
-
-    task_id = sa.Column(sa.UUID(as_uuid=True), primary_key=True)
-    namespace_id = sa.Column(sa.UUID(as_uuid=True), nullable=False)
-    obj_id = sa.Column(sa.UUID(as_uuid=True), nullable=True)
-    source = sa.Column(sa.Text, nullable=True)
-    object_type = sa.Column(sa.Text, nullable=True)
-    content_type = sa.Column(sa.Text, nullable=True)
-    size_bytes = sa.Column(sa.BigInteger, nullable=True)
-    group_id = sa.Column(sa.UUID(as_uuid=True), nullable=True)
-    operation = sa.Column(sa.Text, nullable=False)
-    stage = sa.Column(sa.Text, nullable=False)
-    status = sa.Column(sa.Text, nullable=False)
-    failure_reason = sa.Column(sa.Text, nullable=True)
-    # Deliberately timezone-less (unlike parse_stage_state, which is never
-    # CDC'd) — Debezium encodes a plain TIMESTAMP as epoch-microsecond BIGINT
-    # (io.debezium.time.MicroTimestamp), which artemis_init.ksql's
-    # FROM_UNIXTIME(x / 1000) pattern already handles correctly (the same
-    # encoding the old apollo_celery_taskmeta.date_done used). TIMESTAMPTZ
-    # would encode as an ISO-8601 STRING instead (ZonedTimestamp) — a
-    # different, unproven downstream path for this pipeline.
-    created_at = sa.Column(
-        sa.DateTime(), nullable=False, server_default=sa.text("now()")
-    )
-    updated_at = sa.Column(
-        sa.DateTime(), nullable=False, server_default=sa.text("now()")
-    )
 
 
 def create_status_row(

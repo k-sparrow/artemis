@@ -125,9 +125,10 @@ class IngestionResult(BaseModel):
     """Result of a completed ``tasks.index`` or ``tasks.delete_document`` task.
 
     This is now purely Celery's own stock result-backend payload (informational
-    only — ``AsyncResult``, Flower, etc.) — CDC visibility for ``ingested_objects``
-    and ``ingestion_tasks`` comes from ``ingestion_status`` (the transactional
-    outbox, written directly by ``OutboxTask``/``TerminalOutboxTask`` — see
+    only — ``AsyncResult``, Flower, etc.) — visibility for ``ingested_objects``
+    (via CDC) and task state (via a direct read, Epic 22) both come from
+    ``ingestion_status`` (the transactional outbox, written directly by
+    ``OutboxTask``/``TerminalOutboxTask`` — see
     ``src/backend/controller/worker/backend/outbox.py``), not from this model.
 
     ``task_id`` is the **contract** task_id — the id the storage service returned

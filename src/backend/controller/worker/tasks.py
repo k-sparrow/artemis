@@ -1256,9 +1256,10 @@ def index(
             ),
             operation=upload_action,
             # Informational only now — the caller's contract task_id, carried
-            # for anyone introspecting this task's own AsyncResult. CDC keying
-            # of ingestion_tasks comes from ingestion_status (the outbox),
-            # written separately by TerminalOutboxTask.on_success.
+            # for anyone introspecting this task's own AsyncResult. Task-state
+            # visibility itself comes from ingestion_status (the outbox),
+            # written separately by TerminalOutboxTask.on_success and read
+            # directly by the storage service (Epic 22).
             task_id=task_id,
         ).model_dump(mode="json")
 
@@ -1287,8 +1288,8 @@ def delete_document(
     indexing service, which deletes all vectorstore chunks and record-manager
     entries for the object. ``task_id`` is the contract id propagated from
     ``ingest`` — ``TerminalOutboxTask.on_success`` uses it to mark the
-    matching ``ingestion_status`` row, which the CDC fan-out then keys the
-    ``ingestion_tasks`` row by.
+    matching ``ingestion_status`` row, which the storage service reads
+    directly for task-state visibility (Epic 22).
     """
     try:
         call_delete_service(

@@ -14,8 +14,8 @@
 --           SMT: InsertHeader adds `CamelHeader.CamelSpringRabbitmqContentType` = "application/json"
 --       → RabbitMQ → Celery worker `tasks.ingest`
 --
--- Topology B: ingestion_status CDC → ingested_objects + ingestion_tasks
--- ----------------------------------------------------------------------
+-- Topology B: ingestion_status CDC → ingested_objects
+-- -----------------------------------------------------
 --   Every task in the ingestion chain (tasks.ingest through tasks.index /
 --   tasks.delete_document) updates its own row in ingestion_status in place
 --   (the transactional outbox — see src/backend/controller/worker/backend/
@@ -25,13 +25,21 @@
 --       → [this file] ExtractNewRecordState unwraps envelope; filter on stage/status
 --       → artemis.celery.ingested_objects  (flattened ingestion_status fields)
 --           → Debezium JDBC Sink → ingested_objects table (upsert on id)
---       → artemis.celery.ingestion_tasks   (per-task completion record)
---           → Debezium JDBC Sink → ingestion_tasks table (upsert on task_id)
 --
 --   ingestion_status is keyed by the CONTRACT task_id from row creation (see
 --   outbox.py's own docstring for the full provenance chain) — no JSON
 --   reconstruction or task-name whitelisting needed downstream, unlike the
 --   old apollo_celery_taskmeta-based topology this replaced.
+--
+--   Epic 22 (2026-08-31): task-state visibility (GET /tasks, GET
+--   /tasks/{task_id}) used to be served by CDC-ing ingestion_status into a
+--   second table, ingestion_tasks, via a fan-out that lived here. That fan-out
+--   is retired — the storage service now reads ingestion_status directly
+--   (same physical Postgres database), which is a strict superset (adds live
+--   `stage`, closes the "in-flight task 404s" gap ingestion_tasks had by
+--   construction — it was only ever populated on terminal success/failure).
+--   See src/backend/storage/api/files/service.py and
+--   src/backend/alembic/versions/0010_drop_ingestion_tasks.py.
 --
 -- Why two CSAS hops instead of one?
 --   The first CSAS (`artemis-ingestion-celery-tasks`) partitions by namespace_id so
@@ -256,7 +264,7 @@ EMIT CHANGES;
 
 
 -- ===========================================================================
--- Topology B: ingestion_status CDC → ingested_objects + ingestion_tasks
+-- Topology B: ingestion_status CDC → ingested_objects
 -- ===========================================================================
 
 
@@ -346,74 +354,7 @@ EMIT CHANGES;
 
 
 -- ---------------------------------------------------------------------------
--- 6. Fan-out B: ingestion tasks (tasks.index / tasks.delete_document success)
---
--- Output topic: artemis.celery.ingestion_tasks
--- Downstream:   debezium-jdbc-sink-ingestion-tasks connector
---               → upserts into the ingestion_tasks table (primary key: task_id)
---
--- KEY = task_id, already the contract task_id (ingestion_status's own PK) —
--- no id recovery/JOIN needed, unlike the old topology where the contract id
--- had to be parsed back out of a Celery-internal result blob.
---
--- failure_reason is NULL on success — projected here so this stream and the
--- failure fan-out (§7b) share ONE value schema.
---
--- The JDBC sink uses primary.key.mode=record_key, primary.key.fields=task_id.
--- ---------------------------------------------------------------------------
-
-CREATE OR REPLACE STREAM `artemis-celery-ingestion-tasks`
-WITH (
-    KAFKA_TOPIC  = 'artemis.celery.ingestion_tasks',
-    VALUE_FORMAT = 'JSON_SR',
-    KEY_FORMAT   = 'JSON_SR',
-    PARTITIONS   = 1
-)
-AS SELECT
-    -- task_id_key is the Kafka record key (record_key PK mode); PARTITION BY strips it from the value.
-    -- task_id must NOT appear as a separate value projection — the JDBC sink reads it from the key struct.
-    STRUCT(`task_id` := task_id)          AS task_id_key,
-    obj_id                                AS `obj_id`,
-    namespace_id                          AS `namespace_id`,
-    status                                AS `status`,
-    FROM_UNIXTIME(updated_at / 1000)      AS `completed_at`,
-    operation                             AS `operation`,
-    CAST(NULL AS VARCHAR)                 AS `failure_reason`
-FROM `artemis-ingestion-status`
-WHERE stage IN ('tasks.index', 'tasks.delete_document') AND status = 'success'
-PARTITION BY STRUCT(`task_id` := task_id)
-EMIT CHANGES;
-
-
--- ---------------------------------------------------------------------------
--- 7. Fan-out C: task failures → ingestion_tasks
---
--- INSERT INTO artemis.celery.ingestion_tasks for terminal task failures, so
--- `GET /tasks/{task_id}` can distinguish "failed" from "still running"/"unknown".
---
--- No task-name whitelist — this is the structural fix for the exact class of
--- bug the old topology suffered twice (a removed task name lingering, a new
--- task name missing from the list). Every task in the chain writes through
--- OutboxTask.on_failure (see tasks.py), so a plain `status = 'failure'`
--- filter is complete by construction — there is no separate list to drift.
--- ---------------------------------------------------------------------------
-
-INSERT INTO `artemis-celery-ingestion-tasks`
-SELECT
-    STRUCT(`task_id` := task_id)          AS task_id_key,
-    obj_id                                AS `obj_id`,
-    namespace_id                          AS `namespace_id`,
-    status                                AS `status`,
-    FROM_UNIXTIME(updated_at / 1000)      AS `completed_at`,
-    operation                             AS `operation`,
-    failure_reason                        AS `failure_reason`
-FROM `artemis-ingestion-status`
-WHERE status = 'failure'
-PARTITION BY STRUCT(`task_id` := task_id);
-
-
--- ---------------------------------------------------------------------------
--- 8. Tombstone fan-out: document deletions → ingested_objects (DELETE)
+-- 6. Tombstone fan-out: document deletions → ingested_objects (DELETE)
 --
 -- Produces a tombstone (null-value record) to artemis.celery.ingested_objects
 -- for each tasks.delete_document success event.  The Debezium JDBC sink
