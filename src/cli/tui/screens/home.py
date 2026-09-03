@@ -163,7 +163,9 @@ class HomeScreen(Screen):
             for org, ns_label, ns_id, owner_id, tasks in results
             for task in tasks
         ]
-        pool.sort(key=lambda row: row[4].completed_at or row[4].created_at, reverse=True)
+        pool.sort(
+            key=lambda row: row[4].completed_at or row[4].created_at, reverse=True
+        )
         latest = pool[:_ACTIVITY_DISPLAY_LIMIT]
 
         activity = self.query_one("#home-activity", DataTable)

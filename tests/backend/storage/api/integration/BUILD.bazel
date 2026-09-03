@@ -35,6 +35,7 @@ py_test(
         ":conftest",
         "//src/backend/storage/api:main",
         "//src/backend/storage/api:models",
+        "//src/lib/core/ingestion:models",
         "//tests/backend/storage/api:conftest",
         requirement("minio"),
         requirement("pytest"),

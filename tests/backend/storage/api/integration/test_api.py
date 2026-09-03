@@ -14,9 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.backend.storage.api.models import (
     IngestedObject,
-    IngestionStatus,
     IngestionTaskType,
 )
+from src.lib.core.ingestion.models import IngestionStatus
 
 
 # ---------------------------------------------------------------------------

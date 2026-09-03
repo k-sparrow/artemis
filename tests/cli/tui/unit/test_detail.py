@@ -51,7 +51,9 @@ async def test_tasks_panel_labeled_distinctly_from_ingestion_tasks(
         kafka_status=KafkaConnectStatus(
             state="RUNNING",
             worker_id="worker-0:8083",
-            tasks=[ConnectorTaskStatus(id=0, state="RUNNING", worker_id="worker-0:8083")],
+            tasks=[
+                ConnectorTaskStatus(id=0, state="RUNNING", worker_id="worker-0:8083")
+            ],
         )
     )
 

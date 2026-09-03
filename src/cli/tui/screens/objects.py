@@ -407,9 +407,7 @@ class ObjectsScreen(Screen):
 
         ns_source = next((s for s in self._sources if s.namespace_id == ns_id), None)
         ns_label = (
-            ns_source.namespace_name or str(ns_id)[:8]
-            if ns_source
-            else str(ns_id)[:8]
+            ns_source.namespace_name or str(ns_id)[:8] if ns_source else str(ns_id)[:8]
         )
         connector_count = sum(1 for s in self._sources if s.namespace_id == ns_id)
         connector_word = "connector" if connector_count == 1 else "connectors"

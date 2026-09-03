@@ -124,9 +124,7 @@ class StorageClient:
         if limit is not None:
             params["limit"] = limit
         async with self._session(owner_id) as client:
-            resp = await client.get(
-                f"/namespaces/{namespace_id}/tasks", params=params
-            )
+            resp = await client.get(f"/namespaces/{namespace_id}/tasks", params=params)
             resp.raise_for_status()
             return [IngestionTaskResponse.model_validate(t) for t in resp.json()]
 

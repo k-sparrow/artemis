@@ -29,7 +29,6 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.lib.backend.db.base import Base
-from src.lib.core.ingestion.models import IngestionStatus
 
 # Deterministic UUID5 namespace used to derive surrogate IDs from natural keys.
 # Stable across all deployments — must never change once data exists.

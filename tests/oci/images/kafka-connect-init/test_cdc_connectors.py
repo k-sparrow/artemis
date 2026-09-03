@@ -17,8 +17,9 @@ Connectors under test
 2. DebeziumJdbcSinkConnector__CeleryResultToIngestedObjects
    Upserts rows into ingested_objects from artemis.celery.ingested_objects.
 
-(Epic 22 retired the third connector, DebeziumJdbcSinkConnector__CeleryResultToIngestionTasks
-— task-state visibility is now a direct read of ingestion_status by the storage
+(Epic 22 retired the third connector,
+DebeziumJdbcSinkConnector__CeleryResultToIngestionTasks -
+task-state visibility is now a direct read of ingestion_status by the storage
 service, not a second JDBC-sunk table.)
 
 Prerequisites:

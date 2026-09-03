@@ -82,9 +82,7 @@ async def test_scoped_namespace_preselected_and_loads(
 ) -> None:
     """Mirrors how HomeScreen's activity row and ConnectorsScreen's tree both
     arrive here pre-scoped to a namespace."""
-    async with _Host(
-        mock_ds, mock_storage, namespace_id=NS_ID
-    ).run_test() as pilot:
+    async with _Host(mock_ds, mock_storage, namespace_id=NS_ID).run_test() as pilot:
         await pilot.pause()
         await pilot.pause()
         select = pilot.app.screen.query_one("#ns-select", Select)
@@ -115,9 +113,7 @@ async def test_group_scope_from_detail_passes_group_id(
 @pytest.mark.asyncio
 async def test_file_tree_hierarchy(mock_ds: AsyncMock, mock_storage: AsyncMock) -> None:
     # make_object() source is "/watch/docs/dir1/report.pdf"
-    async with _Host(
-        mock_ds, mock_storage, namespace_id=NS_ID
-    ).run_test() as pilot:
+    async with _Host(mock_ds, mock_storage, namespace_id=NS_ID).run_test() as pilot:
         await pilot.pause()
         await pilot.pause()
         filetree = pilot.app.screen.query_one("#objects-filetree", Tree)
@@ -138,9 +134,7 @@ async def test_file_tree_hierarchy(mock_ds: AsyncMock, mock_storage: AsyncMock) 
 async def test_tasks_table_shows_completed_task(
     mock_ds: AsyncMock, mock_storage: AsyncMock
 ) -> None:
-    async with _Host(
-        mock_ds, mock_storage, namespace_id=NS_ID
-    ).run_test() as pilot:
+    async with _Host(mock_ds, mock_storage, namespace_id=NS_ID).run_test() as pilot:
         await pilot.pause()
         await pilot.pause()
         table = pilot.app.screen.query_one("#objects-tasks", DataTable)
@@ -159,9 +153,7 @@ async def test_tasks_table_shows_running_task_stage(
         make_task(status="running", stage="tasks.submit_parse", completed_at=None)
     ]
 
-    async with _Host(
-        mock_ds, mock_storage, namespace_id=NS_ID
-    ).run_test() as pilot:
+    async with _Host(mock_ds, mock_storage, namespace_id=NS_ID).run_test() as pilot:
         await pilot.pause()
         await pilot.pause()
         table = pilot.app.screen.query_one("#objects-tasks", DataTable)
@@ -186,9 +178,7 @@ async def test_running_task_visible_before_list_objects_has_it(
         make_task(status="running", stage="tasks.submit_parse", completed_at=None)
     ]
 
-    async with _Host(
-        mock_ds, mock_storage, namespace_id=NS_ID
-    ).run_test() as pilot:
+    async with _Host(mock_ds, mock_storage, namespace_id=NS_ID).run_test() as pilot:
         await pilot.pause()
         await pilot.pause()
         filetree = pilot.app.screen.query_one("#objects-filetree", Tree)
@@ -239,9 +229,7 @@ async def test_selecting_file_filters_tasks_table(
         make_task(source="other.pdf", obj_id=str(other.id)),
     ]
 
-    async with _Host(
-        mock_ds, mock_storage, namespace_id=NS_ID
-    ).run_test() as pilot:
+    async with _Host(mock_ds, mock_storage, namespace_id=NS_ID).run_test() as pilot:
         await pilot.pause()
         await pilot.pause()
         tree = pilot.app.screen.query_one("#objects-filetree", Tree)
@@ -259,9 +247,7 @@ async def test_selecting_file_filters_tasks_table(
 async def test_delete_object_removes_from_tree(
     mock_ds: AsyncMock, mock_storage: AsyncMock
 ) -> None:
-    async with _Host(
-        mock_ds, mock_storage, namespace_id=NS_ID
-    ).run_test() as pilot:
+    async with _Host(mock_ds, mock_storage, namespace_id=NS_ID).run_test() as pilot:
         await pilot.pause()
         await pilot.pause()  # objects loaded, one leaf in the tree
 

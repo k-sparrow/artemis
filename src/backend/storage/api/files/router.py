@@ -25,8 +25,8 @@ from src.backend.storage.api.files.schemas import (
     IngestionTaskResponse,
     ObjectUploadResponse,
 )
-from src.backend.storage.api.models import IngestionStatus
 from src.lib.backend.logging import get_logger
+from src.lib.core.ingestion.models import IngestionStatus
 
 router = APIRouter(tags=["objects"])
 log = get_logger(__name__)

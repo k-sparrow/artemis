@@ -15,7 +15,6 @@ from src.backend.storage.api.files.exceptions import (
 )
 from src.backend.storage.api.models import (
     IngestedObject,
-    IngestionStatus,
     IngestionTaskType,
 )
 from src.backend.storage.api.service import _fetch_namespace, s3_key
@@ -26,6 +25,7 @@ from src.lib.core.ingestion.contract import (
     S3Details,
     SourceDetails,
 )
+from src.lib.core.ingestion.models import IngestionStatus
 
 
 def _stamp_task_span(
