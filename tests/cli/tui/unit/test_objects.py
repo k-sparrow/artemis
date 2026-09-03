@@ -268,3 +268,83 @@ async def test_delete_object_removes_from_tree(
         assert _find_leaf(filetree, "report.pdf") is None
 
     mock_storage.delete_object.assert_awaited_once_with(NS_ID, make_object().id, OWN_ID)
+
+
+@pytest.mark.asyncio
+async def test_delete_namespace_confirmed_calls_client_and_clears_view(
+    mock_ds: AsyncMock, mock_storage: AsyncMock
+) -> None:
+    async with _Host(mock_ds, mock_storage, namespace_id=NS_ID).run_test() as pilot:
+        await pilot.pause()
+        await pilot.pause()
+
+        await pilot.press("D")
+        await pilot.pause()  # ConfirmScreen pushed
+
+        await pilot.click("#yes")
+        await pilot.pause()
+        await pilot.pause()  # delete + state reset + _refresh_right()
+
+        screen = pilot.app.screen
+        assert screen._active_ns_id is None
+        assert screen._files == []
+
+    mock_ds.delete_namespace_sources.assert_awaited_once_with(NS_ID)
+
+
+@pytest.mark.asyncio
+async def test_delete_namespace_cancelled_does_not_call_client(
+    mock_ds: AsyncMock, mock_storage: AsyncMock
+) -> None:
+    async with _Host(mock_ds, mock_storage, namespace_id=NS_ID).run_test() as pilot:
+        await pilot.pause()
+        await pilot.pause()
+
+        await pilot.press("D")
+        await pilot.pause()
+
+        await pilot.click("#no")
+        await pilot.pause()
+
+        screen = pilot.app.screen
+        assert screen._active_ns_id == NS_ID
+
+    mock_ds.delete_namespace_sources.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_namespace_with_none_active_warns(
+    mock_ds: AsyncMock, mock_storage: AsyncMock
+) -> None:
+    """No namespace picked yet (unscoped entry, nothing selected in the
+    dropdown) — 'D' must warn, not crash on a None active_ns_id."""
+    async with _Host(mock_ds, mock_storage).run_test() as pilot:
+        await pilot.pause()
+        await pilot.pause()
+
+        await pilot.press("D")
+        await pilot.pause()
+
+    mock_ds.delete_namespace_sources.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_namespace_failure_notifies_without_crashing(
+    mock_ds: AsyncMock, mock_storage: AsyncMock
+) -> None:
+    mock_ds.delete_namespace_sources.side_effect = Exception("boom")
+    async with _Host(mock_ds, mock_storage, namespace_id=NS_ID).run_test() as pilot:
+        await pilot.pause()
+        await pilot.pause()
+
+        await pilot.press("D")
+        await pilot.pause()
+        await pilot.click("#yes")
+        await pilot.pause()
+        await pilot.pause()
+
+        screen = pilot.app.screen
+        # Failure path returns before pruning state — namespace stays active.
+        assert screen._active_ns_id == NS_ID
+
+    mock_ds.delete_namespace_sources.assert_awaited_once_with(NS_ID)

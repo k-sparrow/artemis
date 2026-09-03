@@ -182,3 +182,61 @@ async def test_n_pushes_create_screen(
             await pilot.press("n")
             await pilot.pause()
             assert isinstance(pilot.app.screen, CreateScreen)
+
+
+@pytest.mark.asyncio
+async def test_h_pushes_health_screen(
+    mock_ds: AsyncMock, mock_storage: AsyncMock
+) -> None:
+    from src.cli.tui.screens.health import HealthScreen
+
+    with (
+        patch("src.cli.tui.screens.home.DataSourcesClient", return_value=mock_ds),
+        patch("src.cli.tui.screens.home.StorageClient", return_value=mock_storage),
+    ):
+        async with _Host().run_test() as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.press("h")
+            await pilot.pause()
+            assert isinstance(pilot.app.screen, HealthScreen)
+
+
+@pytest.mark.asyncio
+async def test_list_sources_error_notifies_without_crashing(
+    mock_ds: AsyncMock, mock_storage: AsyncMock
+) -> None:
+    mock_ds.list_sources.side_effect = Exception("boom")
+    with (
+        patch("src.cli.tui.screens.home.DataSourcesClient", return_value=mock_ds),
+        patch("src.cli.tui.screens.home.StorageClient", return_value=mock_storage),
+    ):
+        async with _Host().run_test() as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            metrics = pilot.app.screen.query_one("#home-metrics", DataTable)
+            activity = pilot.app.screen.query_one("#home-activity", DataTable)
+
+    assert metrics.row_count == 0
+    assert activity.row_count == 0
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_error_for_one_namespace_does_not_break_activity(
+    mock_ds: AsyncMock, mock_storage: AsyncMock
+) -> None:
+    """_fetch_tasks catches per-namespace errors so one bad namespace can't
+    blank the whole activity table."""
+    mock_storage.list_tasks.side_effect = Exception("boom")
+    with (
+        patch("src.cli.tui.screens.home.DataSourcesClient", return_value=mock_ds),
+        patch("src.cli.tui.screens.home.StorageClient", return_value=mock_storage),
+    ):
+        async with _Host().run_test() as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            activity = pilot.app.screen.query_one("#home-activity", DataTable)
+            metrics = pilot.app.screen.query_one("#home-metrics", DataTable)
+
+    assert activity.row_count == 0
+    assert metrics.row_count >= 1

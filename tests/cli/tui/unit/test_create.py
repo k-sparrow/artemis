@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from textual.app import App
-from textual.widgets import Input
+from textual.widgets import Input, SelectionList
 
 from src.cli.tui.screens.create import CreateScreen
 
@@ -62,4 +62,39 @@ async def test_submit_calls_create_source(mock_ds: AsyncMock) -> None:
         await pilot.click("#btn-submit")
         await pilot.pause()
         await pilot.pause()  # _submit worker completes
+    mock_ds.create_source.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_submit_no_file_types_selected_stays_on_screen(
+    mock_ds: AsyncMock,
+) -> None:
+    async with _Host(mock_ds).run_test() as pilot:
+        await pilot.pause()
+        pilot.app.screen.query_one("#inp-name", Input).value = "test-watcher"
+        pilot.app.screen.query_one("#inp-namespace", Input).value = "test-ns"
+        pilot.app.screen.query_one("#inp-path", Input).value = "/data/docs"
+        pilot.app.screen.query_one("#inp-file-extensions", SelectionList).deselect_all()
+        pilot.app.screen.query_one("#btn-submit").scroll_visible(animate=False)
+        await pilot.pause()
+        await pilot.click("#btn-submit")
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, CreateScreen)
+    mock_ds.create_source.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_submit_failure_notifies_and_stays_on_screen(mock_ds: AsyncMock) -> None:
+    mock_ds.create_source.side_effect = Exception("boom")
+    async with _Host(mock_ds).run_test() as pilot:
+        await pilot.pause()
+        pilot.app.screen.query_one("#inp-name", Input).value = "test-watcher"
+        pilot.app.screen.query_one("#inp-namespace", Input).value = "test-ns"
+        pilot.app.screen.query_one("#inp-path", Input).value = "/data/docs"
+        pilot.app.screen.query_one("#btn-submit").scroll_visible(animate=False)
+        await pilot.pause()
+        await pilot.click("#btn-submit")
+        await pilot.pause()
+        await pilot.pause()  # _submit worker completes
+        assert isinstance(pilot.app.screen, CreateScreen)
     mock_ds.create_source.assert_called_once()
