@@ -111,6 +111,59 @@ async def test_group_scope_from_detail_passes_group_id(
 
 
 @pytest.mark.asyncio
+async def test_list_sources_error_notifies_without_crashing(
+    mock_ds: AsyncMock, mock_storage: AsyncMock
+) -> None:
+    mock_ds.list_sources.side_effect = Exception("boom")
+
+    async with _Host(mock_ds, mock_storage).run_test() as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        select = pilot.app.screen.query_one("#ns-select", Select)
+        real_values = [v for _label, v in select._options if v is not Select.NULL]
+
+    assert real_values == []
+    mock_storage.list_objects.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_list_objects_error_shows_empty_view_without_crashing(
+    mock_ds: AsyncMock, mock_storage: AsyncMock
+) -> None:
+    mock_storage.list_objects.side_effect = Exception("boom")
+
+    async with _Host(mock_ds, mock_storage, namespace_id=NS_ID).run_test() as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        screen = pilot.app.screen
+        hint = pilot.app.screen.query_one("#objects-hint")
+        table = pilot.app.screen.query_one("#objects-tasks", DataTable)
+        # Assert inside the block — Textual resets widget reactives on app exit.
+        assert screen._files == []
+        assert hint.display is True
+        assert table.row_count == 0
+
+
+@pytest.mark.asyncio
+async def test_list_tasks_error_shows_empty_view_without_crashing(
+    mock_ds: AsyncMock, mock_storage: AsyncMock
+) -> None:
+    mock_storage.list_tasks.side_effect = Exception("boom")
+
+    async with _Host(mock_ds, mock_storage, namespace_id=NS_ID).run_test() as pilot:
+        await pilot.pause()
+        await pilot.pause()
+        screen = pilot.app.screen
+        filetree = pilot.app.screen.query_one("#objects-filetree", Tree)
+
+    # list_objects and list_tasks share one try block — one failing means
+    # neither is applied, even though list_objects itself would have
+    # succeeded, so the in-flight merge never silently shows partial state.
+    assert screen._files == []
+    assert _find_leaf(filetree, "report.pdf") is None
+
+
+@pytest.mark.asyncio
 async def test_file_tree_hierarchy(mock_ds: AsyncMock, mock_storage: AsyncMock) -> None:
     # make_object() source is "/watch/docs/dir1/report.pdf"
     async with _Host(mock_ds, mock_storage, namespace_id=NS_ID).run_test() as pilot:

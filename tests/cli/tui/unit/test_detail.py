@@ -101,6 +101,67 @@ async def test_pause_calls_client_and_rerenders(mock_ds: AsyncMock) -> None:
 
 
 @pytest.mark.asyncio
+async def test_resume_calls_client_and_rerenders(mock_ds: AsyncMock) -> None:
+    mock_ds.get_source.return_value = make_source(
+        kafka_status=KafkaConnectStatus(state="PAUSED", worker_id="worker-0:8083")
+    )
+    mock_ds.resume_source.return_value = make_source(
+        kafka_status=KafkaConnectStatus(state="RUNNING", worker_id="worker-0:8083")
+    )
+
+    with patch("src.cli.tui.screens.detail.DataSourcesClient", return_value=mock_ds):
+        async with _Host().run_test() as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.press("u")
+            await pilot.pause()
+            await pilot.pause()  # _do_action worker completes
+
+    mock_ds.resume_source.assert_awaited_once_with(GRP_ID)
+
+
+@pytest.mark.asyncio
+async def test_restart_calls_client_and_rerenders(mock_ds: AsyncMock) -> None:
+    mock_ds.get_source.return_value = make_source(
+        kafka_status=KafkaConnectStatus(state="FAILED", worker_id="worker-0:8083")
+    )
+    mock_ds.restart_source.return_value = make_source(
+        kafka_status=KafkaConnectStatus(state="RUNNING", worker_id="worker-0:8083")
+    )
+
+    with patch("src.cli.tui.screens.detail.DataSourcesClient", return_value=mock_ds):
+        async with _Host().run_test() as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.press("r")
+            await pilot.pause()
+            await pilot.pause()  # _do_action worker completes
+
+    mock_ds.restart_source.assert_awaited_once_with(GRP_ID)
+
+
+@pytest.mark.asyncio
+async def test_action_failure_notifies_without_crashing(mock_ds: AsyncMock) -> None:
+    mock_ds.get_source.return_value = make_source(
+        kafka_status=KafkaConnectStatus(state="RUNNING", worker_id="worker-0:8083")
+    )
+    mock_ds.pause_source.side_effect = Exception("boom")
+
+    with patch("src.cli.tui.screens.detail.DataSourcesClient", return_value=mock_ds):
+        async with _Host().run_test() as pilot:
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.press("p")
+            await pilot.pause()
+            await pilot.pause()  # _do_action worker completes
+            # Screen must still be up, still rendering the pre-failure state.
+            info = str(pilot.app.screen.query_one("#info", Static).content)
+
+    assert "acme" in info
+    mock_ds.pause_source.assert_awaited_once_with(GRP_ID)
+
+
+@pytest.mark.asyncio
 async def test_delete_confirmed_calls_client_and_pops(mock_ds: AsyncMock) -> None:
     mock_ds.get_source.return_value = make_source()
     mock_ds.delete_source.return_value = None
