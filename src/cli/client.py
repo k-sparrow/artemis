@@ -117,9 +117,16 @@ class StorageClient:
         self,
         namespace_id: uuid.UUID,
         owner_id: uuid.UUID,
+        limit: int | None = None,
+        order: str = "desc",
     ) -> list[IngestionTaskResponse]:
+        params: dict = {"order": order}
+        if limit is not None:
+            params["limit"] = limit
         async with self._session(owner_id) as client:
-            resp = await client.get(f"/namespaces/{namespace_id}/tasks")
+            resp = await client.get(
+                f"/namespaces/{namespace_id}/tasks", params=params
+            )
             resp.raise_for_status()
             return [IngestionTaskResponse.model_validate(t) for t in resp.json()]
 

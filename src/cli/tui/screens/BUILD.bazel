@@ -13,18 +13,6 @@ package(
 )
 
 py_library(
-    name = "list",
-    srcs = ["list.py"],
-    deps = [
-        "//src/backend/enterprise/data_sources/api/sources:schemas",
-        "//src/cli:client",
-        "//src/cli/tui/widgets:confirm",
-        "//src/cli/tui/widgets:status_badge",
-        requirement("textual"),
-    ],
-)
-
-py_library(
     name = "connectors",
     srcs = ["connectors.py"],
     deps = [
@@ -40,8 +28,10 @@ py_library(
     srcs = ["home.py"],
     deps = [
         "//src/backend/enterprise/data_sources/api/sources:schemas",
+        "//src/backend/storage/api/files:schemas",
         "//src/cli:client",
         "//src/cli:settings",
+        "//src/cli/tui/widgets:status_badge",
         requirement("textual"),
     ],
 )
@@ -53,6 +43,7 @@ py_library(
         "//src/backend/enterprise/data_sources/api/sources:schemas",
         "//src/backend/storage/api/files:schemas",
         "//src/cli:client",
+        "//src/cli/tui/widgets:status_badge",
         requirement("textual"),
     ],
 )

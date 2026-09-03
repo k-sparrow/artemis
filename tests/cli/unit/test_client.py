@@ -179,6 +179,7 @@ _SAMPLE_TASK_RESPONSE = {
     "task_id": str(_TASK_ID),
     "obj_id": str(_OBJ_ID),
     "namespace_id": str(_NS_ID),
+    "source": "report.pdf",
     "status": "running",
     "stage": "tasks.submit_parse",
     "operation": "CREATE",

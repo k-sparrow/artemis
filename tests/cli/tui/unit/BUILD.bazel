@@ -20,6 +20,7 @@ py_test(
         "//src/cli/tui:app",
         "//src/cli/tui/screens:connectors",
         "//src/cli/tui/screens:create",
+        "//src/cli/tui/screens:detail",
         "//src/cli/tui/screens:home",
         "//src/cli/tui/screens:objects",
         "//src/cli/tui/widgets:confirm",

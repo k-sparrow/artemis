@@ -46,6 +46,10 @@ class IngestionTaskResponse(BaseModel):
     task_id: uuid.UUID
     obj_id: uuid.UUID | None
     namespace_id: uuid.UUID
+    source: str | None = Field(
+        description="Display label (filename/path); populated at ingest() "
+        "time, before ingested_objects (SUCCESS-only) would have a row."
+    )
     status: str = Field(description="'running', 'success', or 'failure'")
     stage: str = Field(
         description="Current/last pipeline task name, e.g. 'tasks.index'"

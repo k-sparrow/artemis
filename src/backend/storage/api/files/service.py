@@ -303,18 +303,36 @@ async def list_tasks(
     session: AsyncSession,
     namespace_id: uuid.UUID,
     caller_owner_id: uuid.UUID,
+    limit: int | None = None,
+    order: str = "desc",
 ) -> list[IngestionStatus]:
     """Epic 22: reads ``ingestion_status`` directly (not the retired,
     terminal-only ``ingestion_tasks``) so an in-flight task is visible here
-    too, not just SUCCESS/FAILURE ones."""
+    too, not just SUCCESS/FAILURE ones.
+
+    ``ingestion_status`` keeps one permanent row per object ever ingested
+    (no purge job) — unlike ``list_files``, this had no ``limit`` until
+    Epic 16.5 added one, so a namespace with a long ingestion history
+    returned its entire task record on every call.
+    """
     await _fetch_namespace(
         session=session,
         namespace_id=namespace_id,
         caller_owner_id=caller_owner_id,
     )
-    result = await session.execute(
-        sa.select(IngestionStatus).where(IngestionStatus.namespace_id == namespace_id)
+    order_col = (
+        IngestionStatus.updated_at.desc()
+        if order == "desc"
+        else IngestionStatus.updated_at.asc()
     )
+    q = (
+        sa.select(IngestionStatus)
+        .where(IngestionStatus.namespace_id == namespace_id)
+        .order_by(order_col)
+    )
+    if limit is not None:
+        q = q.limit(limit)
+    result = await session.execute(q)
     return list(result.scalars().all())
 
 

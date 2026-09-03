@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -57,6 +57,7 @@ def _ingested_file_row(group_id: uuid.UUID | None = None) -> dict:
 def _ingestion_task_row(
     status: str = "SUCCESS",
     stage: str = "tasks.index",
+    source: str = "report.pdf",
     failure_reason: str | None = None,
     operation: str = "CREATE",
 ) -> dict:
@@ -68,6 +69,7 @@ def _ingestion_task_row(
         "task_id": TASK_ID,
         "obj_id": FILE_ID,
         "namespace_id": NAMESPACE_ID,
+        "source": source,
         "status": status,
         "stage": stage,
         "operation": operation,
@@ -533,6 +535,40 @@ class TestListTasks:
             )
         assert response.status_code == 200
         assert len(response.json()) == 1
+
+    def test_default_limit_and_order_forwarded(self, client: TestClient) -> None:
+        """Epic 16.5: list_tasks previously had no limit/order at all
+        (unlike list_files) — ingestion_status keeps one row per object
+        forever, so an unbounded fetch was a real risk once callers (Home's
+        cross-namespace activity poll) started hitting this frequently."""
+        mock = AsyncMock(return_value=[])
+        with patch(f"{_SERVICE}.list_tasks", new=mock):
+            client.get(f"/namespaces/{NAMESPACE_ID}/tasks", headers=_OWNER_HEADER)
+
+        mock.assert_awaited_once_with(
+            session=ANY,
+            namespace_id=NAMESPACE_ID,
+            caller_owner_id=ANY,
+            limit=None,
+            order="desc",
+        )
+
+    def test_limit_and_order_query_params_forwarded(self, client: TestClient) -> None:
+        mock = AsyncMock(return_value=[])
+        with patch(f"{_SERVICE}.list_tasks", new=mock):
+            client.get(
+                f"/namespaces/{NAMESPACE_ID}/tasks",
+                params={"limit": 5, "order": "asc"},
+                headers=_OWNER_HEADER,
+            )
+
+        mock.assert_awaited_once_with(
+            session=ANY,
+            namespace_id=NAMESPACE_ID,
+            caller_owner_id=ANY,
+            limit=5,
+            order="asc",
+        )
 
     def test_failed_task_exposes_failure_reason(self, client: TestClient) -> None:
         task_obj = SimpleNamespace(

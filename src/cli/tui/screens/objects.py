@@ -1,30 +1,55 @@
-"""ObjectsScreen: ingested objects grouped by namespace/group with file tree and tasks."""
+"""ObjectsScreen: namespace-scoped file tree + task status for ingested objects."""
 
 from __future__ import annotations
 
 import uuid
-from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 from textual import on, work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Header, Label, Tree
+from textual.widgets import DataTable, Footer, Header, Label, Select, Tree
 from textual.widgets.tree import TreeNode
 
 from src.backend.enterprise.data_sources.api.sources.schemas import DataSourceResponse
-from src.backend.storage.api.files.schemas import (
-    IngestedObjectResponse,
-    IngestionTaskResponse,
-)
+from src.backend.storage.api.files.schemas import IngestionTaskResponse
 from src.cli.client import DataSourcesClient, StorageClient
+from src.cli.tui.widgets.status_badge import task_status_markup
+
+# Namespace-wide task fetch cap (Epic 16.5) — ingestion_status keeps one row
+# per object ever ingested, so this stays bounded like Home's activity poll.
+_TASKS_LIMIT = 200
+
+
+@dataclass(frozen=True)
+class _FileEntry:
+    """A file this screen knows about — either a completed IngestedObject or
+    a still-in-flight one we only know about via its task row.
+
+    ingested_objects is populated ONLY on SUCCESS, via CDC (see
+    src/backend/storage/api/models.py) — a running task has no row there
+    yet. Driving the file tree / tasks table off list_objects() alone means
+    an in-flight file is invisible everywhere on this screen until it
+    finishes and CDC catches up, silently defeating the entire point of
+    Epic 22's live stage visibility here specifically. Only `.id`/`.source`
+    are ever used in this file, so this is deliberately not the full
+    IngestedObjectResponse — it has to represent objects that don't have
+    one yet.
+    """
+
+    id: uuid.UUID
+    source: str
 
 
 class ObjectsScreen(Screen):
     """
-    Three-panel screen:
-        namespace/group tree (left) + objects list / file tree / tasks (right).
+    Namespace-picker on top; file tree (primary) + task status side by side
+    below. Replaces the old namespace/connector tree + flat objects table —
+    the file tree already browses the same objects hierarchically, and
+    connector-level drill-down is still reachable via DetailScreen's 'o' key
+    (which pre-scopes this screen to one connector via group_id).
     """
 
     BINDINGS = [
@@ -34,9 +59,6 @@ class ObjectsScreen(Screen):
         ("b", "back", "Back"),
         ("escape", "back", "Back"),
     ]
-
-    # _groups row: (org, ns_name, ns_id, group_id, owner_id, connector_display_name)
-    _GroupRow = tuple[str, str, uuid.UUID, uuid.UUID, uuid.UUID, str]
 
     def __init__(
         self,
@@ -51,49 +73,64 @@ class ObjectsScreen(Screen):
         self._scope_ns_id = namespace_id
         self._scope_group_id = group_id
         self._sources: list[DataSourceResponse] = []
-        self._groups: list[ObjectsScreen._GroupRow] = []
-        self._objects: list[IngestedObjectResponse] = []
+        # Namespace dropdown backing state — one representative owner_id per
+        # namespace (same "any source in this namespace will do" pattern
+        # HomeScreen already uses for its own per-namespace fan-out).
+        self._ns_owner: dict[uuid.UUID, uuid.UUID] = {}
+        self._files: list[_FileEntry] = []
         self._tasks: list[IngestionTaskResponse] = []
-        # Maps tree node id → group row (connector leaf) or list of group rows
-        # (namespace node).
-        self._leaf_map: dict[int, ObjectsScreen._GroupRow] = {}
-        self._ns_map: dict[int, list[ObjectsScreen._GroupRow]] = {}
-        # Tracks the namespace context active in the right panel (for namespace delete).
+        # obj_id-independent leaf lookup — file tree leaf node id → file,
+        # so selecting a leaf can filter the tasks table and deletion can
+        # target it, without a separate flat objects table driving either.
+        self._file_leaf_map: dict[int, _FileEntry] = {}
+        # Tracks the namespace/group context currently shown — for delete
+        # actions and for _refresh_active's periodic in-place reload (must
+        # NOT re-trigger the "user changed the dropdown" group-drop logic).
         self._active_ns_id: uuid.UUID | None = None
         self._active_owner_id: uuid.UUID | None = None
+        self._active_group_id: uuid.UUID | None = None
+        self._selected_obj: _FileEntry | None = None
+        # Guards the one programmatic Select.value set during initial load
+        # from being treated as a user-driven namespace change (which drops
+        # any group_id scope — see on_namespace_selected).
+        self._suspend_ns_select_handler = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield Horizontal(
-            Vertical(
-                Label("Namespaces / Connectors", id="groups-label"),
-                Tree("Sources", id="groups-tree"),
-                id="objects-left",
+        yield Vertical(
+            Horizontal(
+                Label("Namespace:", id="ns-select-label"),
+                Select[uuid.UUID](
+                    [], id="ns-select", prompt="Choose a namespace...", allow_blank=True
+                ),
+                id="objects-toolbar",
             ),
-            Vertical(
-                Label("Objects", id="objects-label"),
-                DataTable(id="objects-list"),
-                Label("File Tree", id="tree-label"),
-                Tree("Files", id="objects-filetree"),
-                Label("Tasks", id="tasks-label"),
-                DataTable(id="objects-tasks"),
-                Label("← Select a connector or namespace.", id="objects-hint"),
-                id="objects-right",
+            Horizontal(
+                Vertical(
+                    Label("Files", id="tree-label"),
+                    Tree("/", id="objects-filetree"),
+                    id="objects-tree-panel",
+                ),
+                Vertical(
+                    Label("Tasks", id="tasks-label"),
+                    DataTable(id="objects-tasks", cursor_type="row"),
+                    id="objects-tasks-panel",
+                ),
+                id="objects-body",
             ),
-            id="objects-body",
+            Label("← Choose a namespace.", id="objects-hint"),
+            id="objects-content",
         )
         yield Footer()
 
     def on_mount(self) -> None:
         self.title = "Ingested Objects"
-        self.query_one("#objects-list", DataTable).add_columns(
-            "Filename", "Ingested At"
-        )
         self.query_one("#objects-tasks", DataTable).add_columns(
-            "Filename", "Status", "Completed At", "Reason"
+            "Filename", "Status", "Stage", "Completed At", "Reason"
         )
         self.query_one("#objects-hint").display = True
         self._load()
+        self.set_interval(10, self._refresh_active)
 
     # ------------------------------------------------------------------
     # Data loading
@@ -101,157 +138,164 @@ class ObjectsScreen(Screen):
 
     @work(thread=False)
     async def _load(self) -> None:
+        # Full reload (mount or manual 'r') — repopulates the namespace
+        # dropdown; any object-row filter from before is no longer
+        # necessarily valid.
+        self._selected_obj = None
         try:
             self._sources = await self._ds_client.list_sources()
         except Exception as exc:
             self.notify(f"Error loading sources: {exc}", severity="error")
             return
 
-        seen: set[tuple[uuid.UUID, uuid.UUID]] = set()
-        groups: list[ObjectsScreen._GroupRow] = []
-        for s in self._sources:
-            if self._scope_ns_id and s.namespace_id != self._scope_ns_id:
-                continue
-            if self._scope_group_id and s.id != self._scope_group_id:
-                continue
-            key = (s.namespace_id, s.id)
-            if key in seen:
-                continue
-            seen.add(key)
-            ns = s.namespace_name or str(s.namespace_id)[:8]
-            groups.append(
-                (s.org_name, ns, s.namespace_id, s.id, s.owner_id, s.display_name)
+        self._rebuild_ns_select()
+
+        if self._scope_ns_id is not None and self._scope_ns_id in self._ns_owner:
+            owner_id = self._ns_owner[self._scope_ns_id]
+            select = self.query_one("#ns-select", Select)
+            # Select.Changed is posted, not fired synchronously — it won't
+            # actually be handled until a later message-pump tick (after
+            # this coroutine's next await), so the guard must be consumed
+            # by the handler itself, not reset right after this line.
+            self._suspend_ns_select_handler = True
+            select.value = self._scope_ns_id
+            await self._load_selection(
+                self._scope_ns_id, owner_id, self._scope_group_id
             )
 
-        self._groups = groups
-        first_leaf = self._rebuild_groups_tree()
+    def _rebuild_ns_select(self) -> None:
+        # One representative source per namespace — same enumeration this
+        # screen has always used (there's no standalone "list namespaces"
+        # client call today; a namespace with zero connectors is invisible
+        # here, same limitation the old namespace/connector tree also had).
+        ns_map: dict[uuid.UUID, DataSourceResponse] = {}
+        for s in self._sources:
+            if s.namespace_id not in ns_map:
+                ns_map[s.namespace_id] = s
+        self._ns_owner = {ns_id: s.owner_id for ns_id, s in ns_map.items()}
 
-        if self._scope_group_id and self._groups:
-            # Opened from a connector detail — load that specific group.
-            await self._load_group(self._groups[0])
-        elif first_leaf is not None:
-            # Auto-load the first connector's objects on mount.
-            row = self._leaf_map[first_leaf.id]
-            await self._load_group(row)
+        options = sorted(
+            (
+                (f"{s.namespace_name or str(ns_id)[:8]}  ({s.org_name})", ns_id)
+                for ns_id, s in ns_map.items()
+            ),
+            key=lambda opt: opt[0],
+        )
+        self.query_one("#ns-select", Select).set_options(options)
 
-    def _rebuild_groups_tree(self) -> TreeNode | None:
-        """
-        Rebuild the namespace/connector tree.
-        Returns the first connector leaf (if any).
-        """
-        tree = self.query_one("#groups-tree", Tree)
-        tree.clear()
-        self._leaf_map.clear()
-        self._ns_map.clear()
-
-        # Group rows by (org, ns_name, ns_id, owner_id).
-        ns_buckets: dict[tuple, list[ObjectsScreen._GroupRow]] = defaultdict(list)
-        for row in self._groups:
-            org, ns, ns_id, _, owner_id, _ = row
-            ns_buckets[(org, ns, ns_id, owner_id)].append(row)
-
-        first_leaf: TreeNode | None = None
-        for (org, ns, _, _), rows in ns_buckets.items():
-            ns_node = tree.root.add(f"{ns}  ({org})", expand=True)
-            self._ns_map[ns_node.id] = rows
-            for row in rows:
-                leaf = ns_node.add_leaf(row[5])  # connector display_name
-                self._leaf_map[leaf.id] = row
-                if first_leaf is None:
-                    first_leaf = leaf
-
-        tree.root.expand()
-        return first_leaf
-
-    # ------------------------------------------------------------------
-    # Object loading — two entry points: group (filtered) or namespace (unfiltered)
-    # ------------------------------------------------------------------
-
-    async def _load_group(self, row: "ObjectsScreen._GroupRow") -> None:
-        """Load objects belonging to a single connector (group_id filter)."""
-        _, _, ns_id, group_id, owner_id, _ = row
+    async def _load_selection(
+        self,
+        ns_id: uuid.UUID,
+        owner_id: uuid.UUID,
+        group_id: uuid.UUID | None,
+    ) -> None:
+        """Load every object (and task) in a namespace, optionally narrowed
+        to one connector (group_id) — the only remaining case for that
+        narrowing is arriving pre-scoped from DetailScreen's 'o' key."""
         self._active_ns_id = ns_id
         self._active_owner_id = owner_id
+        self._active_group_id = group_id
         try:
-            self._objects = await self._storage_client.list_objects(
+            objects = await self._storage_client.list_objects(
                 ns_id, owner_id, limit=200, order="desc", group_id=group_id
             )
-            self._tasks = await self._storage_client.list_tasks(ns_id, owner_id)
+            self._tasks = await self._storage_client.list_tasks(
+                ns_id, owner_id, limit=_TASKS_LIMIT, order="desc"
+            )
         except Exception as exc:
             self.notify(f"Error loading objects: {exc}", severity="error")
-            self._objects = []
+            objects = []
             self._tasks = []
+        self._files = self._merge_files(objects, group_id)
         self._refresh_right()
 
-    async def _load_namespace(self, rows: list["ObjectsScreen._GroupRow"]) -> None:
-        """Load all objects in a namespace across every group (no group_id filter)."""
-        _, _, ns_id, _, owner_id, _ = rows[0]
-        self._active_ns_id = ns_id
-        self._active_owner_id = owner_id
-        try:
-            self._objects = await self._storage_client.list_objects(
-                ns_id, owner_id, limit=200, order="desc"
-            )
-            self._tasks = await self._storage_client.list_tasks(ns_id, owner_id)
-            self._objects.sort(key=lambda o: o.ingested_at, reverse=True)
-        except Exception as exc:
-            self.notify(f"Error loading objects: {exc}", severity="error")
-            self._objects = []
-            self._tasks = []
-        self._refresh_right()
+    def _merge_files(self, objects, group_id: uuid.UUID | None) -> list[_FileEntry]:
+        """list_objects() only has SUCCESS objects (CDC-fed); a running task
+        has no row there yet. Overlay any in-flight task not already covered
+        so the file tree / tasks table can show it too — the entire point of
+        putting live stage on this screen in the first place.
+
+        list_tasks() has no group_id filter (IngestionTaskResponse doesn't
+        even carry group_id) — safe to overlay unfiltered when browsing the
+        whole namespace, but NOT when narrowed to one connector (group_id
+        set), where it would leak in-flight files from other connectors in
+        the same namespace. That narrower path — reached only via
+        DetailScreen's 'o' key — keeps the pre-existing objects-only
+        behavior until list_tasks can be scoped by group_id too.
+        """
+        files = [_FileEntry(id=o.id, source=o.source) for o in objects]
+        if group_id is not None:
+            return files
+        known_ids = {f.id for f in files}
+        for t in self._tasks:
+            if t.obj_id is None or t.obj_id in known_ids or t.source is None:
+                continue
+            files.append(_FileEntry(id=t.obj_id, source=t.source))
+            known_ids.add(t.obj_id)
+        return files
 
     def _refresh_right(self) -> None:
-        self.query_one("#objects-hint").display = not self._objects
-        self._rebuild_objects()
+        self.query_one("#objects-hint").display = not self._files
         self._rebuild_filetree()
-        self._rebuild_tasks(selected_obj=None)
-
-    # ------------------------------------------------------------------
-    # Left-panel tree interaction
-    # ------------------------------------------------------------------
-
-    @on(Tree.NodeSelected, "#groups-tree")
-    def on_groups_tree_node_selected(self, event: Tree.NodeSelected) -> None:
-        node = event.node
-        if node.id in self._leaf_map:
-            self._load_group_worker(self._leaf_map[node.id])
-        elif node.id in self._ns_map:
-            self._load_namespace_worker(self._ns_map[node.id])
+        self._rebuild_tasks(selected_obj=self._selected_obj)
 
     @work(thread=False)
-    async def _load_group_worker(self, row: "ObjectsScreen._GroupRow") -> None:
-        await self._load_group(row)
+    async def _refresh_active(self) -> None:
+        """Periodic refresh (Epic 16.5): re-fetch whichever namespace/group
+        is currently shown, in place. Deliberately does NOT call _load() —
+        that would silently reset the dropdown/selection every 10s."""
+        if self._active_ns_id is not None and self._active_owner_id is not None:
+            await self._load_selection(
+                self._active_ns_id, self._active_owner_id, self._active_group_id
+            )
+
+    # ------------------------------------------------------------------
+    # Namespace picker
+    # ------------------------------------------------------------------
+
+    @on(Select.Changed, "#ns-select")
+    def on_namespace_selected(self, event: Select.Changed) -> None:
+        if self._suspend_ns_select_handler:
+            # Consume the one suppression here, not where it was set — the
+            # posted Changed message this guards against may not have been
+            # handled yet at the point the flag would otherwise be reset.
+            self._suspend_ns_select_handler = False
+            return
+        if event.value is Select.BLANK:
+            return
+        ns_id = event.value
+        owner_id = self._ns_owner.get(ns_id)
+        if owner_id is None:
+            return
+        # A genuine namespace change picked via the dropdown always shows
+        # everything in it — there's no UI left to narrow to one connector
+        # (only DetailScreen's pre-scoped 'o' entry point does that).
+        self._selected_obj = None
+        self._load_selection_worker(ns_id, owner_id, group_id=None)
 
     @work(thread=False)
-    async def _load_namespace_worker(
-        self, rows: list["ObjectsScreen._GroupRow"]
+    async def _load_selection_worker(
+        self, ns_id: uuid.UUID, owner_id: uuid.UUID, group_id: uuid.UUID | None
     ) -> None:
-        await self._load_namespace(rows)
+        await self._load_selection(ns_id, owner_id, group_id)
 
     # ------------------------------------------------------------------
     # Right-panel rebuilds
     # ------------------------------------------------------------------
 
-    def _rebuild_objects(self) -> None:
-        table = self.query_one("#objects-list", DataTable)
-        table.clear()
-        for obj in self._objects:
-            name = obj.source.split("/")[-1]
-            when = obj.ingested_at.strftime("%Y-%m-%d %H:%M")
-            table.add_row(name, when)
-
     def _rebuild_filetree(self) -> None:
         tree = self.query_one("#objects-filetree", Tree)
         tree.clear()
-        if not self._objects:
+        self._file_leaf_map.clear()
+        if not self._files:
             return
 
         tree.root.set_label("/")
         tree.root.expand()
 
-        dir_cache: dict[str, object] = {}
+        dir_cache: dict[str, TreeNode] = {}
 
-        def get_or_create_dir(path: str) -> object:
+        def get_or_create_dir(path: str) -> TreeNode:
             if path in dir_cache:
                 return dir_cache[path]
             p = PurePosixPath(path)
@@ -264,16 +308,17 @@ class ObjectsScreen(Screen):
             dir_cache[path] = node
             return node
 
-        for obj in self._objects:
+        for obj in self._files:
             p = PurePosixPath(obj.source)
             parent_str = str(p.parent)
             if parent_str in ("", ".", "/"):
-                tree.root.add_leaf(p.name)
+                leaf = tree.root.add_leaf(p.name)
             else:
                 parent_node = get_or_create_dir(parent_str)
-                parent_node.add_leaf(p.name)
+                leaf = parent_node.add_leaf(p.name)
+            self._file_leaf_map[leaf.id] = obj
 
-    def _rebuild_tasks(self, selected_obj: IngestedObjectResponse | None) -> None:
+    def _rebuild_tasks(self, selected_obj: _FileEntry | None) -> None:
         table = self.query_one("#objects-tasks", DataTable)
         table.clear()
 
@@ -288,7 +333,7 @@ class ObjectsScreen(Screen):
             if existing is None or t.created_at > existing.created_at:
                 task_map[t.obj_id] = t
 
-        objects_to_show = [selected_obj] if selected_obj else self._objects
+        objects_to_show = [selected_obj] if selected_obj else self._files
         for obj in objects_to_show:
             name = obj.source.split("/")[-1]
             task = task_map.get(obj.id)
@@ -296,43 +341,36 @@ class ObjectsScreen(Screen):
                 completed = (
                     task.completed_at.strftime("%Y-%m-%d %H:%M")
                     if task.completed_at is not None
-                    else f"running ({task.stage})"
+                    else "—"
                 )
                 reason = task.failure_reason or "—"
-                table.add_row(name, task.status, completed, reason)
+                table.add_row(
+                    name, task_status_markup(task.status), task.stage, completed, reason
+                )
             else:
-                table.add_row(name, "—", "—", "—")
+                table.add_row(name, "—", "—", "—", "—")
 
     # ------------------------------------------------------------------
-    # Object selection (syncs file tree and tasks)
+    # File tree selection (drives the tasks table filter + delete target)
     # ------------------------------------------------------------------
 
-    @on(DataTable.RowSelected, "#objects-list")
-    def on_object_selected(self, event: DataTable.RowSelected) -> None:
-        idx = event.cursor_row
-        if 0 <= idx < len(self._objects):
-            obj = self._objects[idx]
-            self._rebuild_tasks(selected_obj=obj)
-            self._sync_tree(obj.source)
-
-    def _sync_tree(self, source: str) -> None:
-        tree = self.query_one("#objects-filetree", Tree)
-        name = PurePosixPath(source).name
-        stack = list(tree.root.children)
-        while stack:
-            node = stack.pop()
-            if node.label.plain == name and not node.children:
-                tree.move_cursor(node)
-                return
-            stack.extend(node.children)
+    @on(Tree.NodeSelected, "#objects-filetree")
+    def on_file_selected(self, event: Tree.NodeSelected) -> None:
+        node = event.node
+        obj = self._file_leaf_map.get(node.id)
+        if obj is None:
+            # A directory node, not a file leaf — show every object again.
+            self._selected_obj = None
+            self._rebuild_tasks(selected_obj=None)
+            return
+        self._selected_obj = obj
+        self._rebuild_tasks(selected_obj=obj)
 
     def action_delete_object(self) -> None:
-        table = self.query_one("#objects-list", DataTable)
-        idx = table.cursor_row
-        if not (0 <= idx < len(self._objects)):
-            self.notify("Select an object first.", severity="warning")
+        if self._selected_obj is None:
+            self.notify("Select a file first.", severity="warning")
             return
-        self._confirm_delete_object(self._objects[idx])
+        self._confirm_delete_object(self._selected_obj)
 
     def action_delete_namespace(self) -> None:
         if self._active_ns_id is None:
@@ -341,7 +379,7 @@ class ObjectsScreen(Screen):
         self._confirm_delete_namespace(self._active_ns_id, self._active_owner_id)
 
     @work(thread=False)
-    async def _confirm_delete_object(self, obj: IngestedObjectResponse) -> None:
+    async def _confirm_delete_object(self, obj: _FileEntry) -> None:
         from src.cli.tui.widgets.confirm import ConfirmScreen
 
         name = obj.source.split("/")[-1]
@@ -357,7 +395,8 @@ class ObjectsScreen(Screen):
             self.notify(f"Delete failed: {exc}", severity="error")
             return
         # Reload current view.
-        self._objects = [o for o in self._objects if o.id != obj.id]
+        self._files = [f for f in self._files if f.id != obj.id]
+        self._selected_obj = None
         self._refresh_right()
 
     @work(thread=False)
@@ -366,17 +405,18 @@ class ObjectsScreen(Screen):
     ) -> None:
         from src.cli.tui.widgets.confirm import ConfirmScreen
 
-        ns_label = next(
-            (r[1] for r in self._groups if r[2] == ns_id),
-            str(ns_id)[:8],
+        ns_source = next((s for s in self._sources if s.namespace_id == ns_id), None)
+        ns_label = (
+            ns_source.namespace_name or str(ns_id)[:8]
+            if ns_source
+            else str(ns_id)[:8]
         )
-        # Collect all connectors that belong to this namespace.
-        ns_rows = [r for r in self._groups if r[2] == ns_id]
-        connector_word = "connector" if len(ns_rows) == 1 else "connectors"
+        connector_count = sum(1 for s in self._sources if s.namespace_id == ns_id)
+        connector_word = "connector" if connector_count == 1 else "connectors"
         confirmed = await self.app.push_screen_wait(
             ConfirmScreen(
                 f"Delete namespace '{ns_label}' "
-                f"({len(ns_rows)} {connector_word}) and ALL its objects?"
+                f"({connector_count} {connector_word}) and ALL its objects?"
             )
         )
         if not confirmed:
@@ -388,12 +428,14 @@ class ObjectsScreen(Screen):
             self.notify(f"Delete failed: {exc}", severity="error")
             return
         # Prune from local state without triggering a reload.
-        self._groups = [r for r in self._groups if r[2] != ns_id]
+        self._sources = [s for s in self._sources if s.namespace_id != ns_id]
         self._active_ns_id = None
         self._active_owner_id = None
-        self._objects = []
+        self._active_group_id = None
+        self._files = []
         self._tasks = []
-        self._rebuild_groups_tree()
+        self._selected_obj = None
+        self._rebuild_ns_select()
         self._refresh_right()
 
     def action_refresh(self) -> None:

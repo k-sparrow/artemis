@@ -40,6 +40,7 @@ def _to_task_response(row: IngestionStatus) -> IngestionTaskResponse:
         task_id=row.task_id,
         obj_id=row.obj_id,
         namespace_id=row.namespace_id,
+        source=row.source,
         status=row.status,
         stage=row.stage,
         operation=row.operation,
@@ -236,11 +237,15 @@ async def list_tasks_endpoint(
     namespace_id: uuid.UUID,
     session: db_session_dependency,
     caller_owner_id: caller_owner_id_dependency,
+    limit: int | None = Query(default=None, ge=1),
+    order: Literal["asc", "desc"] = Query(default="desc"),
 ) -> list[IngestionTaskResponse]:
     tasks = await service.list_tasks(
         session=session,
         namespace_id=namespace_id,
         caller_owner_id=caller_owner_id,
+        limit=limit,
+        order=order,
     )
     return [_to_task_response(t) for t in tasks]
 

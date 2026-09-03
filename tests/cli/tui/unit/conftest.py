@@ -68,6 +68,7 @@ def make_task(**overrides) -> IngestionTaskResponse:
         task_id=str(uuid.uuid4()),
         obj_id=str(OBJ_ID),
         namespace_id=str(NS_ID),
+        source="report.pdf",
         status="SUCCESS",
         stage="tasks.index",
         operation="CREATE",

@@ -148,8 +148,8 @@ Input:focus {
     margin-right: 2;
 }
 
-#home-sidebar {
-    width: 60;
+#home-activity {
+    width: 100;
     height: auto;
     background: $artemis-surface;
     border: solid $artemis-border;
@@ -167,41 +167,51 @@ Input:focus {
 }
 
 /* Objects screen */
+#objects-content {
+    height: 1fr;
+}
+
+#objects-toolbar {
+    height: 3;
+    padding: 0 1;
+}
+
+#ns-select-label {
+    color: $artemis-accent;
+    text-style: bold;
+    height: 3;
+    content-align: left middle;
+    padding-right: 1;
+}
+
+#ns-select {
+    width: 50;
+}
+
 #objects-body {
     height: 1fr;
 }
 
-#objects-left {
-    width: 1fr;
+#objects-tree-panel {
+    /* File tree is the primary view (Epic 16.5) — wider than the tasks panel. */
+    width: 2fr;
     border-right: solid $artemis-border;
 }
 
-#objects-right {
-    width: 2fr;
+#objects-tasks-panel {
+    width: 1fr;
 }
 
-#groups-tree {
-    height: 1fr;
-    background: $artemis-surface;
-}
-
-#groups-label, #objects-label, #tree-label, #tasks-label, #objects-hint {
+#tree-label, #tasks-label, #objects-hint {
     color: $artemis-accent;
     text-style: bold;
     padding: 0 1;
     height: 1;
 }
 
-#objects-list {
-    height: 1fr;
-    background: $artemis-surface;
-    border-bottom: solid $artemis-border;
-}
-
 #objects-filetree {
     height: 1fr;
     background: $artemis-surface;
-    border-bottom: solid $artemis-border;
     padding: 0 1;
 }
 

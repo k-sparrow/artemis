@@ -93,7 +93,12 @@ class DetailScreen(Screen):
             f"Worker:       {worker}"
         )
 
-        tasks_text = "Tasks\n"
+        # "Tasks" here is Kafka Connect's per-shard worker state
+        # (kafka_status.tasks) — an unrelated concept from the ingestion
+        # pipeline's IngestionTaskResponse tasks shown on ObjectsScreen and
+        # Home's Activity table (Epic 16.5). Labeled distinctly so the two
+        # don't read as the same thing.
+        tasks_text = "Kafka Connector Tasks\n"
         if s.kafka_status and s.kafka_status.tasks:
             for t in s.kafka_status.tasks:
                 trace = f"  trace: {t.trace}" if t.trace else ""
