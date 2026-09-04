@@ -62,6 +62,14 @@ class ConnectorsScreen(Screen):
         table = self.query_one("#source-table", DataTable)
         table.add_columns("Namespace", "Org", "Name", "Type", "Status", "Created")
 
+        # Textual gives initial focus to the first focusable widget in
+        # compose() order, which is #filter-input — even though it's hidden
+        # right above. Left alone, every single keybinding on this screen
+        # (d/o/n/t/r, even '/' itself) silently types into the invisible
+        # filter box instead of reaching any action. Move focus to the tree,
+        # the actual primary navigable widget.
+        self.query_one("#source-tree", Tree).focus()
+
         self._load_sources()
         self.set_interval(10, self._load_sources)
 
