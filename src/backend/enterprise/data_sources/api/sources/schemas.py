@@ -15,7 +15,13 @@ from src.backend.enterprise.data_sources.api.sources.templates import (
 
 
 class DataSourceCreate(BaseModel):
-    display_name: str = Field(description="Human-readable label for this data source.")
+    display_name: str | None = Field(
+        default=None,
+        description=(
+            "Human-readable label for this data source. Auto-generated as "
+            "connector-<uuid4> if omitted."
+        ),
+    )
     path: str = Field(description="Absolute filesystem path to watch.")
     namespace: str = Field(
         description="Artemis namespace name (UUID5 seed for SHARED namespace)."
@@ -32,6 +38,15 @@ class DataSourceCreate(BaseModel):
             f"dot). Allowed values: {', '.join(ALLOWED_FILE_EXTENSIONS)}."
         ),
     )
+
+    @field_validator("display_name")
+    @classmethod
+    def _blank_display_name_is_none(cls, value: str | None) -> str | None:
+        """A whitespace-only name is the same as omitting it — auto-generate."""
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
 
     @field_validator("file_extensions")
     @classmethod

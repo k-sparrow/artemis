@@ -4,6 +4,7 @@ Flow for connector creation
 ---------------------------
 1. Derive owner_id = uuid5(ARTEMIS_NS, org_name).
 2. Allocate record_id = uuid4(); connector_name = artemis-{record_id}.
+   display_name defaults to connector-{record_id} if omitted.
 3. Upsert SHARED namespace on storage service (handles 409 idempotently).
 4. Render Kafka Connect config from template.
 5. Deploy connector to Kafka Connect (sync call via asyncio.to_thread).
@@ -205,7 +206,7 @@ def _to_response(
 async def create_data_source(
     session: AsyncSession,
     http: httpx.AsyncClient,
-    display_name: str,
+    display_name: str | None,
     path: str,
     namespace: str,
     org_name: str,
@@ -215,6 +216,8 @@ async def create_data_source(
     owner_id = uuid.uuid5(ARTEMIS_NS, org_name)
     record_id = uuid.uuid4()
     connector_name = _connector_name(record_id)
+    if display_name is None:
+        display_name = f"connector-{record_id}"
     if file_extensions is None:
         file_extensions = list(DEFAULT_FILE_EXTENSIONS)
     _validate_file_extensions(file_extensions)

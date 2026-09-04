@@ -119,6 +119,31 @@ def test_sources_create(runner):
     assert str(_SOURCE_ID) in result.output
 
 
+def test_sources_create_without_name(runner):
+    """--name is optional — the API auto-generates connector-<uuid4>."""
+    source = _make_source()
+    with patch("src.cli.main.DataSourcesClient") as MockClient:
+        mock_create = AsyncMock(return_value=source)
+        MockClient.return_value.create_source = mock_create
+        result = runner.invoke(
+            cli,
+            [
+                "sources",
+                "create",
+                "--namespace",
+                "docs-namespace",
+                "--org",
+                "acme",
+                "--path",
+                "/data/docs",
+            ],
+        )
+
+    assert result.exit_code == 0
+    payload = mock_create.call_args.args[0]
+    assert payload.display_name is None
+
+
 # ---------------------------------------------------------------------------
 # lifecycle: pause / resume / restart
 # ---------------------------------------------------------------------------
