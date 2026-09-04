@@ -108,14 +108,19 @@ def sources_get(ctx: click.Context, source_id: str, as_json: bool):
 
 
 @sources.command("create")
-@click.option("--name", required=True)
+@click.option("--name", default=None, help="Auto-generated (connector-<uuid4>) if omitted.")
 @click.option("--namespace", required=True)
 @click.option("--org", required=True, help="Organisation name (owner_id seed).")
 @click.option("--path", required=True)
 @click.option("--recursive/--no-recursive", default=True)
 @click.pass_context
 def sources_create(
-    ctx: click.Context, name: str, namespace: str, org: str, path: str, recursive: bool
+    ctx: click.Context,
+    name: str | None,
+    namespace: str,
+    org: str,
+    path: str,
+    recursive: bool,
 ):
     """Create a filesystem data source."""
     payload = DataSourceCreate(

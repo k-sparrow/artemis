@@ -208,12 +208,25 @@ class TestCreateDataSource:
         engine.sync_engine.dispose()
         assert resp.status_code == status.HTTP_502_BAD_GATEWAY
 
-    def test_missing_display_name_returns_422(self, client: TestClient) -> None:
+    def test_missing_display_name_auto_generates(self, client: TestClient) -> None:
         resp = client.post(
             "/data-sources",
             json={"path": "/data/acme", "namespace": "acme", "org_name": "acme-corp"},
         )
-        assert resp.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+        assert resp.status_code == status.HTTP_201_CREATED
+        body = resp.json()
+        assert body["display_name"].startswith("connector-")
+        # connector-<uuid4> — same record_id the connector_name is derived from.
+        assert body["display_name"] == f"connector-{body['id']}"
+
+    def test_blank_display_name_auto_generates(self, client: TestClient) -> None:
+        resp = client.post(
+            "/data-sources",
+            json={**_CREATE_PAYLOAD, "display_name": "   "},
+        )
+        assert resp.status_code == status.HTTP_201_CREATED
+        body = resp.json()
+        assert body["display_name"].startswith("connector-")
 
     def test_missing_path_returns_422(self, client: TestClient) -> None:
         resp = client.post(

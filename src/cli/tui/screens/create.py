@@ -49,17 +49,17 @@ class CreateScreen(Screen):
         yield Header(show_clock=True)
         yield VerticalScroll(
             Label("Create Data Source", id="form-title"),
-            Label("Display Name"),
-            Input(placeholder="e.g. docs-watcher", id="inp-name"),
             Label("Namespace"),
             Input(placeholder="e.g. docs-namespace", id="inp-namespace"),
-            Label("Org Name"),
-            Input(value=self._org_name, id="inp-org", disabled=True),
             Label("Path"),
             Input(placeholder="/data/documents", id="inp-path"),
             Checkbox("Recursive", value=True, id="inp-recursive"),
             Label("File Types"),
             extensions_list,
+            Label("Display Name (optional)"),
+            Input(placeholder="auto-generated if left blank", id="inp-name"),
+            Label("Org Name"),
+            Input(value=self._org_name, id="inp-org", disabled=True),
             Horizontal(
                 Button("Create", id="btn-submit", variant="success"),
                 Button("Cancel", id="btn-cancel"),
@@ -71,7 +71,7 @@ class CreateScreen(Screen):
 
     def on_mount(self) -> None:
         self.title = "New Data Source"
-        self.query_one("#inp-name", Input).focus()
+        self.query_one("#inp-namespace", Input).focus()
 
     @on(Button.Pressed, "#btn-submit")
     def on_submit(self) -> None:
@@ -93,15 +93,15 @@ class CreateScreen(Screen):
         recursive = self.query_one("#inp-recursive", Checkbox).value
         file_extensions = self.query_one("#inp-file-extensions", SelectionList).selected
 
-        if not all([name, namespace, org, path]):
-            self.notify("All fields are required.", severity="warning")
+        if not all([namespace, org, path]):
+            self.notify("Namespace, org, and path are required.", severity="warning")
             return
         if not file_extensions:
             self.notify("Select at least one file type.", severity="warning")
             return
 
         payload = DataSourceCreate(
-            display_name=name,
+            display_name=name or None,
             namespace=namespace,
             org_name=org,
             path=path,

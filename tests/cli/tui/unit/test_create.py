@@ -37,13 +37,36 @@ async def test_org_field_disabled(mock_ds: AsyncMock) -> None:
 
 
 @pytest.mark.asyncio
-async def test_submit_empty_name_stays_on_screen(mock_ds: AsyncMock) -> None:
+async def test_submit_blank_name_sends_none_for_auto_generation(
+    mock_ds: AsyncMock,
+) -> None:
+    """Display Name is optional — a blank #inp-name must not block
+    submission; the server auto-generates connector-<uuid4> when it sees
+    display_name=None."""
     async with _Host(mock_ds).run_test() as pilot:
         await pilot.pause()
-        # Form scrolls past the terminal height; scroll the button into view.
+        pilot.app.screen.query_one("#inp-namespace", Input).value = "test-ns"
+        pilot.app.screen.query_one("#inp-path", Input).value = "/data/docs"
         pilot.app.screen.query_one("#btn-submit").scroll_visible(animate=False)
         await pilot.pause()
         # #inp-name starts empty; submit without filling it.
+        await pilot.click("#btn-submit")
+        await pilot.pause()
+        await pilot.pause()  # _submit worker completes
+
+    mock_ds.create_source.assert_called_once()
+    payload = mock_ds.create_source.call_args.args[0]
+    assert payload.display_name is None
+
+
+@pytest.mark.asyncio
+async def test_submit_missing_namespace_stays_on_screen(mock_ds: AsyncMock) -> None:
+    async with _Host(mock_ds).run_test() as pilot:
+        await pilot.pause()
+        pilot.app.screen.query_one("#inp-path", Input).value = "/data/docs"
+        pilot.app.screen.query_one("#btn-submit").scroll_visible(animate=False)
+        await pilot.pause()
+        # #inp-namespace starts empty; submit without filling it.
         await pilot.click("#btn-submit")
         await pilot.pause()
         assert isinstance(pilot.app.screen, CreateScreen)
