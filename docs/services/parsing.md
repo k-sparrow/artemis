@@ -238,8 +238,9 @@ Both keys are private to the parsing service; no other service reads from this b
 | `PARSED_ARTIFACTS_BUCKET` | `parsed-chunks` | |
 | `REPLAY_CACHE_BUCKET` | `docling-replay` | |
 | `DOCLING_STATUS_TIMEOUT` | `30.0` | Seconds, for status proxy calls (parse and chunk) |
-| `DOCLING_RESOLVE_TIMEOUT` | `120.0` | Seconds, for resolve (conversion result download + replay/pages cache write) |
-| `DOCLING_FINALIZE_TIMEOUT` | `60.0` | Seconds, for chunk finalize (chunk result fetch + artifact write) |
+| `DOCLING_RESOLVE_TIMEOUT` | `1200.0` | Seconds, for resolve (conversion result download). Keep below the worker's `PARSING_RESOLVE_TIMEOUT` |
+| `DOCLING_CHUNK_SUBMIT_TIMEOUT` | `1200.0` | Seconds, for chunk submit (inline upload of the replay-cached document). Keep below the worker's `PARSING_CHUNK_SUBMIT_TIMEOUT` |
+| `DOCLING_FINALIZE_TIMEOUT` | `1200.0` | Seconds, for chunk finalize (chunk result fetch). Keep below the worker's `PARSING_FINALIZE_TIMEOUT` |
 | `LOADER_TYPE` | `DOCLING` | `DOCLING` or `PYMUPDF4LLM` (dev fallback, no GPU) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | |
 | `OTEL_SERVICE_NAME` | `backend-parsing` | |

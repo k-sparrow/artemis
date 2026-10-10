@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 from functools import wraps
@@ -30,6 +31,7 @@ from src.backend.parsing.lib.artifact import (
     chunk_items_to_parsed,
 )
 from src.lib.backend.logging import get_logger
+from src.lib.core.adapters.stores.base.blob import BlobStore
 from src.lib.core.ingestion.contract import BlobRef
 from src.lib.core.ingestion.exceptions import (
     DocumentProcessingException,
@@ -146,6 +148,23 @@ def _discover_s3_result_key(
             keys=keys,
         )
     return keys[0]
+
+
+async def _marker_matches(store: BlobStore, key: str, task_id: str) -> bool:
+    """Whether the retry-safety marker at *key* names *task_id* (see
+    service.resolved_marker_key)."""
+    if not await store.aexists(key):
+        return False
+    return await store.aget(key) == task_id.encode()
+
+
+def _dump_replay(dl_doc: DoclingDocument) -> bytes:
+    return dl_doc.model_dump_json().encode()
+
+
+def _derive_pages(dl_doc: DoclingDocument, obj_id: uuid.UUID) -> tuple[bytes, int]:
+    pages = build_pages(dl_doc, obj_id)
+    return service.encode_pages(pages), len(pages)
 
 
 # ---------------------------------------------------------------------------
@@ -405,37 +424,67 @@ async def resolve_endpoint(
     away, while the DoclingDocument is already in hand. Chunking is a fully
     separate stage from here on (Epic 21 §21.8): this endpoint never submits
     a chunk job itself.
+
+    Safe to retry: for a very large document this call can outlive the
+    worker's HTTP timeout and still complete here, so the worker's retry must
+    not fail on the now-consumed result. A marker naming the resolved
+    ``parsing_task_id`` is written last, and a repeat call for that same task
+    returns immediately. The scratch object is only deleted after the marker,
+    so an attempt that dies part-way leaves everything a retry needs.
+
+    All (de)serialisation of the DoclingDocument runs in a worker thread —
+    at this size it's long enough to stall every other request on the event
+    loop, status polls for unrelated documents included.
     """
     obj_id = request.obj_id
     replay_store = blob_store(settings.REPLAY_CACHE_BUCKET)
+    marker_key = service.resolved_marker_key(obj_id)
 
+    if await _marker_matches(replay_store, marker_key, request.parsing_task_id):
+        logger.info(
+            "resolve_already_done",
+            obj_id=obj_id,
+            parsing_task_id=request.parsing_task_id,
+        )
+        return ResolveResult(obj_id=obj_id)
+
+    scratch_key: str | None = None
     if request.mode == "file":
         dl_doc = await docling_client.fetch_conversion_result(
             request.parsing_task_id,
             timeout=settings.DOCLING_RESOLVE_TIMEOUT,
         )
-        replay_bytes = dl_doc.model_dump_json().encode()
+        replay_bytes = await asyncio.to_thread(_dump_replay, dl_doc)
     else:
         scratch_prefix = service.convert_scratch_prefix(obj_id)
-        scratch_key = _discover_s3_result_key(
-            s3_client, settings.REPLAY_CACHE_BUCKET, scratch_prefix, ".json"
+        scratch_key = await asyncio.to_thread(
+            _discover_s3_result_key,
+            s3_client,
+            settings.REPLAY_CACHE_BUCKET,
+            scratch_prefix,
+            ".json",
         )
         replay_bytes = await replay_store.aget(scratch_key)
-        await replay_store.adelete(scratch_key)
-        dl_doc = DoclingDocument.model_validate_json(replay_bytes)
+        dl_doc = await asyncio.to_thread(
+            DoclingDocument.model_validate_json, replay_bytes
+        )
 
     await replay_store.aput(
         service.replay_key(obj_id), replay_bytes, content_type="application/json"
     )
     logger.info("replay_cache_written", obj_id=obj_id)
 
-    pages = build_pages(dl_doc, uuid.UUID(obj_id))
-    await replay_store.aput(
-        service.pages_key(obj_id),
-        service.encode_pages(pages),
-        content_type="application/json",
+    pages_bytes, num_pages = await asyncio.to_thread(
+        _derive_pages, dl_doc, uuid.UUID(obj_id)
     )
-    logger.info("pages_cached", obj_id=obj_id, num_pages=len(pages))
+    await replay_store.aput(
+        service.pages_key(obj_id), pages_bytes, content_type="application/json"
+    )
+    logger.info("pages_cached", obj_id=obj_id, num_pages=num_pages)
+
+    await replay_store.aput(marker_key, request.parsing_task_id.encode())
+    if scratch_key is not None:
+        await replay_store.adelete(scratch_key)
 
     return ResolveResult(obj_id=obj_id)
 
@@ -472,7 +521,9 @@ async def chunk_submit_endpoint(
     obj_id = request.obj_id
     replay_store = blob_store(settings.REPLAY_CACHE_BUCKET)
     replay_bytes = await replay_store.aget(service.replay_key(obj_id))
-    chunking_task_id = await docling_client.submit_chunk(replay_bytes, timeout=120.0)
+    chunking_task_id = await docling_client.submit_chunk(
+        replay_bytes, timeout=settings.DOCLING_CHUNK_SUBMIT_TIMEOUT
+    )
     logger.info("chunk_submit_queued", obj_id=obj_id, chunking_task_id=chunking_task_id)
     return ChunkSubmitResult(chunking_task_id=chunking_task_id, obj_id=obj_id)
 
@@ -516,10 +567,28 @@ async def chunk_finalize_endpoint(
     service now. If the fallback split *also* produces nothing (pages are
     whitespace-only), that's a genuine failure — raised here rather than
     silently persisted for indexing to discover later.
+
+    Safe to retry, same scheme as /v1/parse/resolve: a marker naming the
+    finalized ``chunking_task_id`` is written after the artifact, and a
+    repeat call for that task returns the existing artifact's BlobRef rather
+    than re-fetching a chunk result docling-serve may have evicted by then.
     """
     obj_id_str = request.obj_id
     obj_id = uuid.UUID(obj_id_str)
     replay_store = blob_store(settings.REPLAY_CACHE_BUCKET)
+    artifact_store = blob_store(settings.PARSED_ARTIFACTS_BUCKET)
+    key = service.artifact_key(obj_id_str)
+    marker_key = service.finalized_marker_key(obj_id_str)
+
+    if await _marker_matches(
+        replay_store, marker_key, request.chunking_task_id
+    ) and await artifact_store.aexists(key):
+        logger.info(
+            "chunk_finalize_already_done",
+            obj_id=obj_id_str,
+            chunking_task_id=request.chunking_task_id,
+        )
+        return BlobRef(bucket=settings.PARSED_ARTIFACTS_BUCKET, key=key)
 
     chunks = await docling_client.fetch_chunk_result(
         request.chunking_task_id,
@@ -528,7 +597,7 @@ async def chunk_finalize_endpoint(
     parsed_chunks = chunk_items_to_parsed(chunks, obj_id)
 
     pages_bytes = await replay_store.aget(service.pages_key(obj_id_str))
-    pages = service.decode_pages(pages_bytes)
+    pages = await asyncio.to_thread(service.decode_pages, pages_bytes)
 
     if not parsed_chunks:
         page_docs = [
@@ -563,10 +632,12 @@ async def chunk_finalize_endpoint(
 
     artifact = ParseArtifact(pages=pages, chunks=parsed_chunks)
 
-    key = service.artifact_key(obj_id_str)
-    await blob_store(settings.PARSED_ARTIFACTS_BUCKET).aput(
-        key, service.encode_artifact(artifact), content_type="application/json"
+    await artifact_store.aput(
+        key,
+        await asyncio.to_thread(service.encode_artifact, artifact),
+        content_type="application/json",
     )
+    await replay_store.aput(marker_key, request.chunking_task_id.encode())
     logger.info(
         "chunk_finalize_completed",
         obj_id=obj_id_str,

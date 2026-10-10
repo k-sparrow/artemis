@@ -569,6 +569,20 @@ class TestResolveParse:
         self._run(mock)
         assert mock.call_args[1]["submit_result"] == _SUBMIT_RESULT
 
+    def test_read_timeout_schedules_retry(self) -> None:
+        """A very large document can outlive the HTTP timeout while the
+        parsing service is still working — that must retry, not fail the
+        document permanently."""
+        mock = MagicMock(side_effect=httpx.ReadTimeout("timed out"))
+        with (
+            patch("src.backend.controller.worker.tasks.call_parse_resolve", mock),
+            patch.object(resolve_parse, "retry", side_effect=Retry) as mock_retry,
+        ):
+            with pytest.raises(Retry):
+                resolve_parse.run(_SUBMIT_RESULT, **_KWARGS)
+
+        assert mock_retry.call_args.kwargs["max_retries"] == 20
+
 
 # ---------------------------------------------------------------------------
 # submit_chunk
@@ -631,6 +645,17 @@ class TestSubmitChunk:
         mock = MagicMock(return_value=dict(_CHUNK_SUBMIT_RESULT))
         self._run(mock)
         assert mock.call_args[1]["resolve_result"] == _RESOLVE_RESULT
+
+    def test_read_timeout_schedules_retry(self) -> None:
+        mock = MagicMock(side_effect=httpx.ReadTimeout("timed out"))
+        with (
+            patch("src.backend.controller.worker.tasks.call_chunk_submit", mock),
+            patch.object(submit_chunk, "retry", side_effect=Retry) as mock_retry,
+        ):
+            with pytest.raises(Retry):
+                submit_chunk.run(_RESOLVE_RESULT, **_KWARGS)
+
+        assert mock_retry.call_args.kwargs["max_retries"] == 20
 
 
 # ---------------------------------------------------------------------------
@@ -716,6 +741,25 @@ class TestPollChunk:
         with pytest.raises(httpx.HTTPStatusError) as exc_info:
             self._run(mock_status, mock_finalize)
         assert exc_info.value.response.status_code == 503
+
+    def test_transport_error_on_status_schedules_retry(self) -> None:
+        """A timed-out status check says nothing about the chunk job — it
+        must keep polling on the shared 1440 budget, not fail the document."""
+        mock_status = MagicMock(side_effect=httpx.ReadTimeout("timed out"))
+        with patch.object(poll_chunk, "retry", side_effect=Retry) as mock_retry:
+            with pytest.raises(Retry):
+                self._run(mock_status)
+
+        assert mock_retry.call_args.kwargs["max_retries"] == 1440
+
+    def test_transport_error_on_finalize_schedules_retry(self) -> None:
+        mock_status = MagicMock(return_value=_make_status("success"))
+        mock_finalize = MagicMock(side_effect=httpx.ReadTimeout("timed out"))
+        with patch.object(poll_chunk, "retry", side_effect=Retry) as mock_retry:
+            with pytest.raises(Retry):
+                self._run(mock_status, mock_finalize)
+
+        assert mock_retry.call_args.kwargs["max_retries"] == 1440
 
     def test_finalize_called_with_correct_obj_id(self) -> None:
         """finalize metadata must include the obj_id from ChunkSubmitResult."""

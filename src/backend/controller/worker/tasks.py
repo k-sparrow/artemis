@@ -944,9 +944,11 @@ def resolve_parse(
 ) -> dict:
     """Download conversion result and cache it (replay + derived pages).
 
-    Calls POST /v1/parse/resolve and returns ResolveResult dict immediately.
-    Chunking is a fully separate stage from here (Epic 21, see submit_chunk)
-    — this task no longer submits a chunk job itself.
+    Calls POST /v1/parse/resolve and returns the ResolveResult dict. The call
+    blocks for as long as the parsing service takes to fetch, cache and
+    page-split the document — minutes for a very large one. Chunking is a
+    fully separate stage from here (Epic 21, see submit_chunk) — this task no
+    longer submits a chunk job itself.
     """
     try:
         return call_parse_resolve(
@@ -960,6 +962,17 @@ def resolve_parse(
         raise self.retry(
             exc=exc,
             countdown=parsing_breaker.reset_timeout + 5 + jitter,
+            max_retries=20,
+        )
+    except httpx.TransportError as exc:
+        # Timeout or dropped connection — nothing says the document itself is
+        # bad, so retry on the 5xx schedule. /v1/parse/resolve is
+        # idempotent per parsing_task_id, so a repeat is safe even if the timed-out
+        # attempt went on to finish server-side.
+        backoff = min(120, 2**self.request.retries)
+        raise self.retry(
+            exc=exc,
+            countdown=backoff + random.uniform(0, backoff),
             max_retries=20,
         )
     except httpx.HTTPStatusError as exc:
@@ -990,10 +1003,10 @@ def submit_chunk(
 ) -> dict:
     """Submit the replay-cached DoclingDocument for hybrid chunking.
 
-    Calls POST /v1/chunk/submit and returns ChunkSubmitResult dict
-    immediately. A fully separate stage from resolve_parse (Epic 21) —
-    docling-serve fetches the replay cache directly from S3, no document
-    bytes ever pass through this task.
+    Calls POST /v1/chunk/submit and returns the ChunkSubmitResult dict. A
+    fully separate stage from resolve_parse (Epic 21). No document bytes pass
+    through this task, but the parsing service uploads the replay cache to
+    docling-serve inline, so the call's duration scales with document size.
     """
     try:
         result = call_chunk_submit(
@@ -1009,6 +1022,17 @@ def submit_chunk(
         raise self.retry(
             exc=exc,
             countdown=parsing_breaker.reset_timeout + 5 + jitter,
+            max_retries=20,
+        )
+    except httpx.TransportError as exc:
+        # Timeout or dropped connection — nothing says the document itself is
+        # bad, so retry on the 5xx schedule. A timed-out attempt may
+        # still have queued a chunk job; the repeat queues another and the
+        # orphan's result is simply never fetched.
+        backoff = min(120, 2**self.request.retries)
+        raise self.retry(
+            exc=exc,
+            countdown=backoff + random.uniform(0, backoff),
             max_retries=20,
         )
     except httpx.HTTPStatusError as exc:
@@ -1086,6 +1110,16 @@ def poll_chunk(
             countdown=parsing_breaker.reset_timeout + 5 + jitter,
             max_retries=1440,
         )
+    except httpx.TransportError as exc:
+        # A timed-out or dropped status check says nothing about the chunk
+        # job itself — keep polling rather than failing the document.
+        _poll_attempts.add(1, {"poll_task": "poll_chunk", "outcome": "transport_retry"})
+        backoff = min(120, 2**self.request.retries)
+        raise self.retry(
+            exc=exc,
+            countdown=backoff + random.uniform(0, backoff),
+            max_retries=1440,
+        )
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code >= 500:
             _poll_attempts.add(1, {"poll_task": "poll_chunk", "outcome": "5xx_retry"})
@@ -1138,6 +1172,18 @@ def poll_chunk(
         raise self.retry(
             exc=exc,
             countdown=parsing_breaker.reset_timeout + 5 + jitter,
+            max_retries=1440,
+        )
+    except httpx.TransportError as exc:
+        # /v1/chunk/finalize is idempotent per chunking_task_id, so a repeat
+        # is safe even if the timed-out attempt finished server-side.
+        _poll_attempts.add(
+            1, {"poll_task": "poll_chunk", "outcome": "finalize_transport_retry"}
+        )
+        backoff = min(120, 2**self.request.retries)
+        raise self.retry(
+            exc=exc,
+            countdown=backoff + random.uniform(0, backoff),
             max_retries=1440,
         )
     except httpx.HTTPStatusError as exc:

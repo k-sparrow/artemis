@@ -51,16 +51,22 @@ class WorkerSettings(BaseSettings):
     # httpx timeout (seconds) for indexing and delete service calls
     HTTPX_TIMEOUT: float = 1800.0
 
-    # Per-call timeouts for the async parse/chunk endpoints
+    # Per-call timeouts for the async parse/chunk endpoints. resolve,
+    # chunk-submit and finalize each move a whole document's worth of JSON
+    # inside the parsing service, so they scale with document size and are
+    # sized for very large documents. Each must stay ABOVE the parsing
+    # service's matching DOCLING_*_TIMEOUT (1200s each) — otherwise this
+    # side gives up first and sees a bare read timeout instead of the parsing
+    # service's classified 503 — and below RabbitMQ's consumer_timeout (30 min).
     PARSING_SUBMIT_TIMEOUT: float = 120.0  # source download/forward + HTTP POST
     PARSING_STATUS_TIMEOUT: float = 30.0  # single status GET (parse or chunk task)
     PARSING_RESOLVE_TIMEOUT: float = (
-        120.0  # conversion result fetch + replay/pages cache
+        1500.0  # conversion result fetch + replay/pages cache
     )
     PARSING_CHUNK_SUBMIT_TIMEOUT: float = (
-        30.0  # chunk job submission (S3-direct, no bytes)
+        1500.0  # replay-cache read + inline upload to docling-serve
     )
-    PARSING_FINALIZE_TIMEOUT: float = 60.0  # chunk result fetch + artifact write
+    PARSING_FINALIZE_TIMEOUT: float = 1500.0  # chunk result fetch + artifact write
 
     # Celery exchange name
     EXCHANGE_NAME: str

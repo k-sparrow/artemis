@@ -12,6 +12,8 @@ __all__ = [
     "encode_pages",
     "decode_pages",
     "convert_scratch_prefix",
+    "resolved_marker_key",
+    "finalized_marker_key",
 ]
 
 _pages_adapter = TypeAdapter(List[Page])
@@ -49,6 +51,27 @@ def pages_key(obj_id: str) -> str:
     pages from the replay-cached DoclingDocument itself.
     """
     return f"pages/{obj_id}.json"
+
+
+def resolved_marker_key(obj_id: str) -> str:
+    """Key of the marker recording which conversion task /v1/parse/resolve
+    last fully cached for this object (its body is that parsing_task_id).
+
+    Makes resolve safe to retry: a repeat call for the same task returns
+    immediately instead of re-fetching a result that's already been consumed
+    (the scratch object is deleted, docling-serve may have evicted it). Keyed
+    on the task id rather than mere presence of the cache so a re-ingestion
+    of the same obj_id never short-circuits onto the previous version.
+    """
+    return f"resolved/{obj_id}"
+
+
+def finalized_marker_key(obj_id: str) -> str:
+    """Key of the marker recording which chunk task /v1/chunk/finalize last
+    wrote the parse artifact from (its body is that chunking_task_id). Same
+    retry-safety role as :func:`resolved_marker_key`.
+    """
+    return f"finalized/{obj_id}"
 
 
 def encode_pages(pages: List[Page]) -> bytes:

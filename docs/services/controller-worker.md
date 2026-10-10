@@ -138,6 +138,7 @@ All tasks use manual `try/except` blocks. Each exception type has a different ba
 |-----------|-----------|-----------|-------------|
 | `httpx.HTTPStatusError` 5xx | Transient upstream failure — retry | `min(120, 2^n) + jitter([0, backoff])` | 20 (parse sub-tasks), scalable for poll tasks |
 | `pybreaker.CircuitBreakerError` | Breaker open — wait for reset window | `reset_timeout + 5s + jitter([0, 30s])` = 125–155 s | same as above |
+| `httpx.TransportError` (timeout, dropped connection) | Retry on the 5xx schedule — `resolve_parse`, `submit_chunk`, `poll_chunk` only; elsewhere it still propagates | `min(120, 2^n) + jitter([0, backoff])` | same as above |
 | `httpx.HTTPStatusError` 4xx | Permanent failure — propagate | — | — |
 
 `poll_parse` and `poll_chunk` use `max_retries=1440` (≈ 24 h). All other parse tasks
@@ -228,8 +229,8 @@ result backend that writes to `apollo_celery_taskmeta` (shared PostgreSQL) with
 | `HTTPX_TIMEOUT` | `600` | For indexing/delete calls only; parse calls use per-endpoint timeouts |
 | `PARSING_SUBMIT_TIMEOUT` | `120.0` | Source download/forward + HTTP POST |
 | `PARSING_STATUS_TIMEOUT` | `30.0` | Single status GET (parse or chunk task) |
-| `PARSING_RESOLVE_TIMEOUT` | `120.0` | Conversion result fetch + replay/pages cache write |
-| `PARSING_CHUNK_SUBMIT_TIMEOUT` | `30.0` | Chunk job submission (S3-direct, no bytes) |
-| `PARSING_FINALIZE_TIMEOUT` | `60.0` | Chunk result fetch + artifact write |
+| `PARSING_RESOLVE_TIMEOUT` | `1500.0` | Conversion result fetch + replay/pages cache write. Scales with document size; keep above the parsing service's `DOCLING_RESOLVE_TIMEOUT` |
+| `PARSING_CHUNK_SUBMIT_TIMEOUT` | `1500.0` | Replay-cache read + inline upload to docling-serve. Scales with document size; keep above `DOCLING_CHUNK_SUBMIT_TIMEOUT` |
+| `PARSING_FINALIZE_TIMEOUT` | `1500.0` | Chunk result fetch + artifact write. Keep above `DOCLING_FINALIZE_TIMEOUT` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | |
 | `OTEL_SERVICE_NAME` | `backend-controller-worker` | |

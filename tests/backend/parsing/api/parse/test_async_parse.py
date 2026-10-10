@@ -370,6 +370,59 @@ class TestResolveEndpoint:
         resp = client.post("/v1/parse/resolve", json=self._resolve_body(mode="source"))
         assert resp.status_code == 502
 
+    def test_file_mode_retry_for_same_task_does_not_refetch(
+        self, client: TestClient, docling_client: MagicMock
+    ) -> None:
+        """The worker retries resolve after an HTTP timeout even though the
+        first attempt may have completed here. The repeat must not re-fetch
+        the result — docling-serve may no longer hold it."""
+        body = self._resolve_body(mode="file")
+        assert client.post("/v1/parse/resolve", json=body).status_code == 200
+
+        resp = client.post("/v1/parse/resolve", json=body)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"obj_id": OBJ_ID_STR}
+        docling_client.fetch_conversion_result.assert_awaited_once()
+
+    def test_source_mode_retry_for_same_task_succeeds_after_scratch_deleted(
+        self, client: TestClient, store: InMemoryBlobStore
+    ) -> None:
+        """Same retry, source mode: the first attempt deleted the scratch
+        object, so without the marker the repeat would 502 until the worker
+        ran out of retries."""
+        scratch_key = f"{parse_service.convert_scratch_prefix(OBJ_ID_STR)}json/doc.json"
+        store.put(scratch_key, _docling_doc_json())
+        body = self._resolve_body(mode="source")
+        assert client.post("/v1/parse/resolve", json=body).status_code == 200
+        assert not store.exists(scratch_key)
+
+        resp = client.post("/v1/parse/resolve", json=body)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"obj_id": OBJ_ID_STR}
+
+    def test_new_conversion_task_for_same_obj_id_is_resolved_afresh(
+        self, client: TestClient, docling_client: MagicMock
+    ) -> None:
+        """The short-circuit is keyed on the conversion task, not on the
+        cache existing — re-ingesting an object must not serve the previous
+        version's pages."""
+        assert (
+            client.post(
+                "/v1/parse/resolve", json=self._resolve_body(mode="file")
+            ).status_code
+            == 200
+        )
+
+        resp = client.post(
+            "/v1/parse/resolve",
+            json={**self._resolve_body(mode="file"), "parsing_task_id": "newer-task"},
+        )
+
+        assert resp.status_code == 200
+        assert docling_client.fetch_conversion_result.await_count == 2
+
 
 # ---------------------------------------------------------------------------
 # POST /v1/chunk/submit
@@ -396,7 +449,7 @@ class TestChunkSubmitEndpoint:
             "obj_id": OBJ_ID_STR,
         }
         docling_client.submit_chunk.assert_awaited_once_with(
-            _docling_doc_json(), timeout=120.0
+            _docling_doc_json(), timeout=settings.DOCLING_CHUNK_SUBMIT_TIMEOUT
         )
 
 
@@ -484,6 +537,41 @@ class TestChunkFinalizeEndpoint:
         docling_client.fetch_chunk_result.assert_awaited_once_with(
             CHUNK_TASK_ID, timeout=settings.DOCLING_FINALIZE_TIMEOUT
         )
+
+    def test_retry_for_same_task_returns_existing_artifact_without_refetch(
+        self, client: TestClient, docling_client: MagicMock
+    ) -> None:
+        """The worker retries finalize after an HTTP timeout even though the
+        first attempt may have written the artifact. The repeat must not
+        re-fetch the chunk result — docling-serve may no longer hold it."""
+        first = client.post("/v1/chunk/finalize", json=self._finalize_body())
+        assert first.status_code == 200
+
+        resp = client.post("/v1/chunk/finalize", json=self._finalize_body())
+
+        assert resp.status_code == 200
+        assert resp.json() == first.json()
+        docling_client.fetch_chunk_result.assert_awaited_once()
+
+    def test_retry_refetches_when_artifact_is_gone(
+        self,
+        client: TestClient,
+        docling_client: MagicMock,
+        store: InMemoryBlobStore,
+    ) -> None:
+        """A marker without its artifact must never yield a BlobRef pointing
+        at nothing."""
+        assert (
+            client.post("/v1/chunk/finalize", json=self._finalize_body()).status_code
+            == 200
+        )
+        store.delete(f"parse/{OBJ_ID_STR}.json")
+
+        resp = client.post("/v1/chunk/finalize", json=self._finalize_body())
+
+        assert resp.status_code == 200
+        assert store.exists(f"parse/{OBJ_ID_STR}.json")
+        assert docling_client.fetch_chunk_result.await_count == 2
 
 
 class TestChunkFinalizeEmptyChunkFallback:
