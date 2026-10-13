@@ -46,6 +46,7 @@ from src.backend.parsing.api.dependencies import (
 from src.backend.parsing.api.main import app
 from src.backend.parsing.api.parse import service as parse_service
 from src.backend.parsing.lib.artifact import ParseStatus
+from src.lib.core.adapters.loaders.docling import PAGE_BREAK_PLACEHOLDER
 from src.lib.core.adapters.stores.memory.blob import InMemoryBlobStore
 from src.lib.core.ingestion.types import Page
 
@@ -115,11 +116,27 @@ class _FakeS3Client:
 
     def __init__(self, store: InMemoryBlobStore) -> None:
         self._store = store
+        self.copied: list[tuple[str, str]] = []
+        self.ranged_reads: list[tuple[str, int, int]] = []
 
     def list_objects(self, bucket: str, prefix: str = "", recursive: bool = False):
         return [
             _FakeS3Object(key) for key in self._store._data if key.startswith(prefix)
         ]
+
+    def copy_object(self, bucket: str, key: str, source) -> None:
+        """S3 server-side copy — resolve moves the converted JSON to the
+        replay key this way, without the bytes passing through the service."""
+        self.copied.append((source.object_name, key))
+        self._store.put(key, self._store.get(source.object_name))
+
+    def get_object(self, bucket: str, key: str, offset: int = 0, length: int = 0):
+        """Ranged read — resolve only ever asks for the head of the JSON."""
+        self.ranged_reads.append((key, offset, length))
+        data = self._store.get(key)[offset : offset + length]
+        response = MagicMock()
+        response.read.return_value = data
+        return response
 
 
 # ---------------------------------------------------------------------------
@@ -139,10 +156,17 @@ def docling_client() -> MagicMock:
 
 
 @pytest.fixture
-def client(store: InMemoryBlobStore, docling_client: MagicMock) -> TestClient:
+def s3_client(store: InMemoryBlobStore) -> _FakeS3Client:
+    return _FakeS3Client(store)
+
+
+@pytest.fixture
+def client(
+    store: InMemoryBlobStore, docling_client: MagicMock, s3_client: _FakeS3Client
+) -> TestClient:
     app.dependency_overrides[get_docling_client] = lambda: docling_client
     app.dependency_overrides[get_blob_store_factory] = lambda: (lambda _b: store)
-    app.dependency_overrides[get_s3_client] = lambda: _FakeS3Client(store)
+    app.dependency_overrides[get_s3_client] = lambda: s3_client
     try:
         with TestClient(app) as c:
             yield c
@@ -338,18 +362,67 @@ class TestResolveEndpoint:
         assert store.exists(f"pages/{OBJ_ID_STR}.json")
         docling_client.submit_chunk.assert_not_awaited()
 
-    def test_source_mode_discovers_result_from_s3_scratch_prefix(
+    def test_source_mode_builds_pages_from_markdown_without_loading_the_json(
+        self,
+        client: TestClient,
+        docling_client: MagicMock,
+        store: InMemoryBlobStore,
+        s3_client: _FakeS3Client,
+    ) -> None:
+        """
+        The large-document path: docling-serve wrote page-delimited Markdown
+        next to the JSON, so resolve never downloads or validates the JSON.
+        The scratch JSON here is deliberately NOT a loadable DoclingDocument
+        (only its head is well-formed) — resolve would fail if it tried.
+        """
+        scratch_prefix = parse_service.convert_scratch_prefix(OBJ_ID_STR)
+        json_key = f"{scratch_prefix}json/doc.json"
+        md_key = f"{scratch_prefix}md/doc.md"
+        json_bytes = (
+            b'{"schema_name": "DoclingDocument", "name": "doc", '
+            b'"origin": {"mimetype": "application/pdf", "filename": "doc.pdf"}, '
+            b'"texts": [' + b"x" * 200_000
+        )
+        store.put(json_key, json_bytes)
+        store.put(
+            md_key,
+            f"first page\n\n{PAGE_BREAK_PLACEHOLDER}\n\nsecond page".encode(),
+        )
+
+        resp = client.post("/v1/parse/resolve", json=self._resolve_body(mode="source"))
+
+        assert resp.status_code == 200
+        assert resp.json() == {"obj_id": OBJ_ID_STR}
+        # JSON moved by server-side copy; only its head was ever read.
+        assert s3_client.copied == [(json_key, f"replay/{OBJ_ID_STR}.json")]
+        assert store.get(f"replay/{OBJ_ID_STR}.json") == json_bytes
+        assert [(key, offset) for key, offset, _ in s3_client.ranged_reads] == [
+            (json_key, 0)
+        ]
+        assert s3_client.ranged_reads[0][2] < len(json_bytes)
+        pages = parse_service.decode_pages(store.get(f"pages/{OBJ_ID_STR}.json"))
+        assert [(p.page_no, p.markdown, p.source) for p in pages] == [
+            (1, "first page", "doc.pdf"),
+            (2, "second page", "doc.pdf"),
+        ]
+        assert not store.exists(json_key)
+        assert not store.exists(md_key)
+        docling_client.fetch_conversion_result.assert_not_awaited()
+
+    def test_source_mode_without_markdown_falls_back_to_loading_the_json(
         self,
         client: TestClient,
         docling_client: MagicMock,
         store: InMemoryBlobStore,
     ) -> None:
         """
-        mode="source" (the S3-direct convert path) never calls
-        fetch_conversion_result — docling-serve wrote the result to the
-        S3Target scratch prefix instead (batch endpoint has no inbody
-        target). Resolve discovers it via listing, copies it to the stable
-        replay key, and deletes the scratch object.
+        A conversion submitted before Markdown was requested (in flight
+        across a deploy) has only the JSON under its scratch prefix. Resolve
+        still works for it by loading the document, as it always did:
+        mode="source" never calls fetch_conversion_result — docling-serve
+        wrote the result to the S3Target scratch prefix (batch endpoint has
+        no inbody target). Resolve discovers it via listing, copies it to
+        the stable replay key, and deletes the scratch object.
         """
         scratch_prefix = parse_service.convert_scratch_prefix(OBJ_ID_STR)
         scratch_key = f"{scratch_prefix}json/doc.json"
@@ -369,6 +442,59 @@ class TestResolveEndpoint:
         but wrote nothing — surfaces as a clear 502, not a silent empty artifact."""
         resp = client.post("/v1/parse/resolve", json=self._resolve_body(mode="source"))
         assert resp.status_code == 502
+
+    def test_file_mode_retry_for_same_task_does_not_refetch(
+        self, client: TestClient, docling_client: MagicMock
+    ) -> None:
+        """The worker retries resolve after an HTTP timeout even though the
+        first attempt may have completed here. The repeat must not re-fetch
+        the result — docling-serve may no longer hold it."""
+        body = self._resolve_body(mode="file")
+        assert client.post("/v1/parse/resolve", json=body).status_code == 200
+
+        resp = client.post("/v1/parse/resolve", json=body)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"obj_id": OBJ_ID_STR}
+        docling_client.fetch_conversion_result.assert_awaited_once()
+
+    def test_source_mode_retry_for_same_task_succeeds_after_scratch_deleted(
+        self, client: TestClient, store: InMemoryBlobStore
+    ) -> None:
+        """Same retry, source mode: the first attempt deleted the scratch
+        object, so without the marker the repeat would 502 until the worker
+        ran out of retries."""
+        scratch_key = f"{parse_service.convert_scratch_prefix(OBJ_ID_STR)}json/doc.json"
+        store.put(scratch_key, _docling_doc_json())
+        body = self._resolve_body(mode="source")
+        assert client.post("/v1/parse/resolve", json=body).status_code == 200
+        assert not store.exists(scratch_key)
+
+        resp = client.post("/v1/parse/resolve", json=body)
+
+        assert resp.status_code == 200
+        assert resp.json() == {"obj_id": OBJ_ID_STR}
+
+    def test_new_conversion_task_for_same_obj_id_is_resolved_afresh(
+        self, client: TestClient, docling_client: MagicMock
+    ) -> None:
+        """The short-circuit is keyed on the conversion task, not on the
+        cache existing — re-ingesting an object must not serve the previous
+        version's pages."""
+        assert (
+            client.post(
+                "/v1/parse/resolve", json=self._resolve_body(mode="file")
+            ).status_code
+            == 200
+        )
+
+        resp = client.post(
+            "/v1/parse/resolve",
+            json={**self._resolve_body(mode="file"), "parsing_task_id": "newer-task"},
+        )
+
+        assert resp.status_code == 200
+        assert docling_client.fetch_conversion_result.await_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -396,7 +522,7 @@ class TestChunkSubmitEndpoint:
             "obj_id": OBJ_ID_STR,
         }
         docling_client.submit_chunk.assert_awaited_once_with(
-            _docling_doc_json(), timeout=120.0
+            _docling_doc_json(), timeout=settings.DOCLING_CHUNK_SUBMIT_TIMEOUT
         )
 
 
@@ -484,6 +610,41 @@ class TestChunkFinalizeEndpoint:
         docling_client.fetch_chunk_result.assert_awaited_once_with(
             CHUNK_TASK_ID, timeout=settings.DOCLING_FINALIZE_TIMEOUT
         )
+
+    def test_retry_for_same_task_returns_existing_artifact_without_refetch(
+        self, client: TestClient, docling_client: MagicMock
+    ) -> None:
+        """The worker retries finalize after an HTTP timeout even though the
+        first attempt may have written the artifact. The repeat must not
+        re-fetch the chunk result — docling-serve may no longer hold it."""
+        first = client.post("/v1/chunk/finalize", json=self._finalize_body())
+        assert first.status_code == 200
+
+        resp = client.post("/v1/chunk/finalize", json=self._finalize_body())
+
+        assert resp.status_code == 200
+        assert resp.json() == first.json()
+        docling_client.fetch_chunk_result.assert_awaited_once()
+
+    def test_retry_refetches_when_artifact_is_gone(
+        self,
+        client: TestClient,
+        docling_client: MagicMock,
+        store: InMemoryBlobStore,
+    ) -> None:
+        """A marker without its artifact must never yield a BlobRef pointing
+        at nothing."""
+        assert (
+            client.post("/v1/chunk/finalize", json=self._finalize_body()).status_code
+            == 200
+        )
+        store.delete(f"parse/{OBJ_ID_STR}.json")
+
+        resp = client.post("/v1/chunk/finalize", json=self._finalize_body())
+
+        assert resp.status_code == 200
+        assert store.exists(f"parse/{OBJ_ID_STR}.json")
+        assert docling_client.fetch_chunk_result.await_count == 2
 
 
 class TestChunkFinalizeEmptyChunkFallback:
@@ -680,3 +841,45 @@ class TestChunkFinalizeEndpointDoclingErrorMapping:
         )
         assert resp.status_code == 503
         assert resp.json()["type"] == "upstream_service_error"
+
+
+# ---------------------------------------------------------------------------
+# service.origin_filename_from_head
+# ---------------------------------------------------------------------------
+
+
+class TestOriginFilenameFromHead:
+    def test_reads_filename_from_the_head_of_a_real_serialised_document(self) -> None:
+        """Pins the assumption the whole shortcut rests on: docling writes
+        ``origin`` ahead of the bulk of the document."""
+        from docling.datamodel.document import DoclingDocument
+        from docling_core.types.doc.document import DocumentOrigin
+        from docling_core.types.doc.labels import DocItemLabel
+
+        doc = DoclingDocument(
+            name="test",
+            origin=DocumentOrigin(
+                mimetype="application/pdf", binary_hash=0, filename="report.pdf"
+            ),
+        )
+        for i in range(2000):
+            doc.add_text(label=DocItemLabel.TEXT, text=f"paragraph {i} " * 20)
+        serialised = doc.model_dump_json().encode()
+        assert len(serialised) > 64 * 1024
+
+        assert parse_service.origin_filename_from_head(serialised[: 64 * 1024]) == (
+            "report.pdf"
+        )
+
+    @pytest.mark.parametrize(
+        "head",
+        [
+            b'{"schema_name": "DoclingDocument", "origin": null, "texts": [',
+            b'{"schema_name": "DoclingDocument", "texts": [',
+            b'{"schema_name": "DoclingDocument", "origin": {"mimetype": "appl',
+            b"",
+        ],
+        ids=["null-origin", "no-origin", "origin-cut-off", "empty"],
+    )
+    def test_returns_empty_string_when_origin_is_unavailable(self, head: bytes) -> None:
+        assert parse_service.origin_filename_from_head(head) == ""

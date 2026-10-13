@@ -7,6 +7,7 @@ from docling.datamodel.document import DoclingDocument
 
 __all__ = [
     "split_pages",
+    "split_markdown_pages",
     "PAGE_BREAK_PLACEHOLDER",
 ]
 
@@ -49,3 +50,26 @@ def split_pages(dl_doc: DoclingDocument) -> List[Tuple[int, str]]:
             len(page_nos),
         )
     return [(page_no, segment.strip()) for page_no, segment in zip(page_nos, segments)]
+
+
+def split_markdown_pages(markdown: str) -> List[Tuple[int, str]]:
+    """Per-page Markdown from a whole-document export that already carries
+    ``PAGE_BREAK_PLACEHOLDER`` at page transitions — the same export
+    :func:`split_pages` performs, but done elsewhere (docling-serve's
+    ``md_page_break_placeholder``), so the ``DoclingDocument`` never has to be
+    loaded here.
+
+    Without the document there is no page index to pair segments with, so
+    pages are numbered 1..N by position. That matches :func:`split_pages` for
+    every document whose pages are numbered contiguously from 1, which is
+    what a whole-document conversion produces.
+    """
+    if PAGE_BREAK_PLACEHOLDER not in markdown:
+        whole = markdown.strip()
+        return [(1, whole)] if whole else []
+    return [
+        (page_no, segment.strip())
+        for page_no, segment in enumerate(
+            markdown.split(PAGE_BREAK_PLACEHOLDER), start=1
+        )
+    ]

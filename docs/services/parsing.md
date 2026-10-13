@@ -58,11 +58,13 @@ submit_endpoint         → file: Docling Serve /v1/convert/file/async (inline)
                           source_ref: verify existence, then Docling Serve
                           /v1/convert/source/batch (S3-direct, S3 source + target)
                                ↓ polling via status_endpoint
-resolve_endpoint        → file: download conversion result inline
-                          source_ref: discover result under the S3Target
-                          scratch prefix (recursive listing), read, delete
-                        → write replay cache (raw DoclingDocument JSON)
-                        → derive + cache pages (Markdown parents)
+resolve_endpoint        → file: download conversion result inline, write
+                          replay cache, derive pages from the document
+                          source_ref: discover JSON + Markdown under the
+                          S3Target scratch prefix (recursive listing);
+                          S3 server-side copy JSON → replay cache; split
+                          the Markdown into pages; delete scratch objects
+                        → cache pages (Markdown parents)
                                ↓
 chunk_submit_endpoint   → reads replay cache from S3 itself, then
                           Docling Serve /v1/chunk/hybrid/file/async
@@ -134,18 +136,31 @@ Docling Serve's `ConversionStatus` is normalised as follows:
 
 Request body: `{parsing_task_id, obj_id, mode}`.
 
-1. `mode="file"`: `GET /v1/result/{parsing_task_id}` → `DoclingDocument`, as before.
-   `mode="source"`: recursively list `REPLAY_CACHE_BUCKET` under the per-`obj_id` scratch
-   prefix (`convert_scratch_prefix`) for the `.json` docling-serve's S3Target wrote — the
+If a marker at `REPLAY_CACHE_BUCKET/resolved/{obj_id}` already names this
+`parsing_task_id`, return `{obj_id}` immediately — the call is safe to retry.
+
+**`mode="source"`** (the worker's only path) — the document never passes through this service:
+
+1. Recursively list `REPLAY_CACHE_BUCKET` under the per-`obj_id` scratch prefix
+   (`convert_scratch_prefix`) for the `.json` and `.md` docling-serve's S3Target wrote — the
    nesting under that prefix isn't fully under our control, hence listing rather than guessing
-   the exact key — read it, then delete the scratch object.
-2. Write replay cache: `REPLAY_CACHE_BUCKET/replay/{obj_id}.json`.
-3. Derive pages via `build_pages()` (`lib/artifact.py`, which calls `split_pages()` in
-   `lib/core/adapters/loaders/docling.py`): `dl_doc.export_to_markdown(page_break_placeholder=
-   "<!-- ARTEMIS_PAGE_BREAK -->")` once, then splits on the placeholder to produce
-   `(page_no, markdown)` tuples.
-4. Write pages cache: `REPLAY_CACHE_BUCKET/pages/{obj_id}.json`.
-5. Return `{obj_id}` — no chunk job submitted here.
+   the exact keys. `submit_source` asks for both formats, with
+   `md_page_break_placeholder="<!-- ARTEMIS_PAGE_BREAK -->"`.
+2. S3 server-side copy the JSON to `REPLAY_CACHE_BUCKET/replay/{obj_id}.json`.
+3. Read the Markdown and split it on the placeholder (`build_pages_from_markdown()` in
+   `lib/artifact.py`) into `(page_no, markdown)` pages, numbered 1..N. Each page's `source` is
+   the document's `origin.filename`, read from the first 64 KB of the JSON.
+4. Write pages cache: `REPLAY_CACHE_BUCKET/pages/{obj_id}.json`, then the marker, then delete
+   the scratch objects.
+
+If no `.md` is found (a conversion submitted before Markdown was requested), it falls back to
+loading the JSON as below.
+
+**`mode="file"`**: `GET /v1/result/{parsing_task_id}` → `DoclingDocument`; write it to the
+replay cache; derive pages via `build_pages()` (`dl_doc.export_to_markdown(
+page_break_placeholder=…)` once, split on the placeholder); write pages cache and marker.
+
+Either way, returns `{obj_id}` — no chunk job submitted here.
 
 ### Chunk Submit (`POST /v1/chunk/submit`)
 
@@ -218,8 +233,7 @@ Derived page-level Markdown parents are cached alongside it, in the same bucket:
 pages/{obj_id}.json
 ```
 
-Written once by `resolve_endpoint` (right after conversion, while the `DoclingDocument` is
-already in memory) and read back by `chunk_finalize_endpoint` to build the final
+Written once by `resolve_endpoint` (right after conversion) and read back by `chunk_finalize_endpoint` to build the final
 `ParseArtifact` — chunk finalization never re-derives pages or re-parses the `DoclingDocument`.
 
 Both keys are private to the parsing service; no other service reads from this bucket.
@@ -238,8 +252,9 @@ Both keys are private to the parsing service; no other service reads from this b
 | `PARSED_ARTIFACTS_BUCKET` | `parsed-chunks` | |
 | `REPLAY_CACHE_BUCKET` | `docling-replay` | |
 | `DOCLING_STATUS_TIMEOUT` | `30.0` | Seconds, for status proxy calls (parse and chunk) |
-| `DOCLING_RESOLVE_TIMEOUT` | `120.0` | Seconds, for resolve (conversion result download + replay/pages cache write) |
-| `DOCLING_FINALIZE_TIMEOUT` | `60.0` | Seconds, for chunk finalize (chunk result fetch + artifact write) |
+| `DOCLING_RESOLVE_TIMEOUT` | `120.0` | Seconds, for resolve's inline result download (`file` mode only; the S3-direct path never downloads the document). Keep below the worker's `PARSING_RESOLVE_TIMEOUT` |
+| `DOCLING_CHUNK_SUBMIT_TIMEOUT` | `1200.0` | Seconds, for chunk submit (inline upload of the replay-cached document). Keep below the worker's `PARSING_CHUNK_SUBMIT_TIMEOUT` |
+| `DOCLING_FINALIZE_TIMEOUT` | `120.0` | Seconds, for chunk finalize (chunk result fetch). Keep below the worker's `PARSING_FINALIZE_TIMEOUT` |
 | `LOADER_TYPE` | `DOCLING` | `DOCLING` or `PYMUPDF4LLM` (dev fallback, no GPU) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | |
 | `OTEL_SERVICE_NAME` | `backend-parsing` | |

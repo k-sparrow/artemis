@@ -7,6 +7,7 @@ py_test(
     tags = ["unit"],
     deps = [
         "//src/backend/parsing/lib:artifact",
+        "//src/lib/core/adapters/loaders:docling",
         "//src/lib/core/ingestion:types",
         requirement("docling-slim"),
         requirement("pytest"),

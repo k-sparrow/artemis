@@ -23,6 +23,7 @@ py_test(
         "//src/backend/parsing/api:dependencies",
         "//src/backend/parsing/api:main",
         "//src/backend/parsing/lib:artifact",
+        "//src/lib/core/adapters/loaders:docling",
         "//src/lib/core/adapters/stores/memory:blob",
         requirement("docling-slim"),
         requirement("httpx"),

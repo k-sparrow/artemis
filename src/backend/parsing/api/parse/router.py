@@ -1,3 +1,4 @@
+import asyncio
 import json
 import uuid
 from functools import wraps
@@ -14,6 +15,7 @@ from docling.datamodel.service.callbacks import (
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from langchain_core.documents import Document
 from minio import Minio
+from minio.commonconfig import CopySource
 from pydantic import BaseModel, BeforeValidator
 
 from src.backend.parsing.api.config import settings
@@ -27,9 +29,11 @@ from src.backend.parsing.api.parse import service
 from src.backend.parsing.lib.artifact import (
     ParseStatus,
     build_pages,
+    build_pages_from_markdown,
     chunk_items_to_parsed,
 )
 from src.lib.backend.logging import get_logger
+from src.lib.core.adapters.stores.base.blob import BlobStore
 from src.lib.core.ingestion.contract import BlobRef
 from src.lib.core.ingestion.exceptions import (
     DocumentProcessingException,
@@ -108,6 +112,43 @@ def _translate_docling_errors(fn):
     return wrapper
 
 
+def _list_s3_result_keys(
+    s3_client: Minio, bucket: str, prefix: str, suffix: str
+) -> list[str]:
+    """Keys under *prefix* ending in *suffix*, sorted by basename."""
+    return sorted(
+        (
+            obj.object_name
+            for obj in s3_client.list_objects(bucket, prefix=prefix, recursive=True)
+            if obj.object_name and obj.object_name.endswith(suffix)
+        ),
+        key=lambda k: k.rsplit("/", 1)[-1],
+    )
+
+
+# Leading bytes of the converted JSON read to recover origin.filename (see
+# service.origin_filename_from_head) — far more than the handful of fields
+# that precede it need.
+_ORIGIN_HEAD_BYTES = 64 * 1024
+
+
+def _read_origin_filename(s3_client: Minio, bucket: str, key: str) -> str:
+    response = s3_client.get_object(bucket, key, offset=0, length=_ORIGIN_HEAD_BYTES)
+    try:
+        head = response.read()
+    finally:
+        response.close()
+        response.release_conn()
+    return service.origin_filename_from_head(head)
+
+
+def _pages_from_markdown(
+    markdown_bytes: bytes, obj_id: uuid.UUID, source: str
+) -> tuple[bytes, int]:
+    pages = build_pages_from_markdown(markdown_bytes.decode("utf-8"), obj_id, source)
+    return service.encode_pages(pages), len(pages)
+
+
 def _discover_s3_result_key(
     s3_client: Minio, bucket: str, prefix: str, suffix: str
 ) -> str:
@@ -121,14 +162,7 @@ def _discover_s3_result_key(
     the caller's own per-obj_id prefix absorbs any of that transparently
     instead of guessing the exact key.
     """
-    keys = sorted(
-        (
-            obj.object_name
-            for obj in s3_client.list_objects(bucket, prefix=prefix, recursive=True)
-            if obj.object_name and obj.object_name.endswith(suffix)
-        ),
-        key=lambda k: k.rsplit("/", 1)[-1],
-    )
+    keys = _list_s3_result_keys(s3_client, bucket, prefix, suffix)
     if not keys:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -146,6 +180,23 @@ def _discover_s3_result_key(
             keys=keys,
         )
     return keys[0]
+
+
+async def _marker_matches(store: BlobStore, key: str, task_id: str) -> bool:
+    """Whether the retry-safety marker at *key* names *task_id* (see
+    service.resolved_marker_key)."""
+    if not await store.aexists(key):
+        return False
+    return await store.aget(key) == task_id.encode()
+
+
+def _dump_replay(dl_doc: DoclingDocument) -> bytes:
+    return dl_doc.model_dump_json().encode()
+
+
+def _derive_pages(dl_doc: DoclingDocument, obj_id: uuid.UUID) -> tuple[bytes, int]:
+    pages = build_pages(dl_doc, obj_id)
+    return service.encode_pages(pages), len(pages)
 
 
 # ---------------------------------------------------------------------------
@@ -394,48 +445,108 @@ async def resolve_endpoint(
     submissions fetch it inline via GET /v1/result/{task_id}; "source"
     submissions went through /v1/convert/source/batch, whose target has no
     inbody option, so docling-serve wrote it to an S3Target scratch prefix
-    instead — this discovers the exact written key via a recursive listing
+    instead — this discovers the exact written keys via a recursive listing
     (_discover_s3_result_key, since docling-jobkit nests the artifact under
-    path segments not fully under our control), reads it once, copies it to
-    the stable replay_key() location, and deletes the scratch object.
+    path segments not fully under our control).
 
-    Either way, writes the lossless DoclingDocument JSON to the replay cache
+    Either way the lossless DoclingDocument JSON ends up in the replay cache
     — used both for citation/re-chunk lookups and as the source
-    /v1/chunk/submit reads — and derives page-level Markdown parents right
-    away, while the DoclingDocument is already in hand. Chunking is a fully
-    separate stage from here on (Epic 21 §21.8): this endpoint never submits
-    a chunk job itself.
+    /v1/chunk/submit reads — along with the page-level Markdown parents.
+    Chunking is a fully separate stage from here on (Epic 21 §21.8): this
+    endpoint never submits a chunk job itself.
+
+    In "source" mode the document itself never passes through this service
+    (the claim-check rule, applied to resolve): the JSON is moved to
+    replay_key() by an S3 server-side copy, and the pages come from the
+    page-delimited Markdown docling-serve wrote next to it (see
+    DoclingParseClient.submit_source). That keeps this call short however
+    large the document is. A conversion submitted before Markdown was
+    requested has no such file; it falls back to loading the JSON, like
+    "file" mode.
+
+    Safe to retry: for a very large document this call can outlive the
+    worker's HTTP timeout and still complete here, so the worker's retry must
+    not fail on the now-consumed result. A marker naming the resolved
+    ``parsing_task_id`` is written last, and a repeat call for that same task
+    returns immediately. Scratch objects are only deleted after the marker,
+    so an attempt that dies part-way leaves everything a retry needs.
+
+    All (de)serialisation of the DoclingDocument runs in a worker thread —
+    at this size it's long enough to stall every other request on the event
+    loop, status polls for unrelated documents included.
     """
     obj_id = request.obj_id
     replay_store = blob_store(settings.REPLAY_CACHE_BUCKET)
+    marker_key = service.resolved_marker_key(obj_id)
 
+    if await _marker_matches(replay_store, marker_key, request.parsing_task_id):
+        logger.info(
+            "resolve_already_done",
+            obj_id=obj_id,
+            parsing_task_id=request.parsing_task_id,
+        )
+        return ResolveResult(obj_id=obj_id)
+
+    bucket = settings.REPLAY_CACHE_BUCKET
+    scratch_keys: list[str] = []
+    markdown_key: str | None = None
     if request.mode == "file":
         dl_doc = await docling_client.fetch_conversion_result(
             request.parsing_task_id,
             timeout=settings.DOCLING_RESOLVE_TIMEOUT,
         )
-        replay_bytes = dl_doc.model_dump_json().encode()
+        replay_bytes = await asyncio.to_thread(_dump_replay, dl_doc)
     else:
         scratch_prefix = service.convert_scratch_prefix(obj_id)
-        scratch_key = _discover_s3_result_key(
-            s3_client, settings.REPLAY_CACHE_BUCKET, scratch_prefix, ".json"
+        json_key = await asyncio.to_thread(
+            _discover_s3_result_key, s3_client, bucket, scratch_prefix, ".json"
         )
-        replay_bytes = await replay_store.aget(scratch_key)
+        markdown_keys = await asyncio.to_thread(
+            _list_s3_result_keys, s3_client, bucket, scratch_prefix, ".md"
+        )
+        scratch_keys = [json_key, *markdown_keys]
+        if markdown_keys:
+            markdown_key = markdown_keys[0]
+        else:
+            replay_bytes = await replay_store.aget(json_key)
+            dl_doc = await asyncio.to_thread(
+                DoclingDocument.model_validate_json, replay_bytes
+            )
+
+    if markdown_key is not None:
+        await asyncio.to_thread(
+            s3_client.copy_object,
+            bucket,
+            service.replay_key(obj_id),
+            CopySource(bucket, json_key),
+        )
+        logger.info("replay_cache_written", obj_id=obj_id, via="s3_copy")
+        source = await asyncio.to_thread(
+            _read_origin_filename, s3_client, bucket, json_key
+        )
+        pages_bytes, num_pages = await asyncio.to_thread(
+            _pages_from_markdown,
+            await replay_store.aget(markdown_key),
+            uuid.UUID(obj_id),
+            source,
+        )
+    else:
+        await replay_store.aput(
+            service.replay_key(obj_id), replay_bytes, content_type="application/json"
+        )
+        logger.info("replay_cache_written", obj_id=obj_id, via="upload")
+        pages_bytes, num_pages = await asyncio.to_thread(
+            _derive_pages, dl_doc, uuid.UUID(obj_id)
+        )
+
+    await replay_store.aput(
+        service.pages_key(obj_id), pages_bytes, content_type="application/json"
+    )
+    logger.info("pages_cached", obj_id=obj_id, num_pages=num_pages)
+
+    await replay_store.aput(marker_key, request.parsing_task_id.encode())
+    for scratch_key in scratch_keys:
         await replay_store.adelete(scratch_key)
-        dl_doc = DoclingDocument.model_validate_json(replay_bytes)
-
-    await replay_store.aput(
-        service.replay_key(obj_id), replay_bytes, content_type="application/json"
-    )
-    logger.info("replay_cache_written", obj_id=obj_id)
-
-    pages = build_pages(dl_doc, uuid.UUID(obj_id))
-    await replay_store.aput(
-        service.pages_key(obj_id),
-        service.encode_pages(pages),
-        content_type="application/json",
-    )
-    logger.info("pages_cached", obj_id=obj_id, num_pages=len(pages))
 
     return ResolveResult(obj_id=obj_id)
 
@@ -472,7 +583,9 @@ async def chunk_submit_endpoint(
     obj_id = request.obj_id
     replay_store = blob_store(settings.REPLAY_CACHE_BUCKET)
     replay_bytes = await replay_store.aget(service.replay_key(obj_id))
-    chunking_task_id = await docling_client.submit_chunk(replay_bytes, timeout=120.0)
+    chunking_task_id = await docling_client.submit_chunk(
+        replay_bytes, timeout=settings.DOCLING_CHUNK_SUBMIT_TIMEOUT
+    )
     logger.info("chunk_submit_queued", obj_id=obj_id, chunking_task_id=chunking_task_id)
     return ChunkSubmitResult(chunking_task_id=chunking_task_id, obj_id=obj_id)
 
@@ -516,10 +629,28 @@ async def chunk_finalize_endpoint(
     service now. If the fallback split *also* produces nothing (pages are
     whitespace-only), that's a genuine failure — raised here rather than
     silently persisted for indexing to discover later.
+
+    Safe to retry, same scheme as /v1/parse/resolve: a marker naming the
+    finalized ``chunking_task_id`` is written after the artifact, and a
+    repeat call for that task returns the existing artifact's BlobRef rather
+    than re-fetching a chunk result docling-serve may have evicted by then.
     """
     obj_id_str = request.obj_id
     obj_id = uuid.UUID(obj_id_str)
     replay_store = blob_store(settings.REPLAY_CACHE_BUCKET)
+    artifact_store = blob_store(settings.PARSED_ARTIFACTS_BUCKET)
+    key = service.artifact_key(obj_id_str)
+    marker_key = service.finalized_marker_key(obj_id_str)
+
+    if await _marker_matches(
+        replay_store, marker_key, request.chunking_task_id
+    ) and await artifact_store.aexists(key):
+        logger.info(
+            "chunk_finalize_already_done",
+            obj_id=obj_id_str,
+            chunking_task_id=request.chunking_task_id,
+        )
+        return BlobRef(bucket=settings.PARSED_ARTIFACTS_BUCKET, key=key)
 
     chunks = await docling_client.fetch_chunk_result(
         request.chunking_task_id,
@@ -528,7 +659,7 @@ async def chunk_finalize_endpoint(
     parsed_chunks = chunk_items_to_parsed(chunks, obj_id)
 
     pages_bytes = await replay_store.aget(service.pages_key(obj_id_str))
-    pages = service.decode_pages(pages_bytes)
+    pages = await asyncio.to_thread(service.decode_pages, pages_bytes)
 
     if not parsed_chunks:
         page_docs = [
@@ -563,10 +694,12 @@ async def chunk_finalize_endpoint(
 
     artifact = ParseArtifact(pages=pages, chunks=parsed_chunks)
 
-    key = service.artifact_key(obj_id_str)
-    await blob_store(settings.PARSED_ARTIFACTS_BUCKET).aput(
-        key, service.encode_artifact(artifact), content_type="application/json"
+    await artifact_store.aput(
+        key,
+        await asyncio.to_thread(service.encode_artifact, artifact),
+        content_type="application/json",
     )
+    await replay_store.aput(marker_key, request.chunking_task_id.encode())
     logger.info(
         "chunk_finalize_completed",
         obj_id=obj_id_str,

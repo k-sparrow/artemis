@@ -11,8 +11,10 @@ import uuid
 from src.backend.parsing.lib.artifact import (
     ParseStatus,
     build_pages,
+    build_pages_from_markdown,
     chunk_items_to_parsed,
 )
+from src.lib.core.adapters.loaders.docling import PAGE_BREAK_PLACEHOLDER
 from src.lib.core.ingestion.types import ChunkType, Page
 
 
@@ -133,6 +135,65 @@ class TestBuildPages:
         dl_doc = self._make_dl_doc(origin=None, with_content=True)
         pages = build_pages(dl_doc, _OBJ_ID)
         assert pages and all(p.source == "" for p in pages)
+
+
+class TestBuildPagesFromMarkdown:
+    """/v1/parse/resolve builds pages from the Markdown docling-serve exports
+    instead of loading the DoclingDocument. Both routes must agree, or
+    parent-page retrieval would change depending on which one ran."""
+
+    def _paginated_doc(self, page_texts: list[str]):
+        from docling.datamodel.document import DoclingDocument
+        from docling_core.types.doc.base import BoundingBox, Size
+        from docling_core.types.doc.document import DocumentOrigin, ProvenanceItem
+        from docling_core.types.doc.labels import DocItemLabel
+
+        doc = DoclingDocument(
+            name="test",
+            origin=DocumentOrigin(
+                mimetype="application/pdf", binary_hash=0, filename="report.pdf"
+            ),
+        )
+        for page_no, text in enumerate(page_texts, start=1):
+            doc.add_page(page_no=page_no, size=Size(width=100, height=100))
+            doc.add_text(
+                label=DocItemLabel.TEXT,
+                text=text,
+                prov=ProvenanceItem(
+                    page_no=page_no,
+                    bbox=BoundingBox(l=0, t=0, r=10, b=10),
+                    charspan=(0, len(text)),
+                ),
+            )
+        return doc
+
+    def _exported(self, dl_doc) -> str:
+        """What docling-serve writes for to_formats=["md"] with our
+        md_page_break_placeholder."""
+        return dl_doc.export_to_markdown(page_break_placeholder=PAGE_BREAK_PLACEHOLDER)
+
+    def test_matches_build_pages_for_a_paginated_document(self) -> None:
+        dl_doc = self._paginated_doc(["first page", "second page", "third page"])
+
+        pages = build_pages_from_markdown(self._exported(dl_doc), _OBJ_ID, "report.pdf")
+
+        assert len(pages) == 3
+        assert pages == build_pages(dl_doc, _OBJ_ID)
+
+    def test_matches_build_pages_for_a_non_paginated_document(self) -> None:
+        from docling.datamodel.document import DoclingDocument
+        from docling_core.types.doc.labels import DocItemLabel
+
+        dl_doc = DoclingDocument(name="test")
+        dl_doc.add_text(label=DocItemLabel.TEXT, text="hello world")
+
+        pages = build_pages_from_markdown(self._exported(dl_doc), _OBJ_ID, "")
+
+        assert len(pages) == 1
+        assert pages == build_pages(dl_doc, _OBJ_ID)
+
+    def test_empty_markdown_yields_no_pages(self) -> None:
+        assert build_pages_from_markdown("  \n", _OBJ_ID, "doc.pdf") == []
 
 
 class TestParseStatus:

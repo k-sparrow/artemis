@@ -11,12 +11,14 @@ handles.
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import httpx
 from docling.datamodel.document import DoclingDocument
 
 from src.backend.parsing.lib.artifact import ParseStatus
+from src.lib.core.adapters.loaders.docling import PAGE_BREAK_PLACEHOLDER
 
 __all__ = ["DoclingParseClient"]
 
@@ -24,6 +26,10 @@ __all__ = ["DoclingParseClient"]
 _TERMINAL: frozenset[str] = frozenset(
     {"success", "failure", "partial_success", "skipped"}
 )
+
+
+def _parse_conversion_result(body: bytes) -> DoclingDocument:
+    return DoclingDocument.model_validate(json.loads(body)["document"]["json_content"])
 
 
 class DoclingParseClient:
@@ -78,7 +84,13 @@ class DoclingParseClient:
             # (docling.datamodel.service.options.ConvertDocumentsOptions) --
             # without this, docling-serve writes a Markdown file to the S3Target
             # instead of the JSON this client/resolve_endpoint expects.
-            "options": {"to_formats": ["json"]},
+            # Markdown is requested as well, with our page-break sentinel, so
+            # resolve_endpoint can derive pages from that small file instead
+            # of loading the whole DoclingDocument JSON.
+            "options": {
+                "to_formats": ["json", "md"],
+                "md_page_break_placeholder": PAGE_BREAK_PLACEHOLDER,
+            },
             "sources": [
                 {
                     "kind": "s3",
@@ -198,14 +210,18 @@ class DoclingParseClient:
     async def fetch_conversion_result(
         self, task_id: str, *, timeout: float = 60.0
     ) -> DoclingDocument:
-        """GET /v1/result/{task_id} → DoclingDocument (single-source mode only)."""
+        """GET /v1/result/{task_id} → DoclingDocument (single-source mode only).
+
+        The body is parsed in a worker thread: for a very large document
+        that's many seconds of CPU, which would otherwise stall every other
+        request on the event loop (status polls included).
+        """
         async with httpx.AsyncClient(
             base_url=self._base_url, timeout=timeout
         ) as client:
             resp = await client.get(f"/v1/result/{task_id}")
             resp.raise_for_status()
-            data = resp.json()
-        return DoclingDocument.model_validate(data["document"]["json_content"])
+        return await asyncio.to_thread(_parse_conversion_result, resp.content)
 
     async def submit_chunk(
         self, doc_json_bytes: bytes, *, timeout: float = 120.0
