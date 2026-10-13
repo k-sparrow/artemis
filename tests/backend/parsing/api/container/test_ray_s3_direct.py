@@ -33,6 +33,9 @@ import httpx
 import pytest
 from minio import Minio
 
+from docling.datamodel.document import DoclingDocument
+
+from src.backend.parsing.lib.artifact import build_pages
 from src.lib.core.ingestion.types import ChunkType, ParseArtifact
 from tests.lib.testcontainers.docling import DoclingServeRayClusterWithApp
 
@@ -136,6 +139,18 @@ async def _drive_async_chain_via_source_ref(
 
     await _poll_status(client, submit["parsing_task_id"])
 
+    # docling-serve must have written Markdown next to the JSON — without it
+    # resolve silently falls back to loading the whole document, which is
+    # exactly what a very large document can't afford.
+    written = [
+        obj.object_name
+        for obj in minio_client.list_objects(
+            "docling-replay", prefix=f"scratch/convert/{obj_id}/", recursive=True
+        )
+    ]
+    assert any(name.endswith(".md") for name in written), written
+    assert any(name.endswith(".json") for name in written), written
+
     resp = await client.post("/v1/parse/resolve", json=submit)
     assert resp.status_code == 200, resp.text
     resolve = resp.json()
@@ -195,6 +210,19 @@ async def test_source_ref_dispatches_s3_direct_against_real_docling_serve(
         chunk_types = {c.type for c in artifact.chunks}
         assert ChunkType.TEXT in chunk_types
         assert ChunkType.TABLE in chunk_types
+
+        # Resolve built these pages from the page-delimited Markdown
+        # docling-serve exported, never loading the DoclingDocument. They
+        # must equal what the document itself yields — same text, same page
+        # numbers, same source.
+        response = minio_client.get_object("docling-replay", f"replay/{obj_id}.json")
+        try:
+            dl_doc = DoclingDocument.model_validate_json(response.read())
+        finally:
+            response.close()
+            response.release_conn()
+        assert len(dl_doc.pages) > 1, "fixture must be multi-page to prove splitting"
+        assert artifact.pages == build_pages(dl_doc, obj_id)
 
         # Scratch objects are cleaned up by resolve/finalize — nothing should
         # linger under the per-obj_id convert scratch prefix.

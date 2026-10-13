@@ -29,17 +29,21 @@ class ParsingSettings(BaseSettings):
     # without a GPU re-parse.
     REPLAY_CACHE_BUCKET: str = "docling-replay"
 
-    # Per-call HTTP timeouts for the new async parse endpoints. The three
-    # payload-carrying calls scale with document size (a very large document
-    # is a multi-hundred-MB DoclingDocument JSON), so they're sized for that
-    # rather than for the common case. Each must stay BELOW the worker's
-    # matching PARSING_*_TIMEOUT, so a slow docling-serve surfaces to the
-    # worker as this service's classified 503 rather than as an opaque
-    # client-side read timeout.
+    # Per-call HTTP timeouts for the new async parse endpoints. Each must stay
+    # BELOW the worker's matching PARSING_*_TIMEOUT, so a slow docling-serve
+    # surfaces to the worker as this service's classified 503 rather than as
+    # an opaque client-side read timeout.
+    #
+    # Chunk submit is the one call still sized for very large documents: no
+    # docling-serve chunk endpoint accepts an S3 source, so the whole
+    # DoclingDocument JSON (hundreds of MB) is uploaded inline. Resolve no
+    # longer moves the document through this service at all on the S3-direct
+    # path (see resolve_endpoint); DOCLING_RESOLVE_TIMEOUT only bounds the
+    # inline result fetch of "file" mode.
     DOCLING_STATUS_TIMEOUT: float = 30.0
-    DOCLING_RESOLVE_TIMEOUT: float = 1200.0
+    DOCLING_RESOLVE_TIMEOUT: float = 120.0
     DOCLING_CHUNK_SUBMIT_TIMEOUT: float = 1200.0
-    DOCLING_FINALIZE_TIMEOUT: float = 1200.0
+    DOCLING_FINALIZE_TIMEOUT: float = 120.0
 
     # This service's own externally-reachable address — the same host:port the
     # worker already reaches it at via its own PARSING_SERVICE_URL. Used to

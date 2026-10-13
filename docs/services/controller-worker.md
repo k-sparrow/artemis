@@ -229,8 +229,8 @@ result backend that writes to `apollo_celery_taskmeta` (shared PostgreSQL) with
 | `HTTPX_TIMEOUT` | `600` | For indexing/delete calls only; parse calls use per-endpoint timeouts |
 | `PARSING_SUBMIT_TIMEOUT` | `120.0` | Source download/forward + HTTP POST |
 | `PARSING_STATUS_TIMEOUT` | `30.0` | Single status GET (parse or chunk task) |
-| `PARSING_RESOLVE_TIMEOUT` | `1500.0` | Conversion result fetch + replay/pages cache write. Scales with document size; keep above the parsing service's `DOCLING_RESOLVE_TIMEOUT` |
+| `PARSING_RESOLVE_TIMEOUT` | `300.0` | S3 server-side copy of the conversion result + pages cache write. Keep above the parsing service's `DOCLING_RESOLVE_TIMEOUT` |
 | `PARSING_CHUNK_SUBMIT_TIMEOUT` | `1500.0` | Replay-cache read + inline upload to docling-serve. Scales with document size; keep above `DOCLING_CHUNK_SUBMIT_TIMEOUT` |
-| `PARSING_FINALIZE_TIMEOUT` | `1500.0` | Chunk result fetch + artifact write. Keep above `DOCLING_FINALIZE_TIMEOUT` |
+| `PARSING_FINALIZE_TIMEOUT` | `180.0` | Chunk result fetch + artifact write. Keep above `DOCLING_FINALIZE_TIMEOUT` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | |
 | `OTEL_SERVICE_NAME` | `backend-controller-worker` | |

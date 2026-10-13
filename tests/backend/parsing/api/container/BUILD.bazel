@@ -61,8 +61,10 @@ py_test(
     data = ["//tools/fixtures/docs:all_fixtures"],
     env = {"TC_MAX_TRIES": "1000000000"},
     deps = [
+        "//src/backend/parsing/lib:artifact",
         "//src/lib/core/ingestion:types",
         "//tests/lib/testcontainers/docling:pkg",
+        requirement("docling-slim"),
         requirement("httpx"),
         requirement("minio"),
         requirement("pytest"),

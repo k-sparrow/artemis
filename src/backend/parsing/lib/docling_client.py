@@ -18,6 +18,7 @@ import httpx
 from docling.datamodel.document import DoclingDocument
 
 from src.backend.parsing.lib.artifact import ParseStatus
+from src.lib.core.adapters.loaders.docling import PAGE_BREAK_PLACEHOLDER
 
 __all__ = ["DoclingParseClient"]
 
@@ -83,7 +84,13 @@ class DoclingParseClient:
             # (docling.datamodel.service.options.ConvertDocumentsOptions) --
             # without this, docling-serve writes a Markdown file to the S3Target
             # instead of the JSON this client/resolve_endpoint expects.
-            "options": {"to_formats": ["json"]},
+            # Markdown is requested as well, with our page-break sentinel, so
+            # resolve_endpoint can derive pages from that small file instead
+            # of loading the whole DoclingDocument JSON.
+            "options": {
+                "to_formats": ["json", "md"],
+                "md_page_break_placeholder": PAGE_BREAK_PLACEHOLDER,
+            },
             "sources": [
                 {
                     "kind": "s3",

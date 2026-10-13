@@ -4,10 +4,15 @@ from typing import Literal
 from docling.datamodel.document import DoclingDocument
 from pydantic import BaseModel
 
-from src.lib.core.adapters.loaders.docling import split_pages
+from src.lib.core.adapters.loaders.docling import split_markdown_pages, split_pages
 from src.lib.core.ingestion.types import ChunkType, Page, ParsedChunk
 
-__all__ = ["ParseStatus", "chunk_items_to_parsed", "build_pages"]
+__all__ = [
+    "ParseStatus",
+    "chunk_items_to_parsed",
+    "build_pages",
+    "build_pages_from_markdown",
+]
 
 
 class ParseStatus(BaseModel):
@@ -72,4 +77,20 @@ def build_pages(dl_doc: DoclingDocument, obj_id: uuid.UUID) -> list[Page]:
     return [
         Page(obj_id=obj_id, page_no=pno, markdown=md, source=source)
         for pno, md in pages
+    ]
+
+
+def build_pages_from_markdown(
+    markdown: str, obj_id: uuid.UUID, source: str
+) -> list[Page]:
+    """Same result as :func:`build_pages`, from the page-delimited Markdown
+    docling-serve exported alongside the JSON — no ``DoclingDocument`` needed.
+
+    This is what keeps /v1/parse/resolve cheap for very large documents: the
+    Markdown is a small fraction of the JSON's size, and splitting it is a
+    string operation rather than a full model validation plus export.
+    """
+    return [
+        Page(obj_id=obj_id, page_no=pno, markdown=md, source=source)
+        for pno, md in split_markdown_pages(markdown)
     ]
