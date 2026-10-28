@@ -48,6 +48,7 @@ from src.backend.parsing.api.parse import service as parse_service
 from src.backend.parsing.lib.artifact import ParseStatus
 from src.lib.core.adapters.loaders.docling import PAGE_BREAK_PLACEHOLDER
 from src.lib.core.adapters.stores.memory.blob import InMemoryBlobStore
+from src.lib.core.ingestion.exceptions import DocumentProcessingException
 from src.lib.core.ingestion.types import Page
 
 OBJ_ID = uuid.UUID("12345678-1234-5678-1234-567812345678")
@@ -76,6 +77,11 @@ def _docling_doc_json() -> bytes:
     return _empty_docling_doc().model_dump_json().encode()
 
 
+def _chunk_result(items: list[dict]) -> bytes:
+    """Raw GET /v1/result/{task_id} body for a chunk task."""
+    return json.dumps({"chunks": items}).encode()
+
+
 def _mock_docling_client() -> MagicMock:
     """MagicMock for DoclingParseClient with AsyncMock methods."""
     client = MagicMock()
@@ -86,7 +92,7 @@ def _mock_docling_client() -> MagicMock:
     )
     client.fetch_conversion_result = AsyncMock(return_value=_empty_docling_doc())
     client.submit_chunk = AsyncMock(return_value=CHUNK_TASK_ID)
-    client.fetch_chunk_result = AsyncMock(return_value=[_CHUNK_ITEM])
+    client.fetch_chunk_result = AsyncMock(return_value=_chunk_result([_CHUNK_ITEM]))
     return client
 
 
@@ -671,7 +677,7 @@ class TestChunkFinalizeEmptyChunkFallback:
         docling_client: MagicMock,
         store: InMemoryBlobStore,
     ) -> None:
-        docling_client.fetch_chunk_result = AsyncMock(return_value=[])
+        docling_client.fetch_chunk_result = AsyncMock(return_value=_chunk_result([]))
         self._seed_pages(store, "   \n\n   ")
 
         resp = client.post("/v1/chunk/finalize", json=self._finalize_body())
@@ -687,7 +693,7 @@ class TestChunkFinalizeEmptyChunkFallback:
         docling_client: MagicMock,
         store: InMemoryBlobStore,
     ) -> None:
-        docling_client.fetch_chunk_result = AsyncMock(return_value=[])
+        docling_client.fetch_chunk_result = AsyncMock(return_value=_chunk_result([]))
         self._seed_pages(store, "# Real heading\n\nSome real body content to split.")
 
         resp = client.post("/v1/chunk/finalize", json=self._finalize_body())
@@ -883,3 +889,39 @@ class TestOriginFilenameFromHead:
     )
     def test_returns_empty_string_when_origin_is_unavailable(self, head: bytes) -> None:
         assert parse_service.origin_filename_from_head(head) == ""
+
+
+class TestBuildArtifact:
+    """service.build_artifact — the CPU-bound half of /v1/chunk/finalize, as
+    a pure bytes-in/bytes-out function."""
+
+    def _pages(self, markdown: str) -> bytes:
+        return parse_service.encode_pages(
+            [Page(obj_id=OBJ_ID, page_no=1, markdown=markdown, source="doc.pdf")]
+        )
+
+    def test_maps_chunks_and_pages_into_artifact(self) -> None:
+        built = parse_service.build_artifact(
+            _chunk_result([_CHUNK_ITEM]), self._pages("# Title"), OBJ_ID
+        )
+
+        artifact = json.loads(built.data)
+        assert [c["page_content"] for c in artifact["chunks"]] == ["hello world"]
+        assert [p["markdown"] for p in artifact["pages"]] == ["# Title"]
+        assert (built.num_pages, built.num_chunks, built.fallback_used) == (1, 1, False)
+
+    def test_zero_chunks_falls_back_to_page_split(self) -> None:
+        built = parse_service.build_artifact(
+            _chunk_result([]), self._pages("# Heading\n\nBody text."), OBJ_ID
+        )
+
+        artifact = json.loads(built.data)
+        assert built.fallback_used
+        assert built.num_chunks == len(artifact["chunks"]) >= 1
+        assert all(c["source"] == "fallback-page-split" for c in artifact["chunks"])
+
+    def test_zero_chunks_and_blank_pages_raises(self) -> None:
+        with pytest.raises(DocumentProcessingException, match="fallback page-split"):
+            parse_service.build_artifact(
+                _chunk_result([]), self._pages("  \n "), OBJ_ID
+            )

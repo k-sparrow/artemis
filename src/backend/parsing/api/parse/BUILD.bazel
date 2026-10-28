@@ -12,7 +12,11 @@ py_library(
     name = "service",
     srcs = ["service.py"],
     deps = [
+        "//src/backend/parsing/lib:artifact",
+        "//src/lib/core/ingestion:exceptions",
         "//src/lib/core/ingestion:types",
+        "//src/lib/core/ingestion/indexer:simple",
+        requirement("langchain-core"),
         requirement("pydantic"),
     ],
 )
@@ -30,11 +34,9 @@ py_library(
         "//src/lib/core/ingestion:contract",
         "//src/lib/core/ingestion:exceptions",
         "//src/lib/core/ingestion:types",
-        "//src/lib/core/ingestion/indexer:simple",
         requirement("docling-slim"),
         requirement("fastapi"),
         requirement("httpx"),
-        requirement("langchain-core"),
         requirement("pydantic"),
         requirement("python-multipart"),
     ],

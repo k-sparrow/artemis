@@ -102,6 +102,7 @@ class TestDocumentCompleted:
             queue="artemis.ingestion.parse",
             exchange=settings.EXCHANGE_NAME,
             routing_key="parse",
+            retry=False,
         )
 
     def test_failure_enqueues_failure_outcome_with_error(

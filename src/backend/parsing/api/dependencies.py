@@ -51,8 +51,17 @@ def get_celery_producer() -> Celery:
     reused, not rebuilt on every callback delivery. This service only ever
     publishes (tasks.advance_from_callback via send_task by name); it never
     consumes, so it needs no result backend or worker configuration.
+
+    Configured to fail fast: with kombu's defaults a publish to an
+    unreachable broker keeps reconnecting for several seconds (measured: 6s
+    on a refused connection) before raising. The callback endpoint wants the
+    error straight away — docling-serve redelivers and poll_parse is the
+    safety net — rather than a pile of threads waiting on a dead broker.
     """
-    return Celery(broker=settings.MESSAGE_BROKER_URL)
+    app = Celery(broker=settings.MESSAGE_BROKER_URL)
+    app.conf.broker_connection_timeout = 2.0
+    app.conf.broker_transport_options = {"max_retries": 0}
+    return app
 
 
 blob_store_factory_dependency = Annotated[
