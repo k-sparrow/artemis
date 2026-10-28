@@ -1,9 +1,14 @@
 import json
-from typing import List
+import uuid
+from typing import List, NamedTuple
 
+from langchain_core.documents import Document
 from pydantic import TypeAdapter
 
-from src.lib.core.ingestion.types import Page, ParseArtifact
+from src.backend.parsing.lib.artifact import chunk_items_to_parsed
+from src.lib.core.ingestion.exceptions import DocumentProcessingException
+from src.lib.core.ingestion.indexer.simple import SimpleIndexer
+from src.lib.core.ingestion.types import ChunkType, Page, ParseArtifact, ParsedChunk
 
 __all__ = [
     "encode_artifact",
@@ -16,6 +21,8 @@ __all__ = [
     "resolved_marker_key",
     "finalized_marker_key",
     "origin_filename_from_head",
+    "BuiltArtifact",
+    "build_artifact",
 ]
 
 _pages_adapter = TypeAdapter(List[Page])
@@ -113,3 +120,67 @@ def origin_filename_from_head(head: bytes) -> str:
     if not isinstance(origin, dict):
         return ""
     return origin.get("filename") or ""
+
+
+class BuiltArtifact(NamedTuple):
+    data: bytes
+    num_pages: int
+    num_chunks: int
+    fallback_used: bool
+
+
+def _fallback_split(pages: List[Page], obj_id: uuid.UUID) -> List[ParsedChunk]:
+    page_docs = [
+        Document(
+            page_content=page.markdown,
+            metadata={"obj_id": str(obj_id), "page_no": page.page_no},
+        )
+        for page in pages
+    ]
+    fallback_docs = SimpleIndexer().process(page_docs)
+    if not fallback_docs:
+        raise DocumentProcessingException(
+            f"chunking produced zero chunks for obj_id={obj_id}, and "
+            "the fallback page-split also produced zero chunks "
+            "(pages are likely whitespace-only)"
+        )
+    return [
+        ParsedChunk(
+            page_content=doc.page_content,
+            source="fallback-page-split",
+            type=ChunkType.TEXT,
+            obj_id=obj_id,
+            page_no=doc.metadata.get("page_no"),
+        )
+        for doc in fallback_docs
+    ]
+
+
+def build_artifact(
+    chunk_result: bytes, pages_data: bytes, obj_id: uuid.UUID
+) -> BuiltArtifact:
+    """Build the serialised ``ParseArtifact`` from docling-serve's raw chunk
+    result body and the cached pages (see :func:`encode_pages`).
+
+    Everything CPU-bound in /v1/chunk/finalize lives here — parsing the chunk
+    result, mapping it, the zero-chunk fallback split, and encoding the
+    artifact — and all of it grows with the document. Plain bytes in and out,
+    no I/O, so the endpoint can run it off the event loop in one hop and it
+    could move to a process pool unchanged.
+
+    If docling-serve's hybrid chunker produced zero chunks, falls back to a
+    plain character-count split of the pages; raises
+    ``DocumentProcessingException`` if that also produces nothing.
+    """
+    chunks = chunk_items_to_parsed(json.loads(chunk_result)["chunks"], obj_id)
+    pages = decode_pages(pages_data)
+    fallback_used = not chunks
+    if fallback_used:
+        chunks = _fallback_split(pages, obj_id)
+    artifact = ParseArtifact(pages=pages, chunks=chunks)
+    return BuiltArtifact(
+        data=encode_artifact(artifact),
+        num_pages=len(pages),
+        num_chunks=len(chunks),
+        fallback_used=fallback_used,
+    )

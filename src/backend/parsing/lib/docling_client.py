@@ -246,13 +246,17 @@ class DoclingParseClient:
             resp.raise_for_status()
             return resp.json()["task_id"]
 
-    async def fetch_chunk_result(
-        self, task_id: str, *, timeout: float = 60.0
-    ) -> list[dict]:
-        """GET /v1/result/{task_id} → list of ChunkedDocumentResultItem dicts."""
+    async def fetch_chunk_result(self, task_id: str, *, timeout: float = 60.0) -> bytes:
+        """GET /v1/result/{task_id} → the raw result body.
+
+        A JSON object whose ``chunks`` is the list of
+        ChunkedDocumentResultItem dicts. Returned unparsed: the body grows
+        with the document, so the caller decodes it off the event loop along
+        with the rest of its CPU work (see ``service.build_artifact``).
+        """
         async with httpx.AsyncClient(
             base_url=self._base_url, timeout=timeout
         ) as client:
             resp = await client.get(f"/v1/result/{task_id}")
             resp.raise_for_status()
-            return resp.json()["chunks"]
+            return resp.content

@@ -13,7 +13,6 @@ from docling.datamodel.service.callbacks import (
     ProgressKind,
 )
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
-from langchain_core.documents import Document
 from minio import Minio
 from minio.commonconfig import CopySource
 from pydantic import BaseModel, BeforeValidator
@@ -30,7 +29,6 @@ from src.backend.parsing.lib.artifact import (
     ParseStatus,
     build_pages,
     build_pages_from_markdown,
-    chunk_items_to_parsed,
 )
 from src.lib.backend.logging import get_logger
 from src.lib.core.adapters.stores.base.blob import BlobStore
@@ -40,8 +38,6 @@ from src.lib.core.ingestion.exceptions import (
     UpstreamBackpressureException,
     UpstreamServiceException,
 )
-from src.lib.core.ingestion.indexer.simple import SimpleIndexer
-from src.lib.core.ingestion.types import ChunkType, ParseArtifact, ParsedChunk
 
 __all__ = ["router"]
 
@@ -110,6 +106,18 @@ def _translate_docling_errors(fn):
             ) from exc
 
     return wrapper
+
+
+async def _run_cpu(fn, *args):
+    """Run CPU-bound *fn* off the event loop.
+
+    The one place that decides where such work runs. A thread today, which
+    frees the loop during Python-level work but not during a single long C
+    call that holds the GIL (json.loads, pydantic-core). A process pool here
+    needs plain data in and out: service.build_artifact already is; /resolve
+    still passes DoclingDocument across.
+    """
+    return await asyncio.to_thread(fn, *args)
 
 
 def _list_s3_result_keys(
@@ -383,7 +391,12 @@ async def parse_callback_endpoint(
         error_message = progress.document.error or f"status={doc_status.value}"
 
     try:
-        producer.send_task(
+        # A blocking broker publish: off the event loop, and without Celery's
+        # own publish retries — docling-serve redelivers this callback and
+        # poll_parse is the safety net, so a quick 503 beats holding a thread
+        # on an unreachable broker.
+        await asyncio.to_thread(
+            producer.send_task,
             "tasks.advance_from_callback",
             args=[obj_id],
             kwargs={
@@ -395,6 +408,7 @@ async def parse_callback_endpoint(
             queue="artemis.ingestion.parse",
             exchange=settings.EXCHANGE_NAME,
             routing_key="parse",
+            retry=False,
         )
     except Exception as exc:
         logger.warning("parse_callback_enqueue_failed", obj_id=obj_id, error=str(exc))
@@ -495,7 +509,7 @@ async def resolve_endpoint(
             request.parsing_task_id,
             timeout=settings.DOCLING_RESOLVE_TIMEOUT,
         )
-        replay_bytes = await asyncio.to_thread(_dump_replay, dl_doc)
+        replay_bytes = await _run_cpu(_dump_replay, dl_doc)
     else:
         scratch_prefix = service.convert_scratch_prefix(obj_id)
         json_key = await asyncio.to_thread(
@@ -509,9 +523,7 @@ async def resolve_endpoint(
             markdown_key = markdown_keys[0]
         else:
             replay_bytes = await replay_store.aget(json_key)
-            dl_doc = await asyncio.to_thread(
-                DoclingDocument.model_validate_json, replay_bytes
-            )
+            dl_doc = await _run_cpu(DoclingDocument.model_validate_json, replay_bytes)
 
     if markdown_key is not None:
         await asyncio.to_thread(
@@ -524,7 +536,7 @@ async def resolve_endpoint(
         source = await asyncio.to_thread(
             _read_origin_filename, s3_client, bucket, json_key
         )
-        pages_bytes, num_pages = await asyncio.to_thread(
+        pages_bytes, num_pages = await _run_cpu(
             _pages_from_markdown,
             await replay_store.aget(markdown_key),
             uuid.UUID(obj_id),
@@ -535,7 +547,7 @@ async def resolve_endpoint(
             service.replay_key(obj_id), replay_bytes, content_type="application/json"
         )
         logger.info("replay_cache_written", obj_id=obj_id, via="upload")
-        pages_bytes, num_pages = await asyncio.to_thread(
+        pages_bytes, num_pages = await _run_cpu(
             _derive_pages, dl_doc, uuid.UUID(obj_id)
         )
 
@@ -652,59 +664,26 @@ async def chunk_finalize_endpoint(
         )
         return BlobRef(bucket=settings.PARSED_ARTIFACTS_BUCKET, key=key)
 
-    chunks = await docling_client.fetch_chunk_result(
+    chunk_result = await docling_client.fetch_chunk_result(
         request.chunking_task_id,
         timeout=settings.DOCLING_FINALIZE_TIMEOUT,
     )
-    parsed_chunks = chunk_items_to_parsed(chunks, obj_id)
-
     pages_bytes = await replay_store.aget(service.pages_key(obj_id_str))
-    pages = await asyncio.to_thread(service.decode_pages, pages_bytes)
-
-    if not parsed_chunks:
-        page_docs = [
-            Document(
-                page_content=page.markdown,
-                metadata={"obj_id": obj_id_str, "page_no": page.page_no},
-            )
-            for page in pages
-        ]
-        fallback_docs = SimpleIndexer().process(page_docs)
-        if not fallback_docs:
-            raise DocumentProcessingException(
-                f"chunking produced zero chunks for obj_id={obj_id_str}, and "
-                "the fallback page-split also produced zero chunks "
-                "(pages are likely whitespace-only)"
-            )
+    built = await _run_cpu(service.build_artifact, chunk_result, pages_bytes, obj_id)
+    if built.fallback_used:
         logger.info(
             "chunk_finalize_fallback_used",
             obj_id=obj_id_str,
-            num_fallback_chunks=len(fallback_docs),
+            num_fallback_chunks=built.num_chunks,
         )
-        parsed_chunks = [
-            ParsedChunk(
-                page_content=doc.page_content,
-                source="fallback-page-split",
-                type=ChunkType.TEXT,
-                obj_id=obj_id,
-                page_no=doc.metadata.get("page_no"),
-            )
-            for doc in fallback_docs
-        ]
 
-    artifact = ParseArtifact(pages=pages, chunks=parsed_chunks)
-
-    await artifact_store.aput(
-        key,
-        await asyncio.to_thread(service.encode_artifact, artifact),
-        content_type="application/json",
-    )
+    await artifact_store.aput(key, built.data, content_type="application/json")
     await replay_store.aput(marker_key, request.chunking_task_id.encode())
     logger.info(
         "chunk_finalize_completed",
         obj_id=obj_id_str,
-        num_pages=len(artifact.pages),
-        num_chunks=len(artifact.chunks),
+        num_pages=built.num_pages,
+        num_chunks=built.num_chunks,
         key=key,
     )
     return BlobRef(bucket=settings.PARSED_ARTIFACTS_BUCKET, key=key)
