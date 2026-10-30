@@ -62,16 +62,19 @@ startup via the Kafka Connect REST API.
 
 ### Debezium PostgreSQL Source
 
-Captures `apollo_celery_taskmeta` rows from the PostgreSQL WAL:
+Captures `ingestion_status` rows from the PostgreSQL WAL:
 
 ```json
 {
   "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
   "database.hostname": "postgres",
   "database.dbname":   "documents",
-  "table.include.list": "public.apollo_celery_taskmeta",
+  "topic.prefix":       "apollo.ingestion.celery.results",
+  "table.include.list": "public.ingestion_status",
   "plugin.name":        "pgoutput",
-  "publication.name":   "celery_results_publication",
+  "slot.name":          "ingestion_status_rep_slot",
+  "publication.name":   "ingestion_status_publication",
+  "publication.autocreate.mode": "disabled",
   "transforms":         "unwrap",
   "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState"
 }
@@ -79,7 +82,7 @@ Captures `apollo_celery_taskmeta` rows from the PostgreSQL WAL:
 
 `ExtractNewRecordState` unwraps the Debezium envelope and emits a flat row matching the
 table's column names. The topic name is:
-`apollo.ingestion.celery.results.public.apollo_celery_taskmeta`
+`apollo.ingestion.celery.results.public.ingestion_status`
 
 ### Debezium JDBC Sink (ingested_objects)
 
@@ -89,7 +92,7 @@ table's column names. The topic name is:
   "topics": "artemis.celery.ingested_objects",
   "connection.url": "jdbc:postgresql://postgres:5432/documents",
   "insert.mode": "upsert",
-  "primary.key.mode": "record_value",
+  "primary.key.mode": "record_key",
   "primary.key.fields": "id",
   "delete.enabled": "true",
   "value.converter": "io.confluent.connect.json.JsonSchemaConverter",
@@ -100,14 +103,6 @@ table's column names. The topic name is:
 `delete.enabled=true` allows tombstone records (null value) to DELETE rows. The tombstone
 fan-out in ksqlDB produces null-value records to this topic when `tasks.delete_document`
 succeeds.
-
-### Debezium JDBC Sink (ingestion_tasks)
-
-Same as above but targets `artemis.celery.ingestion_tasks` and uses:
-```json
-"primary.key.mode": "record_key",
-"primary.key.fields": "task_id"
-```
 
 ### Camel FileWatch Source
 

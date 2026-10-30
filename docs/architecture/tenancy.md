@@ -116,14 +116,13 @@ Indexing service
   • DELETE /ingest?namespace=<uuid>&obj_id=<uuid> scopes deletion to namespace
   │
   ▼
-IngestionResult (stored in apollo_celery_taskmeta.result)
-  • object.scope.{namespace_id, group_id}
+ingestion_status (written directly by the controller worker)
+  • namespace_id (NOT NULL, indexed), group_id (nullable)
   │
   ▼
 Debezium CDC ──► ksqlDB ──► JDBC sink
   • ingested_objects.namespace_id (NOT NULL, indexed FK)
   • ingested_objects.group_id (nullable, indexed)
-  • ingestion_tasks.namespace_id (NOT NULL, denormalised for per-namespace queries)
 ```
 
 ---

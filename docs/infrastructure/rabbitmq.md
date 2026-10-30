@@ -17,7 +17,9 @@ dev compose: `ingestion_test0`)
 | `artemis.ingestion.parse.long` | `tasks.submit_chunk` | 1 | The parsing service uploads the whole DoclingDocument inline; one call can take minutes |
 | `artemis.ingestion.index` | `tasks.index`, `tasks.delete_document`, `tasks.delete_namespace` | 1 | TEI + Qdrant + Postgres |
 
-**Task routing** is `task_routes` in `src/backend/controller/worker/celery.py`.
+**Task routing** is `task_routes` in `src/backend/controller/worker/celery.py`. Each queue has
+its own compose service; [Controller Worker](../services/controller-worker.md#workers) covers
+what each one is for and how to scale it.
 
 ---
 
@@ -63,27 +65,22 @@ The Celery broker URL is constructed as:
 
 ---
 
-## `acks_late=True` on fetch_and_parse
+## Acknowledgement timing
 
-`tasks.fetch_and_parse` is decorated with `acks_late=True`. This means the message is
-NOT acknowledged until the task completes. Combined with `concurrency=1` on the
-`artemis.ingestion.fetch-and-parse` queue, this ensures:
+When a message is acknowledged decides what a worker crash costs:
 
-1. At most one Docling job runs at a time (GPU exclusivity)
-2. If the worker crashes mid-parse, RabbitMQ redelivers the message to another worker
-   (no silent data loss)
-
-Without `acks_late`, a crash after the message is dequeued but before parsing completes
-would drop the job silently.
+| Tasks | Acknowledged | If the worker dies during the task |
+|-------|--------------|------------------------------------|
+| Parse sub-chain and `tasks.advance_from_callback` | After the task finishes (`acks_late=True`) | RabbitMQ redelivers it |
+| `tasks.ingest`, `tasks.index`, `tasks.delete_document`, `tasks.delete_namespace` | When the task starts (global default) | The message is gone and is not redelivered |
 
 ---
 
 ## Dead Letter Exchange (Planned)
 
-DLQ support is not yet configured. After a task exhausts its retries (`max_retries=20`),
-Celery marks it as FAILURE and the CDC pipeline captures the failure reason. The failed
-message is not rerouted anywhere — it remains visible in `ingestion_tasks` with
-`status='FAILURE'`.
+DLQ support is not yet configured. After a task exhausts its retries, `OutboxTask.on_failure`
+records the failure on the run's `ingestion_status` row. The failed message is not rerouted
+anywhere — the failure stays visible in that row with `status='failure'`.
 
 Epic 17 will add:
 - DLX `artemis.ingestion.dlx`
