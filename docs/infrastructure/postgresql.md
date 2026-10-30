@@ -1,9 +1,9 @@
 # PostgreSQL
 
 **Version:** PostgreSQL 16  
-**Role:** Relational database for namespace management, object registry, task history,
-Celery result backend, and enterprise connector metadata. Also the CDC source for the
-`ingested_objects` and `ingestion_tasks` pipeline.
+**Role:** Relational database for namespace management, object registry, task status,
+Celery result backend, and enterprise connector metadata. `ingestion_status` is also the CDC
+source for `ingested_objects`.
 
 ---
 
@@ -57,20 +57,58 @@ Note: the FK from `ingested_objects.namespace_id` to `namespace.id` was dropped 
 `SET NULL` UPDATE before namespace deletion. Orphaned rows are cleaned up asynchronously
 by the Celery tombstone pipeline.
 
-### `ingestion_tasks`
+### `ingestion_status`
 
-Task history. One row per completed ingestion task (SUCCESS or FAILURE). Written exclusively
-by the Debezium JDBC sink. The storage service reads from this table to serve `GET /tasks/{task_id}`.
+Transactional outbox for task state. One row per ingestion run, created by `tasks.ingest` and
+updated in place by every later task. Rows are never deleted. Written exclusively by the
+controller worker. The storage service reads it directly to serve
+`GET /namespaces/{id}/tasks/{task_id}`, and Debezium captures it for CDC.
 
 | Column | Type | Notes |
 |--------|------|-------|
 | `task_id` | UUID | PK. The contract task_id (the id the storage service returned to the caller) |
-| `obj_id` | UUID | Nullable (indexed). NULL on FAILURE tasks |
-| `namespace_id` | UUID | FK → namespace.id (NOT NULL, indexed; denormalised for per-namespace queries) |
-| `status` | text | `SUCCESS` or `FAILURE` |
-| `failure_reason` | text | Nullable. Traceback excerpt; NULL on SUCCESS |
-| `completed_at` | timestamptz | date_done from Celery result |
-| `operation` | text | `CREATE`, `MODIFY`, or `DELETE` |
+| `namespace_id` | UUID | NOT NULL, indexed. No FK to `namespace` |
+| `obj_id` | UUID | Nullable |
+| `source` | text | Nullable. Display label |
+| `object_type` | text | Nullable |
+| `content_type` | text | Nullable |
+| `size_bytes` | bigint | Nullable |
+| `group_id` | UUID | Nullable |
+| `operation` | text | `CREATE`, `MODIFY`, `DELETE`, or `AUTO_DELETE` |
+| `stage` | text | Last task to start, e.g. `tasks.index` |
+| `status` | text | `running`, `success`, or `failure` |
+| `failure_reason` | text | Nullable. `{ExcType}: {message}`, truncated to 2000 characters |
+| `created_at` | timestamp | Deliberately timezone-less: Debezium encodes it as μs BIGINT |
+| `updated_at` | timestamp | Same encoding. Doubles as the completion time once `status` is terminal |
+
+### `parse_stage_state`
+
+Claim table for the race between `poll_parse` and `advance_from_callback`. One row per document
+stage waiting on a conversion. `tasks.submit_parse` creates it, whichever task claims it first
+dispatches the rest of the pipeline, and that task then deletes the row.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `obj_id` | text | PK (with `stage`) |
+| `stage` | text | PK (with `obj_id`). Only `convert` today |
+| `docling_task_id` | text | Nullable. Backfilled after submit |
+| `resume_context` | JSONB | Everything the rest of the pipeline needs to dispatch |
+| `created_at` | timestamptz | |
+| `claimed_at` | timestamptz | Nullable |
+| `claimed_by` | text | Nullable |
+
+### `intake_dedup_ledger`
+
+Content-addressed dedup for the enterprise intake service, which stops connector redeliveries
+from ingesting the same file twice.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `namespace_id` | UUID | PK (with `path`, `sha256`) |
+| `path` | text | PK. Canonical filesystem path, with symlinks followed |
+| `sha256` | text | PK. File content hash |
+| `task_id` | UUID | Nullable. Filled in after the upload succeeds |
+| `created_at` | timestamptz | |
 
 ### `data_source`
 
@@ -90,26 +128,11 @@ Enterprise connector registry. Owned by the enterprise data sources service.
 | `updated_at` | timestamptz | |
 | `deleted_at` | timestamptz | Soft-delete |
 
-### `apollo_celery_taskmeta`
+### Celery result tables
 
-Celery result backend table. Written by the controller worker. Read by Debezium for CDC.
-Schema defined by SQLAlchemy-Celery (`celery[sqlalchemy]`).
-
-| Column | Type | Notes |
-|--------|------|-------|
-| `task_id` | varchar(155) | PK. Per-subtask Celery UUID |
-| `status` | varchar(50) | PENDING / STARTED / SUCCESS / FAILURE |
-| `result` | text | JSON: IngestionResult (SUCCESS) or FailureRecord (FAILURE) |
-| `date_done` | datetime | |
-| `traceback` | text | Nullable. Nulled by FailureRecordingTask.on_failure |
-| `name` | text | Task name: "tasks.index", "tasks.delete_document", etc. |
-| `args` | text | |
-| `kwargs` | text | |
-| `worker` | text | |
-| `retries` | int | |
-| `queue` | text | |
-
-`result_extended=True` in the DatabaseBackend preserves `name`, `args`, `kwargs`, `worker` — required for the ksqlDB failure fan-out's `name IN (...)` filter.
+`celery_taskmeta` and `celery_tasksetmeta` belong to Celery's stock result backend. Celery
+creates them itself (`database_create_tables_at_setup`), not a migration. They are
+informational only: nothing reads them for task state or CDC.
 
 ---
 
@@ -141,6 +164,11 @@ Current migrations:
 - `0003` — (subsequent schema changes)
 - `0004` — Drop FK from `ingested_objects.namespace_id` to `namespace.id` (passive deletes)
 - `0005` — Add `ingested_at` column to `ingested_objects`
+- `0006` — Add `parse_stage_state`
+- `0007` — Add `ingestion_status` and publication `ingestion_status_publication`
+- `0008` — Drop `apollo_celery_taskmeta` and its CDC infrastructure
+- `0009` — Add `intake_dedup_ledger`
+- `0010` — Drop `ingestion_tasks`; index `ingestion_status.namespace_id`
 
 ---
 
@@ -158,13 +186,12 @@ command: |
   -c hot_standby_feedback=on
 ```
 
-Migration 0001 creates:
-- Publication `celery_results_publication` covering `apollo_celery_taskmeta`
-- Replication slot for Debezium
+Migration 0007 creates publication `ingestion_status_publication` covering `ingestion_status`.
+Debezium does not auto-create it (`publication.autocreate.mode=disabled`), and it reads the
+publication through replication slot `ingestion_status_rep_slot`.
 
-Debezium is configured with `REPLICA IDENTITY FULL` on `apollo_celery_taskmeta` so that CDC
-events contain all column values (required for `ExtractNewRecordState` to produce a flat row
-with all fields, not just the changed columns).
+`ingestion_status` uses the default replica identity, which is enough because `task_id` is its
+real primary key.
 
 ---
 

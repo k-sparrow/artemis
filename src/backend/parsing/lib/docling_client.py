@@ -228,13 +228,19 @@ class DoclingParseClient:
     ) -> str:
         """POST /v1/chunk/hybrid/file/async (JSON_DOCLING input) → task_id.
 
-        Uploads the DoclingDocument JSON inline (target=inbody). This is the
-        only working option in docling-serve v1.29.0: no chunk endpoint
-        accepts an S3 source (`BaseChunkDocumentsRequest.sources` is
-        `FileSourceRequest | HttpSourceRequest` only — the same schema-level
-        422 as convert's non-batch endpoint — and there's no batch variant
-        for chunk to work around it with). The caller reads the
-        replay-cached DoclingDocument JSON itself and passes the bytes here.
+        Uploads the DoclingDocument JSON inline (target=inbody). No
+        /v1/chunk/* endpoint in docling-serve v1.29.0 accepts an S3 source
+        (`BaseChunkDocumentsRequest.sources` is `FileSourceRequest |
+        HttpSourceRequest` only — the same schema-level 422 as convert's
+        non-batch endpoint — and there is no chunk batch endpoint), so the
+        caller reads the replay-cached DoclingDocument JSON itself and passes
+        the bytes here.
+
+        That same version can also chunk during conversion:
+        /v1/convert/source/batch accepts ``chunks`` in ``to_formats`` and
+        writes a ``.chunks.jsonl`` to its S3 target, which would remove this
+        inline upload. Not used yet because chunking is its own stage after
+        resolve here (Epic 21 §21.8).
         """
         async with httpx.AsyncClient(
             base_url=self._base_url, timeout=timeout

@@ -36,9 +36,13 @@ app.conf.result_serializer = "json"
 app.conf.database_create_tables_at_setup = True
 app.conf.result_extended = True
 
-# Workers are split into two pools with different scaling profiles:
-#   parse  — Celery poll loop (async, non-blocking); concurrency=3
-#   index  — I/O-bound (TEI + Qdrant + Postgres); concurrency=1
+# Workers are split into three pools with different scaling profiles:
+#   parse      — Celery poll loop (async, non-blocking); concurrency=3
+#   parse.long — submit_chunk only: the parsing service uploads the whole
+#                DoclingDocument to docling-serve inline, so one call can
+#                block for minutes. Its own one-slot pool keeps polls from
+#                waiting behind it and caps those uploads at one at a time.
+#   index      — I/O-bound (TEI + Qdrant + Postgres); concurrency=1
 # prefetch=1 prevents any single worker from hoarding multiple tasks.
 app.conf.worker_prefetch_multiplier = 1
 # Global default: tasks ack on receipt so failed workers don't leave ghosts.
@@ -53,6 +57,12 @@ app.conf.task_queues = [
         durable=True,
     ),
     Queue(
+        name="artemis.ingestion.parse.long",
+        exchange=Exchange(settings.EXCHANGE_NAME, type="direct"),
+        routing_key="parse_long",
+        durable=True,
+    ),
+    Queue(
         name="artemis.ingestion.index",
         exchange=Exchange(settings.EXCHANGE_NAME, type="direct"),
         routing_key="index",
@@ -63,6 +73,11 @@ app.conf.task_queues = [
 _PARSE_ROUTE = {
     "queue": "artemis.ingestion.parse",
     "routing_key": "parse",
+    "serializer": "json",
+}
+_PARSE_LONG_ROUTE = {
+    "queue": "artemis.ingestion.parse.long",
+    "routing_key": "parse_long",
     "serializer": "json",
 }
 _INDEX_ROUTE = {
@@ -79,7 +94,7 @@ app.conf.task_routes = {
     "tasks.poll_parse": _PARSE_ROUTE,
     "tasks.advance_from_callback": _PARSE_ROUTE,
     "tasks.resolve_parse": _PARSE_ROUTE,
-    "tasks.submit_chunk": _PARSE_ROUTE,
+    "tasks.submit_chunk": _PARSE_LONG_ROUTE,
     "tasks.poll_chunk": _PARSE_ROUTE,
     # Indexing
     "tasks.index": _INDEX_ROUTE,

@@ -84,28 +84,35 @@ lossless replay cache (`replay/{obj_id}.json`), and the indexed parent-page mark
 **Qdrant** — vector database. Receives embedded chunk vectors from the indexing service,
 scoped by `namespace_id` and `group_id` metadata.
 
-**PostgreSQL** — Celery result backend. Stores task metadata and final
-`IngestionResult` / `FailureRecord` rows, which CDC (Debezium → ksqlDB) fans out to
-the `ingestion_tasks` table.
+**PostgreSQL** — holds `ingestion_status`, one row per contract `task_id` that the worker
+updates at each stage. The storage service reads it directly for task status, and CDC
+(Debezium → ksqlDB) turns its terminal successes into `ingested_objects` writes.
+`parse_stage_state` arbitrates between polling and the conversion callback. Celery's own result
+tables also live here, for information only.
 
 ---
 
 ## Task Routing
 
-The controller worker declares two durable RabbitMQ queues with different scaling profiles:
+The controller worker declares three durable RabbitMQ queues with different scaling profiles:
 
 | Queue | Worker | Concurrency | Tasks | Scale driver |
 |-------|--------|-------------|-------|--------------|
-| `artemis.ingestion.parse` | `backend-controller-parse-worker` | 3 | `tasks.ingest`, `tasks.parse`, `tasks.submit_parse`, `tasks.poll_parse`, `tasks.resolve_parse`, `tasks.submit_chunk`, `tasks.poll_chunk` | HTTP (Docling Serve async API) |
+| `artemis.ingestion.parse` | `backend-controller-parse-worker` | 3 | `tasks.ingest`, `tasks.parse`, `tasks.submit_parse`, `tasks.poll_parse`, `tasks.advance_from_callback`, `tasks.resolve_parse`, `tasks.poll_chunk` | HTTP (Docling Serve async API) |
+| `artemis.ingestion.parse.long` | `backend-controller-parse-long-worker` | 1 | `tasks.submit_chunk` | Inline DoclingDocument upload (size-dependent) |
 | `artemis.ingestion.index` | `backend-controller-index-worker` | 1 | `tasks.index`, `tasks.delete_document`, `tasks.delete_namespace` | I/O (TEI + Qdrant + Postgres) |
 
 `tasks.ingest` (entry point dispatched by the RabbitMQ sink) lands on the `parse` queue
-so chain dispatch is co-located with the first parse task. Parse worker threads are never
-blocked for the duration of a Docling job — each thread either makes a single short HTTP
-call or sleeps in `self.retry()`. The `index` queue remains serial (`concurrency=1`)
-because the indexing service drives the GPU-bound TEI embedding model.
+so chain dispatch is co-located with the first parse task. Parse worker slots are never
+held for the duration of a Docling job: a slot makes one short HTTP call, and a task waiting
+on a `self.retry()` countdown holds no slot. `submit_chunk`, whose call can block for minutes
+on a very large document, runs on its own one-slot `parse.long` worker so polls never wait
+behind it. The `index` queue remains serial (`concurrency=1`) because the indexing service
+drives the GPU-bound TEI embedding model.
 
-Both queues share the same RabbitMQ exchange (`artemis.ingestion`, direct type).
+All three queues share the same RabbitMQ exchange (`artemis.ingestion`, direct type).
+[Controller Worker](../services/controller-worker.md#workers) covers what each worker is for
+and how to scale it.
 
 ---
 
@@ -123,16 +130,20 @@ sequenceDiagram
     participant PG as PostgreSQL
 
     Q->>CW: tasks.ingest {BlobRef, source, upload_action}
-    CW->>CW: dispatch chain(parse → index)
-    note over CW: parse self-replaces with sub-chain via self.replace()
+    CW->>PG: insert ingestion_status row
+    CW->>CW: dispatch tasks.parse
+    note over CW: parse self-replaces with submit_parse → poll_parse via self.replace()
 
     note over CW,PS: Sub-chain — artemis.ingestion.parse queue
+    CW->>PG: write parse_stage_state row
     CW->>PS: POST /v1/parse/submit
     PS-->>CW: SubmitResult {parsing_task_id}
-    loop poll until success
+    loop poll until terminal, unless the callback claims first
         CW->>PS: GET /v1/parse/status/{parsing_task_id}
         PS-->>CW: ParseStatus {processing|success|failure}
     end
+    CW->>PG: claim parse_stage_state row
+    note over CW,PG: The claim winner (poll_parse or advance_from_callback)<br/>dispatches resolve_parse → submit_chunk → poll_chunk → index
     CW->>PS: POST /v1/parse/resolve
     PS-->>CW: ResolveResult {obj_id}
     note over CW,PS: Chunking is a fully decoupled stage (Epic 21) — resolve<br/>never submits a chunk job itself
@@ -150,7 +161,7 @@ sequenceDiagram
     IS-->>CW: UpsertResult {num_added, num_skipped}
 
     CW->>S3: delete artifact (cleanup on success)
-    CW->>PG: write IngestionResult row
+    CW->>PG: mark ingestion_status success
 ```
 
 ### Parsing Service

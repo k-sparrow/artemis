@@ -125,17 +125,17 @@ published contract.
 
 ## `IngestionResult`
 
-The return value of `tasks.index` and `tasks.delete_document`. Serialised as JSON and stored
-in `apollo_celery_taskmeta.result`. This is what Debezium reads from the PostgreSQL WAL to
-populate `ingested_objects` and `ingestion_tasks`.
+The return value of `tasks.index` and `tasks.delete_document`. Celery's stock result backend
+stores it for information only (`AsyncResult`, Flower). Nothing downstream reads it:
+`ingested_objects` and task status both come from `ingestion_status`.
 
 **Origin:** controller worker (`tasks.index` / `tasks.delete_document`)  
-**Destination:** `apollo_celery_taskmeta.result` → Debezium CDC → ksqlDB → JDBC sink → DB tables
+**Destination:** `celery_taskmeta.result` (informational)
 
 ```
 {
   "task_id": str | null,         // contract task_id (the id the caller holds)
-  "operation": str,              // "CREATE" | "MODIFY" | "DELETE"
+  "operation": str,              // "CREATE" | "MODIFY" | "DELETE" | "AUTO_DELETE"
   "object": {
     "id":     UUID,              // obj_id
     "source": str,
@@ -151,47 +151,38 @@ populate `ingested_objects` and `ingestion_tasks`.
   },
   "indexing": {
     "num_added":   int,
-    "num_skipped": int,
-    "ids":         [str]
+    "num_skipped": int
   }
 }
 ```
-
-**Why `task_id` in the result?** The `apollo_celery_taskmeta` row is keyed by the per-subtask
-Celery ID of `tasks.index`, not the `tasks.ingest` entry ID the caller was given. Without
-embedding the contract `task_id` in the result, `GET /tasks/{task_id}` would find nothing.
-The ksqlDB `ingestion_tasks` fan-out keys the DB row by `result.task_id`, not by
-`apollo_celery_taskmeta.task_id`.
 
 ---
 
-## `FailureRecord`
+## `ingestion_status`
 
-Written by `FailureRecordingTask.on_failure()` over the native Celery FAILURE result row.
-Replaces the default exception encoding (`{exc_type, exc_message, exc_module}`) with a
-CDC-readable structure that the ksqlDB failure fan-out can process.
+One row per contract `task_id`, the id the storage service returned to the caller. `tasks.ingest`
+inserts it, and the worker updates it in place at each stage (see
+[Controller Worker](../services/controller-worker.md#task-state)).
 
-**Origin:** controller worker (any `FailureRecordingTask` subclass on failure)  
-**Destination:** `apollo_celery_taskmeta.result` → Debezium CDC → ksqlDB failure fan-out → `ingestion_tasks`
+**Origin:** controller worker (`src/backend/controller/worker/backend/outbox.py`)  
+**Destination:** direct read by the storage service; Debezium CDC → ksqlDB → `ingested_objects`
 
 ```
 {
-  "task_id":        str | null,  // contract task_id
-  "operation":      str,
-  "failure_reason": str,         // "{ExcType}: {message}" truncated to 2000 chars
-  "object": {
-    "id":    UUID | null,        // obj_id — null if failure before object identity resolved
-    "scope": {
-      "namespace_id": UUID       // always present (NOT NULL in ingestion_tasks)
-    }
-  }
+  "task_id":        UUID,         // contract task_id
+  "namespace_id":   UUID,
+  "obj_id":         UUID | null,
+  "source":         str | null,
+  "object_type":    str | null,
+  "content_type":   str | null,
+  "size_bytes":     int | null,
+  "group_id":       UUID | null,
+  "operation":      str,          // "CREATE" | "MODIFY" | "DELETE" | "AUTO_DELETE"
+  "stage":          str,          // last task to start, e.g. "tasks.index"
+  "status":         str,          // "running" | "success" | "failure"
+  "failure_reason": str | null    // "{ExcType}: {message}" truncated to 2000 chars
 }
 ```
-
-**Double-write guard:** Celery writes the exception-encoded result first, then `on_failure`
-overwrites it. Debezium emits two CDC events. The ksqlDB guard
-`EXTRACTJSONFIELD(result, '$.task_id') IS NOT NULL` drops the first (exception-encoded) event
-and passes only the second (FailureRecord) to the JDBC sink.
 
 ---
 

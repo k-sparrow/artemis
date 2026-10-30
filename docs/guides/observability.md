@@ -68,13 +68,13 @@ cross-service traces queryable by business key:
 
 | Attribute | Type | Set by | Meaning |
 |-----------|------|--------|---------|
-| `artemis.task_id` | string (UUID) | Storage service upload handler, `tasks.ingest`, `tasks.fetch_and_parse`, `tasks.index` | Contract task ID from `IngestionTaskDetails` — the same UUID the caller polls via `GET /tasks/{task_id}` |
-| `artemis.namespace_id` | string (UUID) | Storage service upload handler, `tasks.fetch_and_parse`, `tasks.index` | Namespace the document belongs to |
-| `artemis.obj_id` | string (UUID) | Storage service upload handler, `tasks.fetch_and_parse`, `tasks.index` | Deterministic object ID (`uuid5(namespace_id, filename)`) |
+| `artemis.task_id` | string (UUID) | Storage service upload handler, `tasks.ingest`, `tasks.submit_parse`, `tasks.index` | Contract task ID from `IngestionTaskDetails` — the same UUID the caller polls via `GET /namespaces/{id}/tasks/{task_id}` |
+| `artemis.namespace_id` | string (UUID) | Storage service upload handler, `tasks.submit_parse`, `tasks.index` | Namespace the document belongs to |
+| `artemis.obj_id` | string (UUID) | Storage service upload handler, `tasks.submit_parse`, `tasks.index` | Deterministic object ID (`uuid5(namespace_id, filename)`) |
 
 `artemis.task_id` is the primary correlation key. Searching Jaeger for a specific
 `task_id` value returns every span involved in that ingestion: the upload HTTP request,
-the three Celery tasks, and all downstream HTTP calls to the parsing and indexing
+the Celery tasks, and all downstream HTTP calls to the parsing and indexing
 services.
 
 ---
@@ -87,10 +87,10 @@ The controller worker emits two kinds of spans:
 covering message receive → task return. Span name matches the registered task name
 (e.g. `tasks.ingest`).
 
-**Manual spans inside fetch_and_parse and index:** the tasks open a child span
-(`tasks.fetch_and_parse`, `tasks.index`) that covers only the HTTP call to the
-downstream service. This is where `artemis.*` attributes are set and where you see
-the actual parse/index latency.
+**Manual spans inside submit_parse and index:** the tasks open a child span
+(`tasks.submit_parse`, `tasks.index`) around the HTTP call to the downstream service.
+This is where `artemis.*` attributes are set. `poll_parse` and `poll_chunk` record their
+attempts as Prometheus metrics instead, because each can retry up to 1440 times per document.
 
 ---
 

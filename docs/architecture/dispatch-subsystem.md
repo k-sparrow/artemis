@@ -68,10 +68,9 @@ message id (which becomes the Celery task id that the controller worker reports 
 message to a single shared queue. The controller worker consumes from there — private
 and enterprise objects are not distinguished at the queue level.
 
-**PostgreSQL** — read-only for the storage service. The `ingested_objects` and
-`ingestion_tasks` tables are written exclusively by a JDBC Sink Connector via CDC from
-the Celery result backend — the storage service only queries them to serve the
-observability endpoints.
+**PostgreSQL** — read-only for the storage service's ingestion tables. The controller worker
+writes `ingestion_status` directly, and a JDBC Sink Connector writes `ingested_objects` via CDC
+from that table — the storage service only queries them to serve the observability endpoints.
 
 ---
 
@@ -191,5 +190,6 @@ from the key alone; empty when no filename was supplied.
 | `PATCH` | `/namespaces/{id}` | Rename namespace | `200` |
 | `DELETE` | `/namespaces/{id}` | Delete namespace + all objects | `202` |
 
-All write endpoints return immediately. Task completion is observable only after the
-worker finishes and the CDC pipeline fans the result out to `ingestion_tasks`.
+All write endpoints return immediately. The task endpoints show the live stage as soon as the
+worker picks the task up. `GET /namespaces/{id}/objects` only shows an object after the CDC
+pipeline has written it to `ingested_objects`.

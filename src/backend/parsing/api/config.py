@@ -32,7 +32,9 @@ class ParsingSettings(BaseSettings):
     # Per-call HTTP timeouts for the new async parse endpoints. Each must stay
     # BELOW the worker's matching PARSING_*_TIMEOUT, so a slow docling-serve
     # surfaces to the worker as this service's classified 503 rather than as
-    # an opaque client-side read timeout.
+    # an opaque client-side read timeout. httpx applies them per connect/
+    # read/write, not to the whole call, so that holds for a stalled
+    # docling-serve but not for a slow-but-steady transfer.
     #
     # Chunk submit is the one call still sized for very large documents: no
     # docling-serve chunk endpoint accepts an S3 source, so the whole
@@ -40,6 +42,7 @@ class ParsingSettings(BaseSettings):
     # longer moves the document through this service at all on the S3-direct
     # path (see resolve_endpoint); DOCLING_RESOLVE_TIMEOUT only bounds the
     # inline result fetch of "file" mode.
+    DOCLING_SUBMIT_TIMEOUT: float = 120.0
     DOCLING_STATUS_TIMEOUT: float = 30.0
     DOCLING_RESOLVE_TIMEOUT: float = 120.0
     DOCLING_CHUNK_SUBMIT_TIMEOUT: float = 1200.0

@@ -13,42 +13,40 @@ dev compose: `ingestion_test0`)
 
 | Queue | Celery task(s) | Worker concurrency | Notes |
 |-------|---------------|-------------------|-------|
-| `artemis.ingestion.fetch-and-parse` | `tasks.ingest`, `tasks.fetch_and_parse` | 1 | `acks_late=True`; heavy-PDF stability requires serial execution |
-| `artemis.ingestion.index` | `tasks.index`, `tasks.delete_document`, `tasks.delete_namespace` | Scalable (I/O-bound) | TEI + Qdrant + Postgres are network I/O |
+| `artemis.ingestion.parse` | `tasks.ingest`, `tasks.parse`, `tasks.submit_parse`, `tasks.poll_parse`, `tasks.advance_from_callback`, `tasks.resolve_parse`, `tasks.poll_chunk` | 3 | Short HTTP calls and countdown polls |
+| `artemis.ingestion.parse.long` | `tasks.submit_chunk` | 1 | The parsing service uploads the whole DoclingDocument inline; one call can take minutes |
+| `artemis.ingestion.index` | `tasks.index`, `tasks.delete_document`, `tasks.delete_namespace` | 1 | TEI + Qdrant + Postgres |
 
-**Task routing** (from `src/backend/controller/worker/celery.py`):
-
-```python
-task_routes = {
-    "tasks.ingest":           {"queue": "artemis.ingestion.fetch-and-parse"},
-    "tasks.fetch_and_parse":  {"queue": "artemis.ingestion.fetch-and-parse"},
-    "tasks.index":            {"queue": "artemis.ingestion.index"},
-    "tasks.delete_document":  {"queue": "artemis.ingestion.index"},
-    "tasks.delete_namespace": {"queue": "artemis.ingestion.index"},
-}
-```
+**Task routing** is `task_routes` in `src/backend/controller/worker/celery.py`. Each queue has
+its own compose service; [Controller Worker](../services/controller-worker.md#workers) covers
+what each one is for and how to scale it.
 
 ---
 
 ## consumer_timeout
 
-RabbitMQ's `consumer_timeout` is set to **24 hours** (from `rabbitmq.conf`):
+RabbitMQ's `consumer_timeout` is set to **2 hours** (from `rabbitmq.conf`):
 
 ```ini
-consumer_timeout = 86400000   # milliseconds
+consumer_timeout = 7200000   # milliseconds
 ```
 
-This is required because heavy PDFs can take 3–5 hours to parse. Without this, RabbitMQ
-would close the channel and requeue the message while Docling is still running, causing
-infinite re-delivery loops.
+A message counts against it for as long as it is unacknowledged, and that includes a
+countdown retry (`self.retry(countdown=...)`) parked in a worker waiting for a free slot. On
+a one-slot worker that wait can be two of the longest calls: the one running, then one that
+takes the slot first. So it must exceed **2 × the longest call on any worker + its longest
+retry countdown**:
 
-The controller worker's `HTTPX_TIMEOUT` is aligned to the same value:
-```
-HTTPX_TIMEOUT=86400   # seconds
-```
+| Worker | Longest call | Longest countdown | Needs more than |
+|--------|-------------|-------------------|-----------------|
+| parse | 300 s (`PARSING_RESOLVE_TIMEOUT`) | ~330 s (429 backpressure) | ~16 min |
+| parse.long | 1500 s (`PARSING_CHUNK_SUBMIT_TIMEOUT`) | ~330 s | ~56 min |
+| index | 1800 s (`HTTPX_TIMEOUT`) | ~240 s (5xx backoff) | ~64 min |
 
-Both must be raised together. Raising one without the other still causes timeouts — either
-the broker closes the channel or the HTTP client gives up before the parse finishes.
+On a breach RabbitMQ closes the channel and requeues every unacknowledged message on it. For
+`acks_late=True` tasks (the whole parse sub-chain) that includes tasks still running, which
+are then delivered and run a second time. Recheck this table whenever a worker timeout
+changes.
 
 ---
 
@@ -67,27 +65,22 @@ The Celery broker URL is constructed as:
 
 ---
 
-## `acks_late=True` on fetch_and_parse
+## Acknowledgement timing
 
-`tasks.fetch_and_parse` is decorated with `acks_late=True`. This means the message is
-NOT acknowledged until the task completes. Combined with `concurrency=1` on the
-`artemis.ingestion.fetch-and-parse` queue, this ensures:
+When a message is acknowledged decides what a worker crash costs:
 
-1. At most one Docling job runs at a time (GPU exclusivity)
-2. If the worker crashes mid-parse, RabbitMQ redelivers the message to another worker
-   (no silent data loss)
-
-Without `acks_late`, a crash after the message is dequeued but before parsing completes
-would drop the job silently.
+| Tasks | Acknowledged | If the worker dies during the task |
+|-------|--------------|------------------------------------|
+| Parse sub-chain and `tasks.advance_from_callback` | After the task finishes (`acks_late=True`) | RabbitMQ redelivers it |
+| `tasks.ingest`, `tasks.index`, `tasks.delete_document`, `tasks.delete_namespace` | When the task starts (global default) | The message is gone and is not redelivered |
 
 ---
 
 ## Dead Letter Exchange (Planned)
 
-DLQ support is not yet configured. After a task exhausts its retries (`max_retries=20`),
-Celery marks it as FAILURE and the CDC pipeline captures the failure reason. The failed
-message is not rerouted anywhere — it remains visible in `ingestion_tasks` with
-`status='FAILURE'`.
+DLQ support is not yet configured. After a task exhausts its retries, `OutboxTask.on_failure`
+records the failure on the run's `ingestion_status` row. The failed message is not rerouted
+anywhere — the failure stays visible in that row with `status='failure'`.
 
 Epic 17 will add:
 - DLX `artemis.ingestion.dlx`

@@ -99,54 +99,93 @@ The sink connector applies three SMTs:
 - `InsertHeader` — `CamelHeader.task = "tasks.ingest"`
 - `InsertHeader` — `CamelSpringRabbitmqContentType = "application/json"`
 
-The message arrives in the `artemis.ingestion.fetch-and-parse` queue of RabbitMQ exchange `artemis.ingestion`.
+The message arrives in the `artemis.ingestion.parse` queue (routing key `parse`) of RabbitMQ
+exchange `artemis.ingestion`.
 
 ---
 
 ## Step 5 — `tasks.ingest` Entry Task
 
-The Celery worker picks up the message. `tasks.ingest` runs:
+The parse worker picks up the message. `tasks.ingest` runs:
 
 1. Records `task_id = "f47ac10b-..."` (read from `self.request.id`) as OTel span attribute
-2. Matches `upload_action = UploadAction.CREATE`
-3. Dispatches the chain:
+2. Inserts the run's `ingestion_status` row with `status = "running"` and
+   `stage = "tasks.ingest"`. Every later task updates this same row.
+3. Matches `upload_action = UploadAction.CREATE`
+4. Dispatches `tasks.parse` on its own. `tasks.index` is not chained here:
    ```python
-   chain(
-     fetch_and_parse.s(s3, source=source, namespace_id=namespace_id,
-                       task_id="f47ac10b-...", operation="create"),
-     index.s(namespace_id=namespace_id, upload_action="create",
-             source=source, s3=s3, task_id="f47ac10b-..."),
-   ).apply_async()
+   parse.apply_async(
+     args=(s3,),
+     kwargs={"source": source, "namespace_id": "550e8400...", "group_id": None,
+             "task_id": "f47ac10b-...", "operation": "CREATE"},
+   )
    ```
 
 ---
 
-## Step 6 — `tasks.fetch_and_parse` (artemis.ingestion.fetch-and-parse queue)
+## Step 6 — Parse Sub-chain (artemis.ingestion.parse and artemis.ingestion.parse.long queues)
 
-1. Builds `BlobRef(bucket="artemis", key="550e8400.../3e4a5b6c...")`
-2. Calls `POST http://backend-parsing:10001/v1/parse` with body:
+`tasks.parse` replaces itself with `submit_parse → poll_parse`. The rest of the sub-chain is
+dispatched once conversion finishes.
+
+**`tasks.submit_parse`**
+
+1. Writes a `parse_stage_state` row (`obj_id`, `stage = "convert"`, plus everything the later
+   tasks need) before contacting Docling Serve, so a very fast callback can find it
+2. Calls `POST http://backend-parsing:10001/v1/parse/submit` with a form field holding a
+   `BlobRef`, not the file's bytes:
    ```json
-   { "source_ref": { "bucket": "artemis", "key": "550e8400.../3e4a5b6c..." } }
+   { "bucket": "artemis", "key": "550e8400.../3e4a5b6c..." }
    ```
 3. The parsing service:
-   - Reads `report.pdf` from MinIO by BlobRef
-   - Calls Docling Serve: `POST http://docling-serve:5001/v1/chunk/hybrid/file`
-   - Receives `DoclingDocument` with pages and structured chunks
-   - Builds `ParseArtifact` with `pages[]` + `chunks[]`
-   - Writes `ParseArtifact` JSON to MinIO at `parsed-chunks/<uuid>.json`
-   - Returns `BlobRef { "bucket": "parsed-chunks", "key": "parse/3e4a5b6c....json" }`
-4. `fetch_and_parse` returns `{ "bucket": "parsed-chunks", "key": "parse/3e4a5b6c....json" }`
+   - Checks that the source object exists
+   - Calls Docling Serve: `POST /v1/convert/source/batch`, with the S3 source and an S3 target
+     under `docling-replay/scratch/convert/3e4a5b6c.../`, and registers an HTTP callback
+   - Returns `SubmitResult { "parsing_task_id": "...", "obj_id": "3e4a5b6c...", "mode": "source" }`
+
+**`tasks.poll_parse` or `tasks.advance_from_callback`**
+
+Two paths can see the conversion finish:
+
+- `tasks.poll_parse` checks `GET /v1/parse/status/{parsing_task_id}` every 60–75 s
+- Docling Serve calls `POST /v1/parse/callback/3e4a5b6c...`, and the parsing service publishes
+  `tasks.advance_from_callback`
+
+Both try to claim the `parse_stage_state` row. Only the winner dispatches the rest of the
+pipeline as a Celery chain: `resolve_parse → submit_chunk → poll_chunk → index`. The loser does
+nothing. Polling stays on because callback delivery is not guaranteed.
+
+**`tasks.resolve_parse`**
+
+Calls `POST /v1/parse/resolve`. The parsing service copies the conversion JSON to
+`docling-replay/replay/3e4a5b6c....json` with an S3 server-side copy, splits the Markdown into
+pages, and writes them to `docling-replay/pages/3e4a5b6c....json`. Returns `{ "obj_id": "3e4a5b6c..." }`.
+
+**`tasks.submit_chunk`** (artemis.ingestion.parse.long queue)
+
+Calls `POST /v1/chunk/submit`. The parsing service reads the replay JSON and uploads it to
+Docling Serve inline. Returns `{ "chunking_task_id": "...", "obj_id": "3e4a5b6c..." }`.
+
+**`tasks.poll_chunk`**
+
+Polls `GET /v1/chunk/status/{chunking_task_id}`. On success it calls `POST /v1/chunk/finalize`,
+and the parsing service:
+
+- Fetches the chunk result from Docling Serve
+- Merges it with the cached pages into a `ParseArtifact` with `pages[]` + `chunks[]`
+- Writes the artifact to MinIO at `parsed-chunks/parse/3e4a5b6c....json`
+- Returns `BlobRef { "bucket": "parsed-chunks", "key": "parse/3e4a5b6c....json" }`
 
 ---
 
 ## Step 7 — `tasks.index` (artemis.ingestion.index queue)
 
-Receives `{ "bucket": "parsed-chunks", "key": "parse/3e4a5b6c....json" }` from previous task.
+Receives `{ "bucket": "parsed-chunks", "key": "parse/3e4a5b6c....json" }` from `tasks.poll_chunk`.
 
 1. Calls `POST http://backend-indexing-ingestion:10000/ingest?namespace=550e8400...`
    with body:
    ```json
-   { "artifact_ref": { "bucket": "parsed-chunks", "key": "abc123.json" } }
+   { "artifact_ref": { "bucket": "parsed-chunks", "key": "parse/3e4a5b6c....json" } }
    ```
 2. The indexing service:
    - Reads `ParseArtifact` from MinIO
@@ -157,61 +196,60 @@ Receives `{ "bucket": "parsed-chunks", "key": "parse/3e4a5b6c....json" }` from p
    - Upserts vectors into Qdrant collection `artemis`
    - Writes page markdown to `parent-pages` bucket (S3 doc store)
    - Returns `{ "num_added": 12, "num_skipped": 0, "ids": [...] }`
-3. `tasks.index` deletes `parsed-chunks/abc123.json` from MinIO (cleanup)
-4. Returns `IngestionResult`:
+3. `tasks.index` deletes `parsed-chunks/parse/3e4a5b6c....json` from MinIO (cleanup)
+4. Returns `IngestionResult`, which Celery's result backend keeps for information only:
    ```json
    {
      "task_id":   "f47ac10b-...",
-     "operation": "create",
+     "operation": "CREATE",
      "object":    { "id": "3e4a5b6c...", "source": "report.pdf",
                     "scope": { "namespace_id": "550e8400...", "group_id": null },
                     "properties": { "object_type": "file", "content_type": "application/pdf",
                                     "size_bytes": 1258291 } },
-     "indexing":  { "num_added": 12, "num_skipped": 0, "ids": [...] }
+     "indexing":  { "num_added": 12, "num_skipped": 0 }
    }
    ```
-
-This result is stored as JSON in `apollo_celery_taskmeta.result`.
+5. `TerminalOutboxTask.on_success` sets `status = "success"` on the `ingestion_status` row
 
 ---
 
 ## Step 8 — Debezium CDC → ksqlDB Topology B
 
-Debezium detects the new row in `apollo_celery_taskmeta` (WAL change) and emits a CDC event
-to `apollo.ingestion.celery.results.public.apollo_celery_taskmeta`.
+Debezium reads the row update from the WAL and emits a CDC event to
+`apollo.ingestion.celery.results.public.ingestion_status`.
 
 ksqlDB Fan-out A (`artemis-celery-ingested-objects`) fires:
-- Filter: `name = 'tasks.index' AND status = 'SUCCESS'`
-- Extracts object fields from `result` JSON
+- Filter: `stage = 'tasks.index' AND status = 'success'`
+- Projects the object fields, which are plain columns on `ingestion_status`
 - Produces to `artemis.celery.ingested_objects` (key = `{id: "3e4a5b6c..."}`)
 - JDBC sink upserts into `ingested_objects` table
-
-ksqlDB Fan-out B (`artemis-celery-ingestion-tasks`) fires:
-- Same filter
-- Extracts `task_id = "f47ac10b-..."` from `result.task_id` (the CONTRACT id)
-- Produces to `artemis.celery.ingestion_tasks` (key = `{task_id: "f47ac10b-..."}`)
-- JDBC sink upserts into `ingestion_tasks` table
 
 ---
 
 ## Step 9 — Caller Polls Task Status
 
 ```
-GET /tasks/f47ac10b-58cc-4372-a567-0e02b2c3d479
+GET /namespaces/550e8400-e29b-41d4-a716-446655440000/tasks/f47ac10b-58cc-4372-a567-0e02b2c3d479
 X-Owner-Id: a1b2c3d4-0000-0000-0000-000000000001
 ```
 
-Storage service queries `ingestion_tasks` by `task_id = "f47ac10b-..."`.
+Storage service reads `ingestion_status` directly by `task_id = "f47ac10b-..."`, with no CDC in
+between. The row exists from Step 5 onwards, so a caller polling earlier sees
+`status = "running"` and the current `stage`.
 
 Response:
 ```json
 {
-  "task_id":      "f47ac10b-...",
-  "status":       "SUCCESS",
-  "operation":    "create",
-  "completed_at": "2026-06-25T12:34:56Z",
-  "obj_id":       "3e4a5b6c...",
-  "namespace_id": "550e8400..."
+  "task_id":        "f47ac10b-...",
+  "obj_id":         "3e4a5b6c...",
+  "namespace_id":   "550e8400...",
+  "source":         "report.pdf",
+  "status":         "success",
+  "stage":          "tasks.index",
+  "operation":      "CREATE",
+  "failure_reason": null,
+  "created_at":     "2026-06-25T12:34:02Z",
+  "completed_at":   "2026-06-25T12:34:56Z"
 }
 ```
 
@@ -240,13 +278,15 @@ page markdown from the MinIO doc store.
 ```
 t+0s    POST /namespaces/{id}/objects  →  202 Accepted, task_id returned
 t+1s    MinIO → Kafka → ksqlDB → RabbitMQ
-t+2s    tasks.ingest dispatches chain
-t+5s    tasks.fetch_and_parse calls parsing service
+t+2s    tasks.ingest inserts ingestion_status, dispatches tasks.parse
+t+3s    tasks.submit_parse submits the conversion
 t+30s   Docling parses PDF (GPU) — time varies with document size
-t+35s   ParseArtifact written to MinIO
+t+31s   Callback or poll_parse wins the claim, dispatches the tail chain
+t+35s   Pages cached, chunk job submitted and finished
+t+36s   ParseArtifact written to MinIO
 t+40s   tasks.index calls indexing service
 t+45s   TEI embeds 12 chunks, Qdrant upserted
-t+50s   artifact deleted, IngestionResult stored in Postgres
-t+52s   Debezium reads WAL, ksqlDB processes, JDBC sinks write DB rows
-t+55s   GET /tasks/{task_id} returns SUCCESS
+t+50s   artifact deleted, ingestion_status set to success
+t+50s   GET /namespaces/{id}/tasks/{task_id} returns success
+t+52s   Debezium reads WAL, ksqlDB processes, JDBC sink writes ingested_objects
 ```

@@ -182,6 +182,7 @@ _DIAGNOSTIC_SERVICES = [
     "backend-enterprise-intake",
     "backend-indexing-ingestion",
     "backend-controller-parse-worker",
+    "backend-controller-parse-long-worker",
     "backend-controller-index-worker",
     "backend-parsing",
     "backend-mcp",
@@ -277,7 +278,7 @@ def compose(
         wait_for_kc_connector(
             kc_url, "DebeziumJdbcSinkConnector__CeleryResultToIngestedObjects"
         )
-        # Both Celery workers must be consuming before any file is dropped.
+        # All Celery workers must be consuming before any file is dropped.
         # Workers connect to RabbitMQ asynchronously after compose starts;
         # tasks dispatched before they're ready would queue up but not be lost,
         # however a failed worker start (e.g. bad env) would cause a silent hang.
@@ -285,7 +286,11 @@ def compose(
         broker_url = f"amqp://artemis:artemis@{rabbit_host}:{rabbit_port}/artemis"
         wait_for_celery_workers(
             broker_url,
-            required_queues=["artemis.ingestion.parse", "artemis.ingestion.index"],
+            required_queues=[
+                "artemis.ingestion.parse",
+                "artemis.ingestion.parse.long",
+                "artemis.ingestion.index",
+            ],
             timeout=120,
         )
     except Exception:

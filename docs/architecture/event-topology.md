@@ -16,9 +16,8 @@ Two ksqlDB init scripts define the topology:
 | `artemis.ingestion.storage.s3` | MinIO (bucket notification) | ksqlDB source stream | null | JSON |
 | `artemis.ingestion.celery.tasks` | ksqlDB CSAS | ksqlDB re-partition step | namespace_id (JSON) | JSON |
 | `artemis.ingestion.celery.tasks.routed` | ksqlDB CSAS | Camel RabbitMQ Sink | `{task_id}` (JSON struct) | JSON |
-| `apollo.ingestion.celery.results.public.apollo_celery_taskmeta` | Debezium PostgreSQL source | ksqlDB source stream | row PK (int) | JSON (ExtractNewRecordState) |
+| `apollo.ingestion.celery.results.public.ingestion_status` | Debezium PostgreSQL source | ksqlDB source stream | row PK (`task_id`) | JSON (ExtractNewRecordState) |
 | `artemis.celery.ingested_objects` | ksqlDB CSAS + tombstone CSAS | Debezium JDBC Sink | `{id}` (JSON_SR struct) | JSON_SR / KAFKA null |
-| `artemis.celery.ingestion_tasks` | ksqlDB CSAS (3× INSERT INTO) | Debezium JDBC Sink | `{task_id}` (JSON_SR struct) | JSON_SR |
 | `artemis.datasource.filesystem` | Camel FileWatch Source connector | ksqlDB source stream | header-promoted values | JSON |
 | `artemis.datasource.filesystem.intake` | ksqlDB CSAS | Aiven HTTP Sink | — | JSON |
 
@@ -63,8 +62,9 @@ artemis.ingestion.celery.tasks.routed   (key={task_id: "<uuid>"} JSON struct)
   ▼
 RabbitMQ exchange: artemis.ingestion
   │
-  ├──► queue: artemis.ingestion.fetch-and-parse   (fetch_and_parse tasks)
-  └──► queue: artemis.ingestion.index             (index tasks)
+  ├──► queue: artemis.ingestion.parse        (ingest + parse sub-chain tasks)
+  ├──► queue: artemis.ingestion.parse.long   (submit_chunk)
+  └──► queue: artemis.ingestion.index        (index tasks)
 ```
 
 **Why two CSAS hops?**
@@ -84,62 +84,44 @@ conversion error) and `JsonConverter` on the key (to read the task_id struct).
 
 ---
 
-## Topology B: Celery Result CDC → DB Tables
+## Topology B: Task State CDC → `ingested_objects`
 
-When `tasks.index` or `tasks.delete_document` completes, the result is stored in
-`apollo_celery_taskmeta`. Debezium reads the PostgreSQL WAL and produces a CDC event. ksqlDB
-filters and reshapes the event into two output streams that feed JDBC sinks.
+The controller worker keeps one `ingestion_status` row per contract `task_id` and updates it in
+place as the document moves through the pipeline. Debezium reads those writes from the
+PostgreSQL WAL, and ksqlDB turns the two terminal successes into upserts and deletes on
+`ingested_objects`.
+
+Task state does not go through this pipeline. The storage service reads `ingestion_status`
+directly, so `GET /namespaces/{id}/tasks/{task_id}` shows the live stage.
 
 ```
-apollo_celery_taskmeta (PostgreSQL, wal_level=logical, REPLICA IDENTITY FULL)
+ingestion_status (PostgreSQL, wal_level=logical, default replica identity)
   │
   ▼ Debezium PostgreSQL source connector
-  │  Captures: public.apollo_celery_taskmeta
+  │  Captures: public.ingestion_status
   │  SMT: ExtractNewRecordState (unwraps Debezium envelope to flat row)
   │  Plugin: pgoutput
   │
   ▼
-apollo.ingestion.celery.results.public.apollo_celery_taskmeta
-  │  Fields: task_id, name, status, result (JSON string), date_done (μs BIGINT), traceback
+apollo.ingestion.celery.results.public.ingestion_status
+  │  Fields: task_id, namespace_id, obj_id, source, object_type, content_type, size_bytes,
+  │          group_id, operation, stage, status, failure_reason, updated_at (μs BIGINT)
   │
-  ▼ Source stream: artemis-celery-taskmeta
+  ▼ Source stream: artemis-ingestion-status
   │
-  ├──► Fan-out A (SUCCESS, tasks.index)
+  ├──► Fan-out A (index succeeded)
   │    CSAS: artemis-celery-ingested-objects
-  │    • Filters: name='tasks.index' AND status='SUCCESS'
-  │    • Extracts from result JSON: id, namespace_id, source, object_type, content_type,
-  │      size_bytes (CAST to BIGINT), group_id (null guard for JSON "null" string)
+  │    • Filters: stage='tasks.index' AND status='success'
+  │    • Projects: namespace_id, source, object_type, content_type, size_bytes, group_id
   │    • Key: STRUCT(id := obj_id)
   │    ▼
   │    artemis.celery.ingested_objects   (JSON_SR value + JSON_SR key)
   │    ▼
-  │    Debezium JDBC Sink → ingested_objects (upsert, pk.mode=record_value, pk.fields=id)
+  │    Debezium JDBC Sink → ingested_objects (upsert, pk.mode=record_key, pk.fields=id)
   │
-  ├──► Fan-out B (SUCCESS, tasks.index)
-  │    INSERT INTO: artemis-celery-ingestion-tasks
-  │    • Filters: name='tasks.index' AND status='SUCCESS'
-  │    • Extracts: task_id (from result.task_id — the CONTRACT id, not the row's task_id),
-  │      obj_id, namespace_id, status, FROM_UNIXTIME(date_done/1000) as completed_at,
-  │      operation, failure_reason=NULL
-  │    • Key: STRUCT(task_id := result.task_id)
-  │    ▼
-  │    artemis.celery.ingestion_tasks   (JSON_SR value + JSON_SR key)
-  │    ▼
-  │    Debezium JDBC Sink → ingestion_tasks (upsert, pk.mode=record_key, pk.fields=task_id)
-  │
-  ├──► Fan-out C (SUCCESS, tasks.delete_document)
-  │    INSERT INTO: artemis-celery-ingestion-tasks
-  │    • Same fields as Fan-out B; operation='DELETE'
-  │
-  ├──► Fan-out D (FAILURE, tasks.fetch_and_parse / tasks.index / tasks.delete_document)
-  │    INSERT INTO: artemis-celery-ingestion-tasks
-  │    • Filters: status='FAILURE' AND task_id IS NOT NULL (guard — see below)
-  │    • Extracts: failure_reason from result.failure_reason (FailureRecord field)
-  │    • Guard: EXTRACTJSONFIELD(result, '$.task_id') IS NOT NULL
-  │      Drops the pre-overwrite exception-encoded row; passes only the FailureRecord overwrite
-  │
-  └──► Tombstone fan-out (SUCCESS, tasks.delete_document)
+  └──► Tombstone fan-out (delete succeeded)
        CSAS: artemis-celery-ingested-objects-deletes
+       • Filters: stage='tasks.delete_document' AND status='success'
        • Same output topic as Fan-out A: artemis.celery.ingested_objects
        • VALUE_FORMAT='KAFKA' + CAST(NULL AS VARCHAR) → null-value tombstone record
        • Key: STRUCT(id := obj_id)
@@ -147,21 +129,17 @@ apollo.ingestion.celery.results.public.apollo_celery_taskmeta
        Debezium JDBC Sink (delete.enabled=true) → DELETEs ingested_objects row by key
 ```
 
-**Failure recording mechanism:**
+**Failure recording:**
 
-Celery's `mark_as_failure` writes `{exc_type, exc_message, exc_module}` to `result` first.
-`FailureRecordingTask.on_failure()` then overwrites the same row with a `FailureRecord` JSON
-(contract `task_id`, namespace_id, failure_reason) and nulls the traceback column. Debezium
-emits two CDC events for the same row (the two writes). The guard
-`EXTRACTJSONFIELD(result, '$.task_id') IS NOT NULL` ensures only the second (FailureRecord)
-event reaches the JDBC sink.
+`OutboxTask.on_failure()` sets `status='failure'` and `failure_reason` on the same row. No
+fan-out matches a failure, so nothing reaches `ingested_objects`. Callers see the failure through
+the direct read.
 
-**Why `result.task_id` ≠ `taskmeta.task_id`:**
+**Why the row is keyed by the contract `task_id`:**
 
-`apollo_celery_taskmeta.task_id` is the Celery UUID of the specific subtask (`tasks.index`).
-The caller was given the UUID of the entry task (`tasks.ingest`), which is propagated down
-the chain as a kwarg and embedded in `IngestionResult.task_id`. Keying the `ingestion_tasks`
-row by `result.task_id` is what makes `GET /tasks/{task_id}` resolvable.
+Each subtask has its own Celery UUID, but the caller only holds the UUID of the entry task
+(`tasks.ingest`). That id is passed down the chain as a kwarg, and `OutboxTask` uses it for
+every write, which is what makes `GET /namespaces/{id}/tasks/{task_id}` resolvable at any stage.
 
 ---
 
@@ -230,7 +208,7 @@ SELECT foo AS bar, foo AS partition_key ... PARTITION BY foo
 
 **Debezium encodes PostgreSQL TIMESTAMP as microseconds since epoch (BIGINT):**
 ```sql
-FROM_UNIXTIME(date_done / 1000)  -- divide by 1000 to convert μs → ms → datetime
+FROM_UNIXTIME(updated_at / 1000)  -- divide by 1000 to convert μs → ms → datetime
 ```
 
 **JSON_SR is required for JDBC sink:** the JDBC sink's Debezium NPE guard requires a schema

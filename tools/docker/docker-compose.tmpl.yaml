@@ -249,6 +249,44 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
     networks:
       - default
+  # submit_chunk only (see celery.py): one slot, so at most one inline
+  # DoclingDocument upload at a time, and polls never wait behind one.
+  backend-controller-parse-long-worker:
+    profiles: [backend]
+    image: artemis/backend-controller-worker:{ARTEMIS_TAG_LATEST}
+    command: ["--queues", "artemis.ingestion.parse.long", "--concurrency", "1", "--prefetch-multiplier", "1"]
+    restart: unless-stopped
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      artemis-db-migrations:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: artemis
+      RABBITMQ_PASSWORD: artemis
+      RABBITMQ_VHOST: artemis
+      SQL_DB_HOST: postgres
+      SQL_DB_PORT: 5432
+      SQL_DB_USER: postgres
+      SQL_DB_PASSWORD: testpass
+      SQL_DB_DATABASE: documents
+      SQL_DRIVER: postgresql+psycopg
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_SECURE: false
+      EXCHANGE_NAME: ingestion_test0
+      INGESTION_SERVICE_URL: http://backend-indexing-ingestion:10000
+      PARSING_SERVICE_URL: http://backend-parsing:10001
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+    networks:
+      - default
   backend-controller-index-worker:
     profiles: [backend]
     image: artemis/backend-controller-worker:{ARTEMIS_TAG_LATEST}
@@ -985,9 +1023,14 @@ volumes:
 configs:
   rabbitmq-conf:
     content: |
-      # 30-minute consumer timeout. Aligned to HTTPX_TIMEOUT (1800s) for the
-      # blocking indexing call (TEI embed + Qdrant write for large documents).
-      consumer_timeout = 1800000
+      # 2-hour consumer timeout. A worker's countdown retries stay unacked
+      # while they wait for a busy slot, so this must exceed twice the
+      # longest call on any worker plus its longest retry countdown: the
+      # index worker's HTTPX_TIMEOUT (1800s) gives ~64 min, the parse-long
+      # worker's chunk submit (1500s) ~56 min. On a breach RabbitMQ requeues
+      # every unacked message on the channel, so acks_late tasks still
+      # running get delivered (and run) a second time.
+      consumer_timeout = 7200000
   jaeger-config:
     content: |
       service:

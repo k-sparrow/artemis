@@ -37,7 +37,7 @@ the Kafka pipeline.
 | Method | Path | Description | Response |
 |--------|------|-------------|----------|
 | `GET` | `/namespaces/{id}/tasks` | List ingestion tasks for namespace | `200 [TaskResponse]` |
-| `GET` | `/tasks/{task_id}` | Single task status | `200 TaskResponse` |
+| `GET` | `/namespaces/{id}/tasks/{task_id}` | Single task status | `200 TaskResponse` |
 
 ---
 
@@ -91,11 +91,14 @@ The storage service owns these tables (defined in `src/backend/storage/api/model
 - `owner` — thin ownership anchor; soft-delete trigger cascades to namespaces
 - `namespace` — core isolation unit (PRIVATE / SHARED)
 - `ingested_objects` — read-only from storage service perspective; written by JDBC sink
-- `ingestion_tasks` — read-only from storage service perspective; written by JDBC sink
 
-The `ingested_objects` and `ingestion_tasks` tables have no FK to `namespace` at the DB
-level (FK dropped in migration 0004); storage service queries them with explicit WHERE
-filters.
+It also reads `ingestion_status`, a model shared from `src/lib/core/ingestion/models.py` and
+written only by the controller worker. The task endpoints read this table directly rather than
+through CDC, so they show the live stage of a running task.
+
+`ingested_objects` and `ingestion_status` have no FK to `namespace` at the DB level (the
+`ingested_objects` FK was dropped in migration 0004); storage service queries them with explicit
+WHERE filters.
 
 ---
 

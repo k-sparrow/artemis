@@ -33,12 +33,9 @@ one-shot containers after ksqlDB passes its health check.
 
 | Stream / Statement | Source | Output topic | Purpose |
 |-------------------|--------|--------------|---------|
-| `artemis-celery-taskmeta` | `apollo.ingestion.celery.results.*` | — | Source: Debezium CDC rows |
-| `artemis-celery-ingested-objects` | ← above | `artemis.celery.ingested_objects` | SUCCESS events; key=obj_id; JDBC sink → ingested_objects |
-| `artemis-celery-ingestion-tasks` | ← above | `artemis.celery.ingestion_tasks` | SUCCESS tasks.index; key=contract task_id |
-| INSERT INTO ingestion_tasks | ← above | same | SUCCESS tasks.delete_document |
-| INSERT INTO ingestion_tasks | ← above | same | FAILURE tasks.* (with task_id IS NOT NULL guard) |
-| `artemis-celery-ingested-objects-deletes` | ← above | `artemis.celery.ingested_objects` | Tombstones for delete_document SUCCESS; KAFKA null value |
+| `artemis-ingestion-status` | `apollo.ingestion.celery.results.public.ingestion_status` | — | Source: Debezium CDC rows from `ingestion_status` |
+| `artemis-celery-ingested-objects` | ← above | `artemis.celery.ingested_objects` | `tasks.index` success; key=obj_id; JDBC sink → ingested_objects |
+| `artemis-celery-ingested-objects-deletes` | ← above | `artemis.celery.ingested_objects` | Tombstones for `tasks.delete_document` success; KAFKA null value |
 
 **Topology C (enterprise connectors → intake):**
 
@@ -80,7 +77,7 @@ PostgreSQL `TIMESTAMP` columns are encoded by Debezium as `BIGINT` (microseconds
 epoch). Convert when projecting:
 
 ```sql
-FROM_UNIXTIME(date_done / 1000)   -- divide by 1000: μs → ms → DATETIME
+FROM_UNIXTIME(updated_at / 1000)   -- divide by 1000: μs → ms → DATETIME
 ```
 
 ### JSON_SR Required for JDBC Sink
@@ -103,7 +100,7 @@ across restarts:
 
 ```sql
 CREATE OR REPLACE STREAM `artemis-ingestion-storage-s3` ...   -- OK: reads from pre-existing topic
-CREATE STREAM IF NOT EXISTS `artemis-celery-taskmeta` ...      -- OK: source stream, topic pre-exists
+CREATE STREAM IF NOT EXISTS `my-source-stream` ...             -- OK: source stream, topic pre-exists
 ```
 
 ### The Only Way to Produce an Empty Array
