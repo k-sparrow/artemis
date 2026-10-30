@@ -681,6 +681,18 @@ def submit_parse(
                 countdown=parsing_breaker.reset_timeout + 5 + jitter,
                 max_retries=20,
             )
+        except httpx.TransportError as exc:
+            # Refused or dropped connection (typically the parsing service
+            # restarting) or a timeout — nothing says the document itself is
+            # bad, so retry on the 5xx schedule. A timed-out attempt may still
+            # have started a conversion; the repeat starts a second one of the
+            # same document.
+            backoff = min(120, 2**self.request.retries)
+            raise self.retry(
+                exc=exc,
+                countdown=backoff + random.uniform(0, backoff),
+                max_retries=20,
+            )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 429:
                 # docling-serve's Ray task queue is full — expected
@@ -794,6 +806,17 @@ def poll_parse(
         raise self.retry(
             exc=exc,
             countdown=parsing_breaker.reset_timeout + 5 + jitter,
+            max_retries=1440,
+        )
+    except httpx.TransportError as exc:
+        # A refused, dropped or timed-out status check (e.g. the parsing
+        # service restarting mid-poll) says nothing about the conversion
+        # itself — keep polling rather than failing the document.
+        _poll_attempts.add(1, {"poll_task": "poll_parse", "outcome": "transport_retry"})
+        backoff = min(120, 2**self.request.retries)
+        raise self.retry(
+            exc=exc,
+            countdown=backoff + random.uniform(0, backoff),
             max_retries=1440,
         )
     except httpx.HTTPStatusError as exc:

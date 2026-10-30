@@ -88,9 +88,9 @@ uvicorn src.backend.enterprise.data_sources.api.main:app --host 0.0.0.0 --port 9
 # MCP server (port 11000)
 uvicorn src.backend.mcp.api.main:app --host 0.0.0.0 --port 11000
 
-# Controller worker (both queues)
+# Controller worker (all queues)
 celery -A src.backend.controller.worker.celery worker \
-  --queues artemis.ingestion.fetch-and-parse,artemis.ingestion.index --loglevel=info
+  --queues artemis.ingestion.parse,artemis.ingestion.parse.long,artemis.ingestion.index --loglevel=info
 ```
 
 ---

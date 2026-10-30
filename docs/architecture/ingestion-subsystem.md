@@ -92,20 +92,23 @@ the `ingestion_tasks` table.
 
 ## Task Routing
 
-The controller worker declares two durable RabbitMQ queues with different scaling profiles:
+The controller worker declares three durable RabbitMQ queues with different scaling profiles:
 
 | Queue | Worker | Concurrency | Tasks | Scale driver |
 |-------|--------|-------------|-------|--------------|
-| `artemis.ingestion.parse` | `backend-controller-parse-worker` | 3 | `tasks.ingest`, `tasks.parse`, `tasks.submit_parse`, `tasks.poll_parse`, `tasks.resolve_parse`, `tasks.submit_chunk`, `tasks.poll_chunk` | HTTP (Docling Serve async API) |
+| `artemis.ingestion.parse` | `backend-controller-parse-worker` | 3 | `tasks.ingest`, `tasks.parse`, `tasks.submit_parse`, `tasks.poll_parse`, `tasks.resolve_parse`, `tasks.poll_chunk` | HTTP (Docling Serve async API) |
+| `artemis.ingestion.parse.long` | `backend-controller-parse-long-worker` | 1 | `tasks.submit_chunk` | Inline DoclingDocument upload (size-dependent) |
 | `artemis.ingestion.index` | `backend-controller-index-worker` | 1 | `tasks.index`, `tasks.delete_document`, `tasks.delete_namespace` | I/O (TEI + Qdrant + Postgres) |
 
 `tasks.ingest` (entry point dispatched by the RabbitMQ sink) lands on the `parse` queue
 so chain dispatch is co-located with the first parse task. Parse worker threads are never
 blocked for the duration of a Docling job — each thread either makes a single short HTTP
-call or sleeps in `self.retry()`. The `index` queue remains serial (`concurrency=1`)
-because the indexing service drives the GPU-bound TEI embedding model.
+call or sleeps in `self.retry()`. `submit_chunk`, whose call can block for minutes on a very
+large document, runs on its own one-slot `parse.long` worker so polls never wait behind it.
+The `index` queue remains serial (`concurrency=1`) because the indexing service drives the
+GPU-bound TEI embedding model.
 
-Both queues share the same RabbitMQ exchange (`artemis.ingestion`, direct type).
+All three queues share the same RabbitMQ exchange (`artemis.ingestion`, direct type).
 
 ---
 

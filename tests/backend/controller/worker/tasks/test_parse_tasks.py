@@ -276,6 +276,24 @@ class TestSubmitParse:
             self._run(mock_submit)
         assert exc_info.value.response.status_code == 422
 
+    def test_connect_error_schedules_retry(self) -> None:
+        """A refused connection (parsing service restarting) must retry on
+        the 5xx schedule, not fail the document."""
+        mock_submit = MagicMock(side_effect=httpx.ConnectError("refused"))
+        with (
+            patch("src.backend.controller.worker.tasks.call_parse_submit", mock_submit),
+            patch("src.backend.controller.worker.tasks.claims.ensure_stage_row"),
+            patch(
+                "src.backend.controller.worker.tasks.SessionLocal",
+                return_value=MagicMock(),
+            ),
+            patch.object(submit_parse, "retry", side_effect=Retry) as mock_retry,
+        ):
+            with pytest.raises(Retry):
+                submit_parse.run(_SUBMIT_PARSE_S3, **_SUBMIT_PARSE_KWARGS)
+
+        assert mock_retry.call_args.kwargs["max_retries"] == 20
+
 
 # ---------------------------------------------------------------------------
 # poll_parse
@@ -364,6 +382,17 @@ class TestPollParse:
         with pytest.raises(httpx.HTTPStatusError) as exc_info:
             self._run(mock)
         assert exc_info.value.response.status_code == 422
+
+    def test_transport_error_schedules_retry(self) -> None:
+        """A refused or dropped status check (parsing service restarting
+        mid-poll) says nothing about the conversion — it must keep polling
+        on the 1440 budget, not fail the document."""
+        mock = MagicMock(side_effect=httpx.ConnectError("refused"))
+        with patch.object(poll_parse, "retry", side_effect=Retry) as mock_retry:
+            with pytest.raises(Retry):
+                self._run(mock)
+
+        assert mock_retry.call_args.kwargs["max_retries"] == 1440
 
     def test_backfill_db_error_schedules_retry(self) -> None:
         """The docling_task_id backfill (this task's first line) is its own

@@ -116,10 +116,12 @@ Chunking is a fully decoupled stage from conversion in the parsing service (Epic
 it happens after `/v1/parse/resolve` has written the converted `DoclingDocument` to its
 replay cache, via a separate `/v1/chunk/submit` call. Like convert, no chunk endpoint can
 actually take an S3 source either (`BaseChunkDocumentsRequest.sources` has the identical
-`FileSourceRequest | HttpSourceRequest`-only restriction, and there's no batch variant of
-`/v1/chunk/*/source/async` to even attempt the Ray-fanout workaround with — this docling-serve
-version has no chunk batch endpoint at all). So the parsing service reads the replay-cached
-`DoclingDocument` itself and submits it inline:
+`FileSourceRequest | HttpSourceRequest`-only restriction, and there is no chunk batch
+endpoint). Conversion itself can chunk — `/v1/convert/source/batch` with `chunks` in
+`to_formats` writes a `.chunks.jsonl` to the S3 target, and upstream plans to deprecate
+`/v1/chunk/*` in its favour — but that folds chunking back into conversion, so it isn't used
+yet. The parsing service reads the replay-cached `DoclingDocument` itself and submits it
+inline:
 
 ```
 POST /v1/chunk/hybrid/file/async

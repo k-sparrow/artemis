@@ -15,13 +15,19 @@ service. It does not serve HTTP requests.
 
 | Queue | Worker | Concurrency | Tasks |
 |-------|--------|-------------|-------|
-| `artemis.ingestion.parse` | `backend-controller-parse-worker` | 3 | `tasks.ingest`, `tasks.parse`, `tasks.submit_parse`, `tasks.poll_parse`, `tasks.resolve_parse`, `tasks.submit_chunk`, `tasks.poll_chunk` |
+| `artemis.ingestion.parse` | `backend-controller-parse-worker` | 3 | `tasks.ingest`, `tasks.parse`, `tasks.submit_parse`, `tasks.poll_parse`, `tasks.resolve_parse`, `tasks.poll_chunk` |
+| `artemis.ingestion.parse.long` | `backend-controller-parse-long-worker` | 1 | `tasks.submit_chunk` |
 | `artemis.ingestion.index` | `backend-controller-index-worker` | 1 | `tasks.index`, `tasks.delete_document`, `tasks.delete_namespace` |
 
 The parse worker runs at `concurrency=3` with `prefetch_multiplier=1` — three Celery
 threads can each hold a task, but each thread either makes a single short HTTP call
-(submit, status, resolve, chunk submit, chunk finalize) or is sleeping in `self.retry()`.
+(submit, status, resolve, chunk finalize) or is sleeping in `self.retry()`.
 No thread blocks for the full duration of a Docling job.
+
+`submit_chunk` is the exception: the parsing service uploads the whole DoclingDocument to
+docling-serve inline, so one call can block for minutes on a very large document. It runs
+on its own one-slot worker, which keeps polls from waiting behind it and caps those uploads
+at one at a time.
 
 The index worker remains serial (`concurrency=1`) because the indexing service calls
 the TEI embedding model, which is GPU-bound and not safely parallelised from a single host.
@@ -112,10 +118,11 @@ it does not submit a chunk job. Returns `ResolveResult {obj_id}`.
 
 ### `submit_chunk`
 
-Calls `POST /v1/chunk/submit`. The parsing service hands docling-serve the replay-cache S3
-location directly (no document bytes cross this task or the parsing-service call). Same
-retry structure as `submit_parse` (`max_retries=20`). Returns
-`ChunkSubmitResult {chunking_task_id, obj_id}`.
+Calls `POST /v1/chunk/submit`. No document bytes cross this task, but the parsing service
+reads the replay cache and uploads it to docling-serve inline (no chunk endpoint takes an S3
+source), so the call's duration grows with document size — hence its own
+`artemis.ingestion.parse.long` queue. Same retry structure as `submit_parse`
+(`max_retries=20`). Returns `ChunkSubmitResult {chunking_task_id, obj_id}`.
 
 ### `poll_chunk`
 
@@ -138,7 +145,7 @@ All tasks use manual `try/except` blocks. Each exception type has a different ba
 |-----------|-----------|-----------|-------------|
 | `httpx.HTTPStatusError` 5xx | Transient upstream failure — retry | `min(120, 2^n) + jitter([0, backoff])` | 20 (parse sub-tasks), scalable for poll tasks |
 | `pybreaker.CircuitBreakerError` | Breaker open — wait for reset window | `reset_timeout + 5s + jitter([0, 30s])` = 125–155 s | same as above |
-| `httpx.TransportError` (timeout, dropped connection) | Retry on the 5xx schedule — `resolve_parse`, `submit_chunk`, `poll_chunk` only; elsewhere it still propagates | `min(120, 2^n) + jitter([0, backoff])` | same as above |
+| `httpx.TransportError` (timeout, refused or dropped connection) | Retry on the 5xx schedule — every parse sub-task | `min(120, 2^n) + jitter([0, backoff])` | same as above |
 | `httpx.HTTPStatusError` 4xx | Permanent failure — propagate | — | — |
 
 `poll_parse` and `poll_chunk` use `max_retries=1440` (≈ 24 h). All other parse tasks

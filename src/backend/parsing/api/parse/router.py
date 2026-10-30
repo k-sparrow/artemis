@@ -307,7 +307,7 @@ async def submit_endpoint(
             filename=in_name,
             content_type=in_type,
             callbacks=callbacks,
-            timeout=120.0,
+            timeout=settings.DOCLING_SUBMIT_TIMEOUT,
         )
     else:
         mode = "source"
@@ -334,7 +334,7 @@ async def submit_endpoint(
             target_bucket=settings.REPLAY_CACHE_BUCKET,
             target_key_prefix=service.convert_scratch_prefix(obj_id),
             callbacks=callbacks,
-            timeout=120.0,
+            timeout=settings.DOCLING_SUBMIT_TIMEOUT,
         )
 
     logger.info("submit_queued", obj_id=obj_id, parsing_task_id=task_id)
@@ -584,10 +584,11 @@ async def chunk_submit_endpoint(
 
     Must only be called after /v1/parse/resolve has written the replay cache
     for this obj_id. No chunk endpoint in docling-serve v1.29.0 accepts an S3
-    source (same schema-level 422 as convert's non-batch endpoint, and there's
-    no batch variant for chunk to work around it with — see submit_endpoint's
-    docstring), so this service reads the replay-cached JSON itself and
-    submits it inline.
+    source (same schema-level 422 as convert's non-batch endpoint — see
+    submit_endpoint's docstring), so this service reads the replay-cached
+    JSON itself and submits it inline. Convert's batch endpoint could chunk
+    during conversion instead (see DoclingParseClient.submit_chunk); this
+    endpoint keeps chunking a separate stage.
 
     Poll GET /v1/chunk/status/{task_id} until "success", then call
     POST /v1/chunk/finalize.
