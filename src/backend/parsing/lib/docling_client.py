@@ -79,25 +79,59 @@ class DoclingParseClient:
         fails instantly under the Ray engine (fixed upstream bug, not a
         schema/policy issue).
         """
+        # BatchConvertSourcesRequest.options defaults to to_formats=["md"]
+        # (docling.datamodel.service.options.ConvertDocumentsOptions) --
+        # without this, docling-serve writes a Markdown file to the S3Target
+        # instead of the JSON this client/resolve_endpoint expects.
+        # Markdown is requested as well, with our page-break sentinel, so
+        # resolve_endpoint can derive pages from that small file instead
+        # of loading the whole DoclingDocument JSON.
+        options = {
+            "to_formats": ["json", "md"],
+            "md_page_break_placeholder": PAGE_BREAK_PLACEHOLDER,
+        }
+        return await self._submit_batch(
+            options,
+            s3_endpoint=s3_endpoint,
+            s3_access_key=s3_access_key,
+            s3_secret_key=s3_secret_key,
+            s3_secure=s3_secure,
+            bucket=bucket,
+            key=key,
+            target_bucket=target_bucket,
+            target_key_prefix=target_key_prefix,
+            callbacks=callbacks,
+            timeout=timeout,
+        )
+
+    async def _submit_batch(
+        self,
+        options: dict,
+        *,
+        s3_endpoint: str,
+        s3_access_key: str,
+        s3_secret_key: str,
+        s3_secure: bool,
+        bucket: str,
+        key: str,
+        target_bucket: str,
+        target_key_prefix: str,
+        callbacks: list[dict] | None = None,
+        timeout: float,
+    ) -> str:
+        """POST /v1/convert/source/batch for one S3 object → task_id."""
+        s3 = {
+            "kind": "s3",
+            "endpoint": s3_endpoint,
+            "access_key": s3_access_key,
+            "secret_key": s3_secret_key,
+            "verify_ssl": s3_secure,
+        }
         body = {
-            # BatchConvertSourcesRequest.options defaults to to_formats=["md"]
-            # (docling.datamodel.service.options.ConvertDocumentsOptions) --
-            # without this, docling-serve writes a Markdown file to the S3Target
-            # instead of the JSON this client/resolve_endpoint expects.
-            # Markdown is requested as well, with our page-break sentinel, so
-            # resolve_endpoint can derive pages from that small file instead
-            # of loading the whole DoclingDocument JSON.
-            "options": {
-                "to_formats": ["json", "md"],
-                "md_page_break_placeholder": PAGE_BREAK_PLACEHOLDER,
-            },
+            "options": options,
             "sources": [
                 {
-                    "kind": "s3",
-                    "endpoint": s3_endpoint,
-                    "access_key": s3_access_key,
-                    "secret_key": s3_secret_key,
-                    "verify_ssl": s3_secure,
+                    **s3,
                     "bucket": bucket,
                     "key_prefix": key,
                     # Defensive cap: this dispatch always targets exactly one
@@ -105,15 +139,7 @@ class DoclingParseClient:
                     "max_num_elements": 1,
                 }
             ],
-            "target": {
-                "kind": "s3",
-                "endpoint": s3_endpoint,
-                "access_key": s3_access_key,
-                "secret_key": s3_secret_key,
-                "verify_ssl": s3_secure,
-                "bucket": target_bucket,
-                "key_prefix": target_key_prefix,
-            },
+            "target": {**s3, "bucket": target_bucket, "key_prefix": target_key_prefix},
         }
         if callbacks:
             # BatchConvertSourcesRequest.callbacks: list[CallbackSpec] — fires
@@ -224,45 +250,50 @@ class DoclingParseClient:
         return await asyncio.to_thread(_parse_conversion_result, resp.content)
 
     async def submit_chunk(
-        self, doc_json_bytes: bytes, *, timeout: float = 120.0
+        self,
+        *,
+        s3_endpoint: str,
+        s3_access_key: str,
+        s3_secret_key: str,
+        s3_secure: bool,
+        bucket: str,
+        key: str,
+        target_bucket: str,
+        target_key_prefix: str,
+        timeout: float = 120.0,
     ) -> str:
-        """POST /v1/chunk/hybrid/file/async (JSON_DOCLING input) → task_id.
+        """POST /v1/convert/source/batch, chunks only, for the DoclingDocument
+        JSON at the given S3 location → task_id.
 
-        Uploads the DoclingDocument JSON inline (target=inbody). No
-        /v1/chunk/* endpoint in docling-serve v1.29.0 accepts an S3 source
-        (`BaseChunkDocumentsRequest.sources` is `FileSourceRequest |
-        HttpSourceRequest` only — the same schema-level 422 as convert's
-        non-batch endpoint — and there is no chunk batch endpoint), so the
-        caller reads the replay-cached DoclingDocument JSON itself and passes
-        the bytes here.
+        This is the convert endpoint rather than /v1/chunk/*, which has no S3
+        source and can't take a large document inline: docling-jobkit
+        base64-encodes an upload into one Redis command, and Redis refuses
+        that past 512 MiB, a document of about 400 MB. Here the queued task
+        only carries S3 coordinates, and the chunks land in the target as
+        ``<target_key_prefix><input hash>/<stem>.chunks.jsonl``.
 
-        That same version can also chunk during conversion:
-        /v1/convert/source/batch accepts ``chunks`` in ``to_formats`` and
-        writes a ``.chunks.jsonl`` to its S3 target, which would remove this
-        inline upload. Not used yet because chunking is its own stage after
-        resolve here (Epic 21 §21.8).
+        ``chunking_options`` is set rather than left to a preset because
+        ``{"chunker": "hybrid"}`` is exactly what /v1/chunk/hybrid applies by
+        default.
+
+        A successful task doesn't prove that file exists: when the chunker
+        fails to start, docling-serve still reports success and writes
+        nothing (see ``router.chunk_finalize_endpoint``).
         """
-        async with httpx.AsyncClient(
-            base_url=self._base_url, timeout=timeout
-        ) as client:
-            resp = await client.post(
-                "/v1/chunk/hybrid/file/async",
-                files={"files": ("doc.json", doc_json_bytes, "application/json")},
-            )
-            resp.raise_for_status()
-            return resp.json()["task_id"]
-
-    async def fetch_chunk_result(self, task_id: str, *, timeout: float = 60.0) -> bytes:
-        """GET /v1/result/{task_id} → the raw result body.
-
-        A JSON object whose ``chunks`` is the list of
-        ChunkedDocumentResultItem dicts. Returned unparsed: the body grows
-        with the document, so the caller decodes it off the event loop along
-        with the rest of its CPU work (see ``service.build_artifact``).
-        """
-        async with httpx.AsyncClient(
-            base_url=self._base_url, timeout=timeout
-        ) as client:
-            resp = await client.get(f"/v1/result/{task_id}")
-            resp.raise_for_status()
-            return resp.content
+        options = {
+            "from_formats": ["json_docling"],
+            "to_formats": ["chunks"],
+            "chunking_options": {"chunker": "hybrid"},
+        }
+        return await self._submit_batch(
+            options,
+            s3_endpoint=s3_endpoint,
+            s3_access_key=s3_access_key,
+            s3_secret_key=s3_secret_key,
+            s3_secure=s3_secure,
+            bucket=bucket,
+            key=key,
+            target_bucket=target_bucket,
+            target_key_prefix=target_key_prefix,
+            timeout=timeout,
+        )

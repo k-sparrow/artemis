@@ -1028,14 +1028,14 @@ def submit_chunk(
 
     Calls POST /v1/chunk/submit and returns the ChunkSubmitResult dict. A
     fully separate stage from resolve_parse (Epic 21). No document bytes pass
-    through this task, but the parsing service uploads the replay cache to
-    docling-serve inline, so the call's duration scales with document size.
+    through this task or the parsing service: docling-serve reads the replay
+    cache from S3.
     """
     try:
         result = call_chunk_submit(
             resolve_result=resolve_result,
             parsing_url=settings.PARSING_SERVICE_URL,
-            timeout=settings.PARSING_CHUNK_SUBMIT_TIMEOUT,
+            timeout=settings.PARSING_SUBMIT_TIMEOUT,
             logger=logger,
         )
         result["submitted_at"] = time.time()

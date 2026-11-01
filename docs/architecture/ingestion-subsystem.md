@@ -94,23 +94,20 @@ tables also live here, for information only.
 
 ## Task Routing
 
-The controller worker declares three durable RabbitMQ queues with different scaling profiles:
+The controller worker declares two durable RabbitMQ queues with different scaling profiles:
 
 | Queue | Worker | Concurrency | Tasks | Scale driver |
 |-------|--------|-------------|-------|--------------|
-| `artemis.ingestion.parse` | `backend-controller-parse-worker` | 3 | `tasks.ingest`, `tasks.parse`, `tasks.submit_parse`, `tasks.poll_parse`, `tasks.advance_from_callback`, `tasks.resolve_parse`, `tasks.poll_chunk` | HTTP (Docling Serve async API) |
-| `artemis.ingestion.parse.long` | `backend-controller-parse-long-worker` | 1 | `tasks.submit_chunk` | Inline DoclingDocument upload (size-dependent) |
+| `artemis.ingestion.parse` | `backend-controller-parse-worker` | 3 | `tasks.ingest`, `tasks.parse`, `tasks.submit_parse`, `tasks.poll_parse`, `tasks.advance_from_callback`, `tasks.resolve_parse`, `tasks.submit_chunk`, `tasks.poll_chunk` | HTTP (Docling Serve async API) |
 | `artemis.ingestion.index` | `backend-controller-index-worker` | 1 | `tasks.index`, `tasks.delete_document`, `tasks.delete_namespace` | I/O (TEI + Qdrant + Postgres) |
 
 `tasks.ingest` (entry point dispatched by the RabbitMQ sink) lands on the `parse` queue
 so chain dispatch is co-located with the first parse task. Parse worker slots are never
 held for the duration of a Docling job: a slot makes one short HTTP call, and a task waiting
-on a `self.retry()` countdown holds no slot. `submit_chunk`, whose call can block for minutes
-on a very large document, runs on its own one-slot `parse.long` worker so polls never wait
-behind it. The `index` queue remains serial (`concurrency=1`) because the indexing service
+on a `self.retry()` countdown holds no slot. The `index` queue remains serial (`concurrency=1`) because the indexing service
 drives the GPU-bound TEI embedding model.
 
-All three queues share the same RabbitMQ exchange (`artemis.ingestion`, direct type).
+Both queues share the same RabbitMQ exchange (`artemis.ingestion`, direct type).
 [Controller Worker](../services/controller-worker.md#workers) covers what each worker is for
 and how to scale it.
 
@@ -195,17 +192,16 @@ sequenceDiagram
     note over CW,PS: Chunking is a fully decoupled stage (Epic 21)
 
     CW->>PS: POST /v1/chunk/submit
-    PS->>S3: read replay/{obj_id}.json
-    S3-->>PS: DoclingDocument JSON
-    note over PS,Docling: No chunk endpoint accepts an S3 source — PS sends the bytes inline.
-    PS->>Docling: POST /v1/chunk/hybrid/file/async {files: <bytes>}
+    note over PS,Docling: PS sends S3 coordinates only — the document never passes through PS or Redis.
+    PS->>Docling: POST /v1/convert/source/batch {to_formats: [chunks], sources: [replay/{obj_id}.json]}
     Docling-->>PS: task_id
+    Docling->>S3: read replay/{obj_id}.json, write scratch/chunk/{obj_id}/…/*.chunks.jsonl
     PS-->>CW: ChunkSubmitResult {chunking_task_id}
 
     note over CW,PS: polling omitted for brevity
 
     CW->>PS: POST /v1/chunk/finalize
-    PS->>Docling: GET /v1/result/{chunking_task_id}
+    PS->>S3: read scratch/chunk/{obj_id}/…/*.chunks.jsonl
     PS->>S3: read pages/{obj_id}.json
     PS->>PS: build ParseArtifact (chunks + cached pages)
     PS->>S3: write parse/{obj_id}.json

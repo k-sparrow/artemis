@@ -13,8 +13,7 @@ dev compose: `ingestion_test0`)
 
 | Queue | Celery task(s) | Worker concurrency | Notes |
 |-------|---------------|-------------------|-------|
-| `artemis.ingestion.parse` | `tasks.ingest`, `tasks.parse`, `tasks.submit_parse`, `tasks.poll_parse`, `tasks.advance_from_callback`, `tasks.resolve_parse`, `tasks.poll_chunk` | 3 | Short HTTP calls and countdown polls |
-| `artemis.ingestion.parse.long` | `tasks.submit_chunk` | 1 | The parsing service uploads the whole DoclingDocument inline; one call can take minutes |
+| `artemis.ingestion.parse` | `tasks.ingest`, `tasks.parse`, `tasks.submit_parse`, `tasks.poll_parse`, `tasks.advance_from_callback`, `tasks.resolve_parse`, `tasks.submit_chunk`, `tasks.poll_chunk` | 3 | Short HTTP calls and countdown polls |
 | `artemis.ingestion.index` | `tasks.index`, `tasks.delete_document`, `tasks.delete_namespace` | 1 | TEI + Qdrant + Postgres |
 
 **Task routing** is `task_routes` in `src/backend/controller/worker/celery.py`. Each queue has
@@ -40,7 +39,6 @@ retry countdown**:
 | Worker | Longest call | Longest countdown | Needs more than |
 |--------|-------------|-------------------|-----------------|
 | parse | 300 s (`PARSING_RESOLVE_TIMEOUT`) | ~330 s (429 backpressure) | ~16 min |
-| parse.long | 1500 s (`PARSING_CHUNK_SUBMIT_TIMEOUT`) | ~330 s | ~56 min |
 | index | 1800 s (`HTTPX_TIMEOUT`) | ~240 s (5xx backoff) | ~64 min |
 
 On a breach RabbitMQ closes the channel and requeues every unacknowledged message on it. For

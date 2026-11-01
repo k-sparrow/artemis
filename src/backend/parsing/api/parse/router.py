@@ -93,6 +93,12 @@ def _translate_docling_errors(fn):
                     service="docling-serve",
                     message=f"queue full: {exc.response.text}",
                 ) from exc
+            logger.warning(
+                "docling_request_failed",
+                endpoint=fn.__name__,
+                status_code=exc.response.status_code,
+                body=exc.response.text[:500],
+            )
             if exc.response.status_code < 500:
                 raise DocumentProcessingException(
                     f"docling-serve rejected the request: {exc.response.text}"
@@ -101,6 +107,9 @@ def _translate_docling_errors(fn):
                 service="docling-serve", message=str(exc)
             ) from exc
         except httpx.HTTPError as exc:
+            logger.warning(
+                "docling_request_failed", endpoint=fn.__name__, error=repr(exc)
+            )
             raise UpstreamServiceException(
                 service="docling-serve", message=str(exc)
             ) from exc
@@ -465,7 +474,8 @@ async def resolve_endpoint(
 
     Either way the lossless DoclingDocument JSON ends up in the replay cache
     — used both for citation/re-chunk lookups and as the source
-    /v1/chunk/submit reads — along with the page-level Markdown parents.
+    /v1/chunk/submit points docling-serve at — along with the page-level
+    Markdown parents.
     Chunking is a fully separate stage from here on (Epic 21 §21.8): this
     endpoint never submits a chunk job itself.
 
@@ -579,25 +589,51 @@ async def chunk_submit_endpoint(
     request: ChunkSubmitRequest,
     docling_client: docling_client_dependency,
     blob_store: blob_store_factory_dependency,
+    s3_client: s3_client_dependency,
 ) -> ChunkSubmitResult:
     """Submit the replay-cached DoclingDocument for hybrid chunking.
 
     Must only be called after /v1/parse/resolve has written the replay cache
-    for this obj_id. No chunk endpoint in docling-serve v1.29.0 accepts an S3
-    source (same schema-level 422 as convert's non-batch endpoint — see
-    submit_endpoint's docstring), so this service reads the replay-cached
-    JSON itself and submits it inline. Convert's batch endpoint could chunk
-    during conversion instead (see DoclingParseClient.submit_chunk); this
-    endpoint keeps chunking a separate stage.
+    for this obj_id. The document itself never passes through this service
+    (the claim-check rule, same as source_ref on /v1/parse/submit):
+    docling-serve is only told where the replay JSON is, reads it from S3,
+    and writes the chunks file to this object's scratch prefix. Chunking stays
+    a separate stage from conversion, so a chunking failure never costs the
+    conversion, and a document can be re-chunked from the replay cache.
 
     Poll GET /v1/chunk/status/{task_id} until "success", then call
     POST /v1/chunk/finalize.
     """
     obj_id = request.obj_id
-    replay_store = blob_store(settings.REPLAY_CACHE_BUCKET)
-    replay_bytes = await replay_store.aget(service.replay_key(obj_id))
+    bucket = settings.REPLAY_CACHE_BUCKET
+    replay_store = blob_store(bucket)
+    replay_key = service.replay_key(obj_id)
+    if not await replay_store.aexists(replay_key):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"replay cache does not exist: s3://{bucket}/{replay_key}",
+        )
+
+    # docling-serve names its output after a hash of the input, so a chunks
+    # file left by an earlier version of this object wouldn't be overwritten,
+    # and finalize couldn't tell the two apart.
+    scratch_prefix = service.chunk_scratch_prefix(obj_id)
+    stale_keys = await asyncio.to_thread(
+        _list_s3_result_keys, s3_client, bucket, scratch_prefix, ""
+    )
+    for stale_key in stale_keys:
+        await replay_store.adelete(stale_key)
+
     chunking_task_id = await docling_client.submit_chunk(
-        replay_bytes, timeout=settings.DOCLING_CHUNK_SUBMIT_TIMEOUT
+        s3_endpoint=settings.S3_ENDPOINT,
+        s3_access_key=settings.S3_ACCESS_KEY,
+        s3_secret_key=settings.S3_SECRET_KEY,
+        s3_secure=settings.S3_SECURE,
+        bucket=bucket,
+        key=replay_key,
+        target_bucket=bucket,
+        target_key_prefix=scratch_prefix,
+        timeout=settings.DOCLING_SUBMIT_TIMEOUT,
     )
     logger.info("chunk_submit_queued", obj_id=obj_id, chunking_task_id=chunking_task_id)
     return ChunkSubmitResult(chunking_task_id=chunking_task_id, obj_id=obj_id)
@@ -621,13 +657,12 @@ async def chunk_status_endpoint(
 
 
 @router.post("/v1/chunk/finalize", response_model=BlobRef)
-@_translate_docling_errors
 async def chunk_finalize_endpoint(
     request: ChunkFinalizeRequest,
-    docling_client: docling_client_dependency,
     blob_store: blob_store_factory_dependency,
+    s3_client: s3_client_dependency,
 ) -> BlobRef:
-    """Fetch chunk result, merge with the cached pages, write the final ParseArtifact.
+    """Read the chunks file, merge with the cached pages, write the final ParseArtifact.
 
     Must only be called after /v1/chunk/status/{chunking_task_id} returns
     "success". Reads back the pages /v1/parse/resolve already derived —
@@ -643,10 +678,15 @@ async def chunk_finalize_endpoint(
     whitespace-only), that's a genuine failure — raised here rather than
     silently persisted for indexing to discover later.
 
+    Zero chunks is an empty chunks file. No file at all is different: when
+    the chunker fails to start, docling-serve still reports success and writes
+    nothing, so that's a permanent failure here (400), not a document to
+    split by character count. Retrying can't make the file appear.
+
     Safe to retry, same scheme as /v1/parse/resolve: a marker naming the
-    finalized ``chunking_task_id`` is written after the artifact, and a
-    repeat call for that task returns the existing artifact's BlobRef rather
-    than re-fetching a chunk result docling-serve may have evicted by then.
+    finalized ``chunking_task_id`` is written after the artifact, a repeat
+    call for that task returns the existing artifact's BlobRef, and the
+    scratch file is only deleted after the marker.
     """
     obj_id_str = request.obj_id
     obj_id = uuid.UUID(obj_id_str)
@@ -665,12 +705,28 @@ async def chunk_finalize_endpoint(
         )
         return BlobRef(bucket=settings.PARSED_ARTIFACTS_BUCKET, key=key)
 
-    chunk_result = await docling_client.fetch_chunk_result(
-        request.chunking_task_id,
-        timeout=settings.DOCLING_FINALIZE_TIMEOUT,
+    bucket = settings.REPLAY_CACHE_BUCKET
+    scratch_prefix = service.chunk_scratch_prefix(obj_id_str)
+    chunk_keys = await asyncio.to_thread(
+        _list_s3_result_keys, s3_client, bucket, scratch_prefix, ".chunks.jsonl"
     )
+    if not chunk_keys:
+        logger.error(
+            "chunk_finalize_no_chunks_file",
+            obj_id=obj_id_str,
+            chunking_task_id=request.chunking_task_id,
+            bucket=bucket,
+            prefix=scratch_prefix,
+        )
+        raise DocumentProcessingException(
+            f"docling-serve reported chunking success for task "
+            f"{request.chunking_task_id} but wrote no chunks file under "
+            f"s3://{bucket}/{scratch_prefix}; check the docling-serve logs for "
+            "a chunker error"
+        )
+    chunks_jsonl = await replay_store.aget(chunk_keys[0])
     pages_bytes = await replay_store.aget(service.pages_key(obj_id_str))
-    built = await _run_cpu(service.build_artifact, chunk_result, pages_bytes, obj_id)
+    built = await _run_cpu(service.build_artifact, chunks_jsonl, pages_bytes, obj_id)
     if built.fallback_used:
         logger.info(
             "chunk_finalize_fallback_used",
@@ -680,6 +736,8 @@ async def chunk_finalize_endpoint(
 
     await artifact_store.aput(key, built.data, content_type="application/json")
     await replay_store.aput(marker_key, request.chunking_task_id.encode())
+    for chunk_key in chunk_keys:
+        await replay_store.adelete(chunk_key)
     logger.info(
         "chunk_finalize_completed",
         obj_id=obj_id_str,

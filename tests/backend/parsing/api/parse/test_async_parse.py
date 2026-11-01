@@ -10,9 +10,9 @@ document takes the same single-file submit/resolve path regardless of size.
 Chunking is a fully decoupled stage from conversion (Epic 21 §21.8) —
 /v1/parse/resolve only caches the conversion result (replay JSON + derived
 pages) and returns — it no longer submits a chunk job. /v1/chunk/submit,
-.../status, and .../finalize own that separately, and always stay inline
-(multipart bytes for the source, JSON body for chunk); no chunk endpoint in
-docling-serve v1.29.0 accepts an S3 source, batch or not.
+.../status, and .../finalize own that separately. Like source_ref below,
+chunk submit only hands docling-serve S3 coordinates (the replay JSON in, a
+scratch prefix out); finalize then reads the chunks file docling-serve wrote.
 
 Convert submission (/v1/parse/submit), however, branches on input: ``file``
 stays inline; ``source_ref`` is dispatched S3-direct — this service only
@@ -77,9 +77,15 @@ def _docling_doc_json() -> bytes:
     return _empty_docling_doc().model_dump_json().encode()
 
 
-def _chunk_result(items: list[dict]) -> bytes:
-    """Raw GET /v1/result/{task_id} body for a chunk task."""
-    return json.dumps({"chunks": items}).encode()
+def _chunks_jsonl(items: list[dict]) -> bytes:
+    """The ``.chunks.jsonl`` docling-serve writes to its S3 target."""
+    lines = (json.dumps(item, ensure_ascii=False) + "\n" for item in items)
+    return "".join(lines).encode()
+
+
+def _chunks_key(input_hash: str = "abc123") -> str:
+    prefix = parse_service.chunk_scratch_prefix(OBJ_ID_STR)
+    return f"{prefix}{input_hash}/{OBJ_ID_STR}.chunks.jsonl"
 
 
 def _mock_docling_client() -> MagicMock:
@@ -92,7 +98,6 @@ def _mock_docling_client() -> MagicMock:
     )
     client.fetch_conversion_result = AsyncMock(return_value=_empty_docling_doc())
     client.submit_chunk = AsyncMock(return_value=CHUNK_TASK_ID)
-    client.fetch_chunk_result = AsyncMock(return_value=_chunk_result([_CHUNK_ITEM]))
     return client
 
 
@@ -513,14 +518,12 @@ class TestChunkSubmitEndpoint:
     def seed_replay_cache(self, store: InMemoryBlobStore) -> None:
         store.put(f"replay/{OBJ_ID_STR}.json", _docling_doc_json())
 
-    def test_submits_replay_cache_inline(
+    def test_hands_docling_serve_s3_coordinates(
         self, client: TestClient, docling_client: MagicMock
     ) -> None:
-        """
-        /v1/chunk/submit reads the replay-cached DoclingDocument itself and
-        submits it inline — no docling-serve v1.29.0 endpoint can actually
-        take an S3 source (see module docstring).
-        """
+        """Chunk submit only says where the replay JSON is — the document
+        itself never passes through this service, and so never reaches
+        docling-serve's Redis queue."""
         resp = client.post("/v1/chunk/submit", json={"obj_id": OBJ_ID_STR})
         assert resp.status_code == 200
         assert resp.json() == {
@@ -528,8 +531,42 @@ class TestChunkSubmitEndpoint:
             "obj_id": OBJ_ID_STR,
         }
         docling_client.submit_chunk.assert_awaited_once_with(
-            _docling_doc_json(), timeout=settings.DOCLING_CHUNK_SUBMIT_TIMEOUT
+            s3_endpoint=settings.S3_ENDPOINT,
+            s3_access_key=settings.S3_ACCESS_KEY,
+            s3_secret_key=settings.S3_SECRET_KEY,
+            s3_secure=settings.S3_SECURE,
+            bucket=settings.REPLAY_CACHE_BUCKET,
+            key=f"replay/{OBJ_ID_STR}.json",
+            target_bucket=settings.REPLAY_CACHE_BUCKET,
+            target_key_prefix=parse_service.chunk_scratch_prefix(OBJ_ID_STR),
+            timeout=settings.DOCLING_SUBMIT_TIMEOUT,
         )
+
+    def test_missing_replay_cache_returns_422(
+        self,
+        client: TestClient,
+        docling_client: MagicMock,
+        store: InMemoryBlobStore,
+    ) -> None:
+        store.delete(f"replay/{OBJ_ID_STR}.json")
+
+        resp = client.post("/v1/chunk/submit", json={"obj_id": OBJ_ID_STR})
+
+        assert resp.status_code == 422
+        assert f"replay/{OBJ_ID_STR}.json" in resp.json()["detail"]
+        docling_client.submit_chunk.assert_not_awaited()
+
+    def test_clears_chunks_left_by_an_earlier_version_of_the_object(
+        self, client: TestClient, store: InMemoryBlobStore
+    ) -> None:
+        """The output key holds a hash of the input, so a new version of the
+        object writes next to an old file rather than over it."""
+        store.put(_chunks_key("old-version"), _chunks_jsonl([_CHUNK_ITEM]))
+
+        resp = client.post("/v1/chunk/submit", json={"obj_id": OBJ_ID_STR})
+
+        assert resp.status_code == 200
+        assert not store.exists(_chunks_key("old-version"))
 
 
 # ---------------------------------------------------------------------------
@@ -584,9 +621,12 @@ class TestChunkFinalizeEndpoint:
         ]
         store.put(f"pages/{OBJ_ID_STR}.json", parse_service.encode_pages(pages))
 
-    def test_returns_artifact_blob_ref(
-        self, client: TestClient, docling_client: MagicMock
-    ) -> None:
+    @pytest.fixture(autouse=True)
+    def seed_chunks_file(self, store: InMemoryBlobStore) -> None:
+        """What docling-serve's S3 target leaves for a finished chunk task."""
+        store.put(_chunks_key(), _chunks_jsonl([_CHUNK_ITEM]))
+
+    def test_returns_artifact_blob_ref(self, client: TestClient) -> None:
         resp = client.post("/v1/chunk/finalize", json=self._finalize_body())
         assert resp.status_code == 200
         body = resp.json()
@@ -594,10 +634,7 @@ class TestChunkFinalizeEndpoint:
         assert body["key"] == f"parse/{OBJ_ID_STR}.json"
 
     def test_artifact_written_to_store(
-        self,
-        client: TestClient,
-        docling_client: MagicMock,
-        store: InMemoryBlobStore,
+        self, client: TestClient, store: InMemoryBlobStore
     ) -> None:
         resp = client.post("/v1/chunk/finalize", json=self._finalize_body())
         assert resp.status_code == 200
@@ -609,20 +646,21 @@ class TestChunkFinalizeEndpoint:
         # Pages come from the cache seed_pages_cache wrote, not re-derived here.
         assert artifact["pages"][0]["markdown"] == "# Seeded Page"
 
-    def test_fetch_chunk_result_called_with_correct_task_id(
-        self, client: TestClient, docling_client: MagicMock
+    def test_scratch_file_deleted_after_success(
+        self, client: TestClient, store: InMemoryBlobStore
     ) -> None:
-        client.post("/v1/chunk/finalize", json=self._finalize_body())
-        docling_client.fetch_chunk_result.assert_awaited_once_with(
-            CHUNK_TASK_ID, timeout=settings.DOCLING_FINALIZE_TIMEOUT
+        assert (
+            client.post("/v1/chunk/finalize", json=self._finalize_body()).status_code
+            == 200
         )
+        assert not store.exists(_chunks_key())
 
-    def test_retry_for_same_task_returns_existing_artifact_without_refetch(
-        self, client: TestClient, docling_client: MagicMock
+    def test_retry_for_same_task_returns_existing_artifact(
+        self, client: TestClient
     ) -> None:
         """The worker retries finalize after an HTTP timeout even though the
-        first attempt may have written the artifact. The repeat must not
-        re-fetch the chunk result — docling-serve may no longer hold it."""
+        first attempt may have finished, by which point the scratch file is
+        gone. The repeat must still succeed."""
         first = client.post("/v1/chunk/finalize", json=self._finalize_body())
         assert first.status_code == 200
 
@@ -630,27 +668,37 @@ class TestChunkFinalizeEndpoint:
 
         assert resp.status_code == 200
         assert resp.json() == first.json()
-        docling_client.fetch_chunk_result.assert_awaited_once()
 
-    def test_retry_refetches_when_artifact_is_gone(
-        self,
-        client: TestClient,
-        docling_client: MagicMock,
-        store: InMemoryBlobStore,
+    def test_retry_after_a_partial_attempt_rebuilds_from_the_scratch_file(
+        self, client: TestClient, store: InMemoryBlobStore
     ) -> None:
-        """A marker without its artifact must never yield a BlobRef pointing
-        at nothing."""
-        assert (
-            client.post("/v1/chunk/finalize", json=self._finalize_body()).status_code
-            == 200
+        """An attempt that dies before the marker leaves the scratch file, so
+        the repeat can still build the artifact."""
+        store.put(
+            parse_service.finalized_marker_key(OBJ_ID_STR), b"some-other-chunk-task"
         )
-        store.delete(f"parse/{OBJ_ID_STR}.json")
 
         resp = client.post("/v1/chunk/finalize", json=self._finalize_body())
 
         assert resp.status_code == 200
         assert store.exists(f"parse/{OBJ_ID_STR}.json")
-        assert docling_client.fetch_chunk_result.await_count == 2
+
+    def test_no_chunks_file_is_a_permanent_failure(
+        self, client: TestClient, store: InMemoryBlobStore
+    ) -> None:
+        """docling-serve reports success when the chunker fails to start, so
+        this is the only sign of it. A 400 stops the worker retrying, and it
+        must not reach the zero-chunk fallback: that's for documents the
+        chunker ran on and found nothing in."""
+        store.delete(_chunks_key())
+
+        resp = client.post("/v1/chunk/finalize", json=self._finalize_body())
+
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["type"] == "document_processing_error"
+        assert "no chunks file" in body["detail"]
+        assert not store.exists(f"parse/{OBJ_ID_STR}.json")
 
 
 class TestChunkFinalizeEmptyChunkFallback:
@@ -671,13 +719,13 @@ class TestChunkFinalizeEmptyChunkFallback:
         pages = [Page(obj_id=OBJ_ID, page_no=1, markdown=markdown, source="doc.pdf")]
         store.put(f"pages/{OBJ_ID_STR}.json", parse_service.encode_pages(pages))
 
+    @pytest.fixture(autouse=True)
+    def seed_empty_chunks_file(self, store: InMemoryBlobStore) -> None:
+        store.put(_chunks_key(), b"")
+
     def test_whitespace_only_pages_returns_400_after_fallback(
-        self,
-        client: TestClient,
-        docling_client: MagicMock,
-        store: InMemoryBlobStore,
+        self, client: TestClient, store: InMemoryBlobStore
     ) -> None:
-        docling_client.fetch_chunk_result = AsyncMock(return_value=_chunk_result([]))
         self._seed_pages(store, "   \n\n   ")
 
         resp = client.post("/v1/chunk/finalize", json=self._finalize_body())
@@ -688,12 +736,8 @@ class TestChunkFinalizeEmptyChunkFallback:
         assert "fallback page-split" in body["detail"]
 
     def test_real_page_content_falls_back_and_succeeds(
-        self,
-        client: TestClient,
-        docling_client: MagicMock,
-        store: InMemoryBlobStore,
+        self, client: TestClient, store: InMemoryBlobStore
     ) -> None:
-        docling_client.fetch_chunk_result = AsyncMock(return_value=_chunk_result([]))
         self._seed_pages(store, "# Real heading\n\nSome real body content to split.")
 
         resp = client.post("/v1/chunk/finalize", json=self._finalize_body())
@@ -828,27 +872,6 @@ class TestChunkStatusEndpointDoclingErrorMapping:
         assert resp.json()["type"] == "upstream_service_error"
 
 
-class TestChunkFinalizeEndpointDoclingErrorMapping:
-    def test_connect_error_returns_503(
-        self, client: TestClient, docling_client: MagicMock, store: InMemoryBlobStore
-    ) -> None:
-        pages = [
-            Page(obj_id=OBJ_ID, page_no=1, markdown="# Seeded Page", source="doc.pdf")
-        ]
-        store.put(f"pages/{OBJ_ID_STR}.json", parse_service.encode_pages(pages))
-        docling_client.fetch_chunk_result.side_effect = httpx.ConnectError("refused")
-        resp = client.post(
-            "/v1/chunk/finalize",
-            json={
-                "chunking_task_id": CHUNK_TASK_ID,
-                "obj_id": OBJ_ID_STR,
-                "metadata": {"obj_id": OBJ_ID_STR},
-            },
-        )
-        assert resp.status_code == 503
-        assert resp.json()["type"] == "upstream_service_error"
-
-
 # ---------------------------------------------------------------------------
 # service.origin_filename_from_head
 # ---------------------------------------------------------------------------
@@ -902,7 +925,7 @@ class TestBuildArtifact:
 
     def test_maps_chunks_and_pages_into_artifact(self) -> None:
         built = parse_service.build_artifact(
-            _chunk_result([_CHUNK_ITEM]), self._pages("# Title"), OBJ_ID
+            _chunks_jsonl([_CHUNK_ITEM]), self._pages("# Title"), OBJ_ID
         )
 
         artifact = json.loads(built.data)
@@ -910,9 +933,24 @@ class TestBuildArtifact:
         assert [p["markdown"] for p in artifact["pages"]] == ["# Title"]
         assert (built.num_pages, built.num_chunks, built.fallback_used) == (1, 1, False)
 
+    def test_unicode_line_separators_stay_inside_their_chunk(self) -> None:
+        """docling writes the file with ensure_ascii=False, so U+2028 and
+        friends appear raw. Only a real newline ends a record."""
+        items = [{**_CHUNK_ITEM, "text": "one\u2028two\u0085three"}, _CHUNK_ITEM]
+
+        built = parse_service.build_artifact(
+            _chunks_jsonl(items), self._pages("# Title"), OBJ_ID
+        )
+
+        artifact = json.loads(built.data)
+        assert [c["page_content"] for c in artifact["chunks"]] == [
+            "one\u2028two\u0085three",
+            "hello world",
+        ]
+
     def test_zero_chunks_falls_back_to_page_split(self) -> None:
         built = parse_service.build_artifact(
-            _chunk_result([]), self._pages("# Heading\n\nBody text."), OBJ_ID
+            _chunks_jsonl([]), self._pages("# Heading\n\nBody text."), OBJ_ID
         )
 
         artifact = json.loads(built.data)
@@ -923,5 +961,5 @@ class TestBuildArtifact:
     def test_zero_chunks_and_blank_pages_raises(self) -> None:
         with pytest.raises(DocumentProcessingException, match="fallback page-split"):
             parse_service.build_artifact(
-                _chunk_result([]), self._pages("  \n "), OBJ_ID
+                _chunks_jsonl([]), self._pages("  \n "), OBJ_ID
             )

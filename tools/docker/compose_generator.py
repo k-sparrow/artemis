@@ -212,8 +212,8 @@ _RELEASE_BANNER = (
 
 _DEV_SUBS: dict[str, str] = {
     # Pinned to the latest stable release (NOT a moving :main tag): the
-    # parsing-service redesign depends on the /v1/chunk/hybrid response shape
-    # (per-chunk page_numbers + documents[].md_content). cu128 GPU variant.
+    # parsing-service redesign depends on the chunks output format (per-chunk
+    # page_numbers in the .chunks.jsonl). cu128 GPU variant.
     # Bazel-built on top of that pinned base (see //tools/oci/images/docling) —
     # layers a one-line upstream docling-jobkit fix (SourceChunkConvertRequest.chunk
     # was DocumentChunk[Any, Any], an unpicklable subscripted generic that broke

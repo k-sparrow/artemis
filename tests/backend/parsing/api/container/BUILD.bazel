@@ -67,6 +67,7 @@ py_test(
         requirement("docling-slim"),
         requirement("httpx"),
         requirement("minio"),
+        requirement("pydantic"),
         requirement("pytest"),
         requirement("pytest-asyncio"),
     ],

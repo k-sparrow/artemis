@@ -91,7 +91,7 @@ uvicorn src.backend.mcp.api.main:app --host 0.0.0.0 --port 11000
 # Controller worker (all queues). One shared pool is fine for local debugging, but it drops
 # the per-queue slot limits; compose runs one worker per queue.
 celery -A src.backend.controller.worker.celery worker \
-  --queues artemis.ingestion.parse,artemis.ingestion.parse.long,artemis.ingestion.index --loglevel=info
+  --queues artemis.ingestion.parse,artemis.ingestion.index --loglevel=info
 ```
 
 ---

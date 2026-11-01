@@ -34,9 +34,10 @@ import pytest
 from minio import Minio
 
 from docling.datamodel.document import DoclingDocument
+from pydantic import TypeAdapter
 
 from src.backend.parsing.lib.artifact import build_pages
-from src.lib.core.ingestion.types import ChunkType, ParseArtifact
+from src.lib.core.ingestion.types import ChunkType, Page, ParseArtifact
 from tests.lib.testcontainers.docling import DoclingServeRayClusterWithApp
 
 _BAZEL_WORKSPACE = "_main"
@@ -225,13 +226,70 @@ async def test_source_ref_dispatches_s3_direct_against_real_docling_serve(
         assert artifact.pages == build_pages(dl_doc, obj_id)
 
         # Scratch objects are cleaned up by resolve/finalize — nothing should
-        # linger under the per-obj_id convert scratch prefix.
-        scratch = list(
-            minio_client.list_objects(
-                "docling-replay", prefix=f"scratch/convert/{obj_id}/", recursive=True
+        # linger under either per-obj_id scratch prefix.
+        for prefix in (f"scratch/convert/{obj_id}/", f"scratch/chunk/{obj_id}/"):
+            scratch = list(
+                minio_client.list_objects(
+                    "docling-replay", prefix=prefix, recursive=True
+                )
             )
-        )
-        assert scratch == [], f"scratch objects not cleaned up: {scratch}"
+            assert scratch == [], f"scratch objects not cleaned up: {scratch}"
+    except Exception:
+        _dump_cluster_logs(ray_app_cluster)
+        raise
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_document_with_no_chunks_takes_the_page_split_fallback(
+    ray_app_cluster: DoclingServeRayClusterWithApp,
+) -> None:
+    """A document the chunker finds nothing in must reach finalize as an empty
+    chunks file, not as no file at all: finalize treats a missing file as a
+    failed chunker, so this pins the difference against real docling-serve.
+    """
+    minio_client = ray_app_cluster.get_minio_client()
+    obj_id = uuid.uuid4()
+    replay = DoclingDocument(name="empty").model_dump_json().encode()
+    pages = TypeAdapter(list[Page]).dump_json(
+        [
+            Page(
+                obj_id=obj_id,
+                page_no=1,
+                markdown="# Heading\n\nText only the page parent has.",
+                source="doc.pdf",
+            )
+        ]
+    )
+    for key, data in (
+        (f"replay/{obj_id}.json", replay),
+        (f"pages/{obj_id}.json", pages),
+    ):
+        minio_client.put_object("docling-replay", key, io.BytesIO(data), len(data))
+
+    try:
+        async with httpx.AsyncClient(
+            base_url=ray_app_cluster.get_parsing_url(), timeout=300.0
+        ) as client:
+            resp = await client.post("/v1/chunk/submit", json={"obj_id": str(obj_id)})
+            assert resp.status_code == 200, resp.text
+            chunk_submit = resp.json()
+            await _poll_status(
+                client, chunk_submit["chunking_task_id"], path="/v1/chunk/status"
+            )
+            resp = await client.post(
+                "/v1/chunk/finalize",
+                json={
+                    "chunking_task_id": chunk_submit["chunking_task_id"],
+                    "obj_id": chunk_submit["obj_id"],
+                    "metadata": {"obj_id": str(obj_id)},
+                },
+            )
+            assert resp.status_code == 200, resp.text
+
+        artifact = _read_artifact(minio_client, resp.json())
+        assert len(artifact.chunks) >= 1
+        assert all(c.source == "fallback-page-split" for c in artifact.chunks)
     except Exception:
         _dump_cluster_logs(ray_app_cluster)
         raise
