@@ -182,7 +182,6 @@ _DIAGNOSTIC_SERVICES = [
     "backend-enterprise-intake",
     "backend-indexing-ingestion",
     "backend-controller-parse-worker",
-    "backend-controller-parse-long-worker",
     "backend-controller-index-worker",
     "backend-parsing",
     "backend-mcp",
@@ -288,7 +287,6 @@ def compose(
             broker_url,
             required_queues=[
                 "artemis.ingestion.parse",
-                "artemis.ingestion.parse.long",
                 "artemis.ingestion.index",
             ],
             timeout=120,

@@ -217,10 +217,8 @@ def call_chunk_submit(
     """POST /v1/chunk/submit → ChunkSubmitResult dict.
 
     Submits the replay-cached DoclingDocument (written by call_parse_resolve)
-    for hybrid chunking. This call only carries an obj_id, but the parsing
-    service reads the replay cache and uploads it to docling-serve inline
-    (no chunk endpoint accepts an S3 source), so its duration scales with
-    document size. Returns a chunking_task_id.
+    for hybrid chunking. No document bytes move on this call: docling-serve
+    reads the replay cache from S3. Returns a chunking_task_id.
     """
     url = f"{parsing_url.rstrip('/')}/v1/chunk/submit"
     logger.info(

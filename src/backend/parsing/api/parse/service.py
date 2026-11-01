@@ -18,6 +18,7 @@ __all__ = [
     "encode_pages",
     "decode_pages",
     "convert_scratch_prefix",
+    "chunk_scratch_prefix",
     "resolved_marker_key",
     "finalized_marker_key",
     "origin_filename_from_head",
@@ -50,6 +51,14 @@ def convert_scratch_prefix(obj_id: str) -> str:
     the parse->index contract.
     """
     return f"scratch/convert/{obj_id}/"
+
+
+def chunk_scratch_prefix(obj_id: str) -> str:
+    """Per-object scratch prefix docling-serve's S3Target writes the chunks file
+    under. Read once by /v1/chunk/finalize, then deleted — never part of the
+    parse->index contract.
+    """
+    return f"scratch/chunk/{obj_id}/"
 
 
 def pages_key(obj_id: str) -> str:
@@ -157,13 +166,14 @@ def _fallback_split(pages: List[Page], obj_id: uuid.UUID) -> List[ParsedChunk]:
 
 
 def build_artifact(
-    chunk_result: bytes, pages_data: bytes, obj_id: uuid.UUID
+    chunks_jsonl: bytes, pages_data: bytes, obj_id: uuid.UUID
 ) -> BuiltArtifact:
-    """Build the serialised ``ParseArtifact`` from docling-serve's raw chunk
-    result body and the cached pages (see :func:`encode_pages`).
+    """Build the serialised ``ParseArtifact`` from docling-serve's chunks file
+    (one ChunkedDocumentResultItem per line) and the cached pages (see
+    :func:`encode_pages`).
 
-    Everything CPU-bound in /v1/chunk/finalize lives here — parsing the chunk
-    result, mapping it, the zero-chunk fallback split, and encoding the
+    Everything CPU-bound in /v1/chunk/finalize lives here — parsing the chunks
+    file, mapping it, the zero-chunk fallback split, and encoding the
     artifact — and all of it grows with the document. Plain bytes in and out,
     no I/O, so the endpoint can run it off the event loop in one hop and it
     could move to a process pool unchanged.
@@ -172,7 +182,10 @@ def build_artifact(
     plain character-count split of the pages; raises
     ``DocumentProcessingException`` if that also produces nothing.
     """
-    chunks = chunk_items_to_parsed(json.loads(chunk_result)["chunks"], obj_id)
+    # Split on b"\n" alone: chunk text can hold characters like U+2028 that
+    # str.splitlines() would treat as line breaks.
+    items = [json.loads(line) for line in chunks_jsonl.split(b"\n") if line]
+    chunks = chunk_items_to_parsed(items, obj_id)
     pages = decode_pages(pages_data)
     fallback_used = not chunks
     if fallback_used:

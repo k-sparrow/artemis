@@ -13,3 +13,17 @@ py_test(
         requirement("pytest"),
     ],
 )
+
+py_test(
+    name = "test_docling_client",
+    srcs = ["test_docling_client.py"],
+    tags = ["unit"],
+    deps = [
+        "//src/backend/parsing/lib:docling_client",
+        requirement("docling-slim"),
+        requirement("httpx"),
+        requirement("pytest"),
+        requirement("pytest-asyncio"),
+        requirement("respx"),
+    ],
+)
