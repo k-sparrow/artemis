@@ -123,7 +123,7 @@ The parse worker picks up the message. `tasks.ingest` runs:
 
 ---
 
-## Step 6 — Parse Sub-chain (artemis.ingestion.parse and artemis.ingestion.parse.long queues)
+## Step 6 — Parse Sub-chain (artemis.ingestion.parse queue)
 
 `tasks.parse` replaces itself with `submit_parse → poll_parse`. The rest of the sub-chain is
 dispatched once conversion finishes.
@@ -161,17 +161,17 @@ Calls `POST /v1/parse/resolve`. The parsing service copies the conversion JSON t
 `docling-replay/replay/3e4a5b6c....json` with an S3 server-side copy, splits the Markdown into
 pages, and writes them to `docling-replay/pages/3e4a5b6c....json`. Returns `{ "obj_id": "3e4a5b6c..." }`.
 
-**`tasks.submit_chunk`** (artemis.ingestion.parse.long queue)
+**`tasks.submit_chunk`**
 
-Calls `POST /v1/chunk/submit`. The parsing service reads the replay JSON and uploads it to
-Docling Serve inline. Returns `{ "chunking_task_id": "...", "obj_id": "3e4a5b6c..." }`.
+Calls `POST /v1/chunk/submit`. The parsing service gives Docling Serve the replay JSON's S3
+location and a scratch prefix to write the chunks to. Returns `{ "chunking_task_id": "...", "obj_id": "3e4a5b6c..." }`.
 
 **`tasks.poll_chunk`**
 
 Polls `GET /v1/chunk/status/{chunking_task_id}`. On success it calls `POST /v1/chunk/finalize`,
 and the parsing service:
 
-- Fetches the chunk result from Docling Serve
+- Reads the chunks file Docling Serve wrote to `docling-replay/scratch/chunk/3e4a5b6c.../`
 - Merges it with the cached pages into a `ParseArtifact` with `pages[]` + `chunks[]`
 - Writes the artifact to MinIO at `parsed-chunks/parse/3e4a5b6c....json`
 - Returns `BlobRef { "bucket": "parsed-chunks", "key": "parse/3e4a5b6c....json" }`

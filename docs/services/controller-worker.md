@@ -14,7 +14,7 @@ service. It does not serve HTTP requests.
 
 ## Workers
 
-The controller runs as three compose services. All three use the
+The controller runs as two compose services. Both use the
 `artemis/backend-controller-worker` image and differ only in their `command`: the queue they
 consume and how many slots they have. `task_routes` in
 `src/backend/controller/worker/celery.py` decides which queue each task goes to.
@@ -22,18 +22,17 @@ consume and how many slots they have. `task_routes` in
 | Service | Queue | Slots | Longest single call | What it is for |
 |---------|-------|-------|---------------------|----------------|
 | `backend-controller-parse-worker` | `artemis.ingestion.parse` | 3 | 300 s | Moves each document through the parse sub-chain |
-| `backend-controller-parse-long-worker` | `artemis.ingestion.parse.long` | 1 | 1500 s | Starts chunk jobs, which can block for minutes on a large document |
 | `backend-controller-index-worker` | `artemis.ingestion.index` | 1 | 1800 s | Adds documents to the indexing service and deletes them from it |
 
-A slot is one prefork child process, which runs one task at a time. All three services use
+A slot is one prefork child process, which runs one task at a time. Both services use
 `prefetch_multiplier=1`. A task waiting on a `self.retry()` countdown does not hold a slot:
 the worker keeps the message in memory and only gives it a slot once the countdown ends.
 
 ### Parse worker
 
-Runs the whole parse path except `submit_chunk`: `tasks.ingest`, `tasks.parse`,
-`tasks.submit_parse`, `tasks.poll_parse`, `tasks.advance_from_callback`,
-`tasks.resolve_parse` and `tasks.poll_chunk`. `tasks.ingest` is the entry point from the
+Runs the whole parse path: `tasks.ingest`, `tasks.parse`, `tasks.submit_parse`,
+`tasks.poll_parse`, `tasks.advance_from_callback`, `tasks.resolve_parse`,
+`tasks.submit_chunk` and `tasks.poll_chunk`. `tasks.ingest` is the entry point from the
 RabbitMQ sink. It writes the `ingestion_status` row, then starts a parse or sends a delete to
 the index worker. `tasks.advance_from_callback` is published by the parsing service when
 docling-serve reports a finished conversion, and races `poll_parse` for that document.
@@ -45,17 +44,6 @@ no slot, so three slots can follow many more than three documents.
 This is the worker to scale if `artemis.ingestion.parse` backs up. The parsing service's 429
 backpressure still limits how much reaches docling-serve.
 
-### Parse-long worker
-
-Runs only `tasks.submit_chunk`. The task sends no document bytes, but the parsing service reads
-the replay cache and uploads it to docling-serve inline, because no chunk endpoint takes an S3
-source. The call's length therefore grows with the document, and it can block for minutes on a
-very large one.
-
-It has its own worker for two reasons: polls never wait behind an upload, and only one upload
-runs at a time. A second slot or replica gives up the one-at-a-time limit, so confirm
-docling-serve can take parallel uploads before adding one.
-
 ### Index worker
 
 Runs `tasks.index`, `tasks.delete_document` and `tasks.delete_namespace`: every task that
@@ -65,7 +53,7 @@ waits while it embeds and stores the chunks, then deletes the artifact from MinI
 It keeps one slot because embedding goes through the GPU-bound TEI model. Deletes share that
 slot, so a delete can wait behind an indexing call of up to `HTTPX_TIMEOUT` (1800 s).
 
-### Why three services
+### Why two services
 
 `--concurrency` applies to a whole worker, and Celery cannot limit slots per task or per queue
 inside one, so each limit needs its own worker. Separate services also let each queue scale on
@@ -73,8 +61,7 @@ its own, keep each worker's output in its own `docker logs` stream, and let one 
 touching the others.
 
 Running them in one container would need a process supervisor as the main process and would
-tie the queues together: a replica added for parsing would also add `submit_chunk` and index
-slots.
+tie the queues together: a replica added for parsing would also add index slots.
 
 ---
 
@@ -189,18 +176,19 @@ it does not submit a chunk job. Returns `ResolveResult {obj_id}`.
 
 ### `submit_chunk`
 
-Calls `POST /v1/chunk/submit`. No document bytes cross this task, but the parsing service
-reads the replay cache and uploads it to docling-serve inline (no chunk endpoint takes an S3
-source), so the call's duration grows with document size — hence its own
-`artemis.ingestion.parse.long` queue. Same retry structure as `submit_parse`
-(`max_retries=20`). Returns `ChunkSubmitResult {chunking_task_id, obj_id}`.
+Calls `POST /v1/chunk/submit`. No document bytes cross this task or the parsing service:
+docling-serve is given the replay cache's S3 location and reads it from there. Same retry
+structure as `submit_parse` (`max_retries=20`). Returns
+`ChunkSubmitResult {chunking_task_id, obj_id}`.
 
 ### `poll_chunk`
 
 Calls `GET /v1/chunk/status/{chunking_task_id}`. Same retry pattern as `poll_parse`.
-On `"success"` calls `POST /v1/chunk/finalize`, which fetches the chunk result, merges it
-with the pages `resolve_parse` already cached, and writes the `ParseArtifact` to MinIO.
-Returns the `BlobRef` dict that `index` consumes.
+On `"success"` calls `POST /v1/chunk/finalize`, which reads the chunks file docling-serve
+wrote to S3, merges it with the pages `resolve_parse` already cached, and writes the
+`ParseArtifact` to MinIO. Returns the `BlobRef` dict that `index` consumes. If docling-serve
+reported success but wrote no chunks file, finalize returns 400 and the document fails without
+further retries.
 
 ---
 
@@ -309,10 +297,9 @@ reads it for task state or CDC.
 | `PARSING_SERVICE_URL` | `http://backend-parsing:10001` | |
 | `INGESTION_SERVICE_URL` | `http://backend-indexing:10000` | |
 | `HTTPX_TIMEOUT` | `1800.0` | For indexing/delete calls only; parse calls use per-endpoint timeouts |
-| `PARSING_SUBMIT_TIMEOUT` | `180.0` | Source download/forward + HTTP POST |
+| `PARSING_SUBMIT_TIMEOUT` | `180.0` | Parse or chunk submit HTTP POST |
 | `PARSING_STATUS_TIMEOUT` | `45.0` | Single status GET (parse or chunk task) |
 | `PARSING_RESOLVE_TIMEOUT` | `300.0` | S3 server-side copy of the conversion result + pages cache write. Keep above the parsing service's `DOCLING_RESOLVE_TIMEOUT` |
-| `PARSING_CHUNK_SUBMIT_TIMEOUT` | `1500.0` | Replay-cache read + inline upload to docling-serve. Scales with document size; keep above `DOCLING_CHUNK_SUBMIT_TIMEOUT` |
-| `PARSING_FINALIZE_TIMEOUT` | `180.0` | Chunk result fetch + artifact write. Keep above `DOCLING_FINALIZE_TIMEOUT` |
+| `PARSING_FINALIZE_TIMEOUT` | `180.0` | Chunks file read + artifact write |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | |
 | `OTEL_SERVICE_NAME` | `backend-controller-worker` | |

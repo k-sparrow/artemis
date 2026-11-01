@@ -26,7 +26,7 @@ the upstream bug this patch fixes.
 | `POST` | `/v1/parse/resolve` | Download conversion result; cache replay JSON + derived pages | `200 ResolveResult` |
 | `POST` | `/v1/chunk/submit` | Submit the replay-cached document for hybrid chunking; returns immediately | `200 ChunkSubmitResult` |
 | `GET`  | `/v1/chunk/status/{task_id}` | Single non-blocking status check (chunk task) | `200 ParseStatus` |
-| `POST` | `/v1/chunk/finalize` | Fetch chunk result, merge with cached pages, build `ParseArtifact`, write to MinIO | `200 BlobRef` |
+| `POST` | `/v1/chunk/finalize` | Read the chunks file, merge with cached pages, build `ParseArtifact`, write to MinIO | `200 BlobRef` |
 | `GET`  | `/health` | Readiness probe (checks Docling reachability) | `200` or `503` |
 
 `POST /v1/parse` is the legacy synchronous endpoint retained for backward compatibility.
@@ -66,14 +66,15 @@ resolve_endpoint        → file: download conversion result inline, write
                           the Markdown into pages; delete scratch objects
                         → cache pages (Markdown parents)
                                ↓
-chunk_submit_endpoint   → reads replay cache from S3 itself, then
-                          Docling Serve /v1/chunk/hybrid/file/async
-                          (sent inline — no chunk endpoint takes an S3 source)
+chunk_submit_endpoint   → Docling Serve /v1/convert/source/batch with the
+                          replay cache as an S3 source and chunks as the
+                          only output (coordinates only, no document bytes)
                                ↓ polling via chunk_status_endpoint
-chunk_finalize_endpoint → fetch chunk result
+chunk_finalize_endpoint → read the .chunks.jsonl under the scratch prefix
                         → read cached pages (never re-derives them)
                         → build ParseArtifact from chunks + pages
                         → write to parsed-chunks bucket
+                        → delete the scratch file
                         → return BlobRef
 ```
 
@@ -167,21 +168,29 @@ Either way, returns `{obj_id}` — no chunk job submitted here.
 Request body: `{obj_id}`. Must only be called after `/v1/parse/resolve` has written the
 replay cache for this `obj_id`.
 
-1. Read `REPLAY_CACHE_BUCKET/replay/{obj_id}.json` into memory — no chunk endpoint accepts an
-   S3 source, so this service must fetch it itself.
-2. `POST /v1/chunk/hybrid/file/async` with those bytes as multipart.
-3. Return `{chunking_task_id, obj_id}`.
+1. Check `REPLAY_CACHE_BUCKET/replay/{obj_id}.json` exists (`422` if not). The document is
+   never read here.
+2. Delete anything left under the scratch prefix (`chunk_scratch_prefix`). Docling Serve names
+   its output after a hash of the input, so a file from an earlier version of this object
+   wouldn't be overwritten.
+3. `POST /v1/convert/source/batch` with the replay JSON as the S3 source, the scratch prefix as
+   the S3 target, and `to_formats: ["chunks"]`. See [Docling Serve](../infrastructure/docling.md#hybrid-chunking)
+   for why this isn't `/v1/chunk/*`.
+4. Return `{chunking_task_id, obj_id}`.
 
 ### Chunk Finalize (`POST /v1/chunk/finalize`)
 
 Request body: `{chunking_task_id, obj_id, metadata}`. Must only be called after
 `GET /v1/chunk/status/{chunking_task_id}` returns `"success"`.
 
-1. `GET /v1/result/{chunking_task_id}` → chunk list.
+1. List the scratch prefix for the `.chunks.jsonl` file. If there is none, return `400`
+   (`document_processing_error`): Docling Serve reports success even when the chunker fails to
+   start, and retrying can't make the file appear.
 2. Read `REPLAY_CACHE_BUCKET/pages/{obj_id}.json` → cached `Page[]` (never re-fetches or
    re-parses the `DoclingDocument`).
-3. Map chunks → `ParsedChunk[]`, build `ParseArtifact` from chunks + cached pages.
-4. Write to `PARSED_ARTIFACTS_BUCKET/parse/{obj_id}.json`.
+3. Map chunks → `ParsedChunk[]`, build `ParseArtifact` from chunks + cached pages. An empty
+   chunks file means the chunker ran and found nothing, which takes the page-split fallback.
+4. Write to `PARSED_ARTIFACTS_BUCKET/parse/{obj_id}.json`, then delete the scratch file.
 5. Return `BlobRef`.
 
 ---
@@ -253,8 +262,6 @@ Both keys are private to the parsing service; no other service reads from this b
 | `REPLAY_CACHE_BUCKET` | `docling-replay` | |
 | `DOCLING_STATUS_TIMEOUT` | `30.0` | Seconds, for status proxy calls (parse and chunk) |
 | `DOCLING_RESOLVE_TIMEOUT` | `120.0` | Seconds, for resolve's inline result download (`file` mode only; the S3-direct path never downloads the document). Keep below the worker's `PARSING_RESOLVE_TIMEOUT` |
-| `DOCLING_CHUNK_SUBMIT_TIMEOUT` | `1200.0` | Seconds, for chunk submit (inline upload of the replay-cached document). Keep below the worker's `PARSING_CHUNK_SUBMIT_TIMEOUT` |
-| `DOCLING_FINALIZE_TIMEOUT` | `120.0` | Seconds, for chunk finalize (chunk result fetch). Keep below the worker's `PARSING_FINALIZE_TIMEOUT` |
 | `LOADER_TYPE` | `DOCLING` | `DOCLING` or `PYMUPDF4LLM` (dev fallback, no GPU) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | |
 | `OTEL_SERVICE_NAME` | `backend-parsing` | |

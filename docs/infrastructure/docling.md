@@ -114,30 +114,43 @@ values.
 
 Chunking is a fully decoupled stage from conversion in the parsing service (Epic 21) —
 it happens after `/v1/parse/resolve` has written the converted `DoclingDocument` to its
-replay cache, via a separate `/v1/chunk/submit` call. Like convert, no chunk endpoint can
-actually take an S3 source either (`BaseChunkDocumentsRequest.sources` has the identical
-`FileSourceRequest | HttpSourceRequest`-only restriction, and there is no chunk batch
-endpoint). Conversion itself can chunk — `/v1/convert/source/batch` with `chunks` in
-`to_formats` writes a `.chunks.jsonl` to the S3 target, and upstream plans to deprecate
-`/v1/chunk/*` in its favour — but that folds chunking back into conversion, so it isn't used
-yet. The parsing service reads the replay-cached `DoclingDocument` itself and submits it
-inline:
+replay cache, via a separate `/v1/chunk/submit` call.
+
+It goes through the batch endpoint, with the replay JSON as the S3 source and `chunks` as the
+only output:
 
 ```
-POST /v1/chunk/hybrid/file/async
-Content-Type: multipart/form-data
+POST /v1/convert/source/batch
+Content-Type: application/json
 
-files=@doc.json
+{
+  "options": {
+    "from_formats": ["json_docling"],
+    "to_formats": ["chunks"],
+    "chunking_options": {"chunker": "hybrid"}
+  },
+  "sources": [{"kind": "s3", "bucket": "docling-replay", "key_prefix": "replay/{obj_id}.json", ...}],
+  "target": {"kind": "s3", "bucket": "docling-replay", "key_prefix": "scratch/chunk/{obj_id}/", ...}
+}
 ```
 
-This is the same endpoint non-production callers with no replay cache to read from use (e.g.
-`experiments/eval/runners/retrieval_eval.py`) — there's no separate "production" chunk path.
+Returns `{"task_id": "<uuid>"}`. Docling Serve writes one `ChunkedDocumentResultItem` per line
+to `scratch/chunk/{obj_id}/<input hash>/{obj_id}.chunks.jsonl`. `{"chunker": "hybrid"}` is the
+same `HybridChunkerOptions` default `/v1/chunk/hybrid` applies.
 
-Returns `{"task_id": "<uuid>"}`. Fetch result with `GET /v1/result/{task_id}` →
-`{"chunks": [...]}`.
+Don't use `/v1/chunk/*` here:
 
-`target` for chunk endpoints always defaults to in-body (`InBodyTarget()`) — unlike convert's
-`target`, it isn't policy-configurable via `resolve_default_target`.
+- It has no S3 source (`BaseChunkDocumentsRequest.sources` is `FileSourceRequest |
+  HttpSourceRequest` only), so the document has to be uploaded inline.
+- docling-jobkit base64-encodes an inline upload into a single Redis command, so it stops
+  working past about 400 MB of JSON. Redis refuses a value over 512 MiB
+  (`proto-max-bulk-len`), which shows up as `Error 104 while writing to socket`.
+- Each upload also adds about 1.45× its size to Redis's append-only log. A batch job adds about
+  6.5 KB, however large the document.
+
+A task can report `success` with no chunks file: when the chunker fails to start, Docling Serve
+logs the error and writes nothing. An empty file is different, and means the chunker ran and
+found nothing.
 
 ---
 
